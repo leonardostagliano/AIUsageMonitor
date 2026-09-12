@@ -143,7 +143,7 @@ Riga evento:
 
 | Agente | File | Eventi |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop`, `StopFailure`, `SessionEnd` |
+| Claude Code | `~/.claude/settings.json` | `SessionStart`, `UserPromptSubmit`, `Notification`, `PostToolUse` (solo matcher `AskUserQuestion`, per tornare ad "al lavoro" dopo una risposta), `Stop`, `StopFailure`, `SessionEnd` |
 | Codex | `~/.codex/hooks.json` | `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd` |
 
 Non si registra `PermissionRequest` per non interferire con il flusso dei permessi: `Notification` con `notification_type = permission_prompt` copre il caso.
@@ -153,7 +153,8 @@ Non si registra `PermissionRequest` per non interferire con il flusso dei permes
 - `HookInstaller.Install(agent)`: legge il file di configurazione, per ogni evento aggiunge un gruppo `{ "hooks": [ { "type": "command", "command": "node \"<path>\\hook.cjs\" <agent>", "timeout": 5 } ] }` solo se nessun comando esistente contiene la sottostringa `aiusagemonitor/hook.cjs` (confronto con separatori normalizzati). Prima di scrivere crea `~/.aiusagemonitor/backups/<nomefile>.<yyyyMMdd-HHmmss>.bak`. Riscrive il JSON con indentazione a 2 spazi preservando tutte le altre chiavi.
 - `HookInstaller.Remove(agent)`: elimina solo i gruppi il cui unico comando è quello dell'app; se un gruppo contiene anche altri comandi rimuove solo la voce propria. Backup anche qui.
 - `HookInstaller.Status(agent)`: `Installed`, `Partial` (alcuni eventi mancanti), `NotInstalled`, `ConfigMissing`.
-- Per Codex l'installer verifica anche che `config.toml` contenga `hooks = true` e, se manca, lo segnala senza modificarlo.
+- Per Codex gli hook sono attivi per default; l'installer legge `config.toml` e, se trova `hooks = false`, lo segnala nello stato senza modificarlo.
+- Codex espone anche `PermissionRequest`, ma non viene registrato nella v1 per non interferire con il flusso di approvazione: resta come estensione futura per rilevare "attende input" su Codex.
 
 ### 7.4 Macchina a stati (per coppia agente + session_id)
 
@@ -163,6 +164,7 @@ Non si registra `PermissionRequest` per non interferire con il flusso dei permes
 | `UserPromptSubmit` | → `Working` |
 | `Notification` con `permission_prompt`, `idle_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | → `NeedsInput`, `Message` = messaggio |
 | `Notification` di altro tipo | nessuna transizione |
+| `PostToolUse` (AskUserQuestion) | → `Working` |
 | `Stop` | → `Idle` (etichetta "finito"), `Message` = ultime 120 battute di `last_assistant_message`, oppure "Turno completato" se assente |
 | `StopFailure` | → `Error`, `Message` = motivo |
 | `SessionEnd` | rimuove la sessione |
@@ -171,6 +173,8 @@ Regole aggiuntive:
 
 - Nome visualizzato: ultimo segmento di `cwd`. Per Codex, se l'hook non fornisce `cwd`, lo si ricava dal record `session_meta` del file `rollout-*-<session_id>.jsonl` (cache in memoria per id). Fallback: primi 8 caratteri dell'id.
 - Sessioni senza eventi da 12 ore vengono rimosse (scansione ogni 5 minuti).
+- Limite noto: dopo un permesso concesso in Claude Code non arriva alcun hook, quindi la sessione resta "attende input" fino al prossimo `Stop`. Per le domande di `AskUserQuestion` il `PostToolUse` riporta subito ad "al lavoro".
+- La ricostruzione all'avvio è silenziosa: nessuna notifica per gli eventi riletti dal file.
 - All'avvio si rilegge la coda di `events.jsonl` (ultime 24 ore) per ricostruire lo stato, applicando anche i `SessionEnd`.
 - Lettura incrementale: offset persistito in memoria, `FileSystemWatcher` sul file con debounce 200 ms e fallback ogni 2 s.
 
@@ -192,7 +196,7 @@ Usato dalla linguetta del notch e dalla tray. Priorità: `Error` > `NeedsInput` 
 - Finestra WPF: `WindowStyle=None`, `AllowsTransparency=true`, `Topmost=true`, `ShowInTaskbar=false`, stile tool window (non compare in Alt+Tab), `ResizeMode=NoResize`. DPI awareness `PerMonitorV2`.
 - Posizione: ancorata al bordo destro del monitor scelto (default: monitor principale), verticalmente centrata con offset configurabile in pixel. Riposizionata su cambio risoluzione o monitor (`SystemEvents.DisplaySettingsChanged`).
 - Collassato: larghezza 28 px, altezza 12 + 36 × numero agenti abilitati. Per agente: icona bianca 18 px e, sotto, un pallino 8 px dello stato aggregato. Angoli sinistri arrotondati 10 px, sfondo `#1B1B1F` al 92 % di opacità, bordo 1 px bianco al 12 %.
-- Espanso: larghezza 320 px, altezza in base al contenuto (massimo 80 % dello schermo, poi scroll). Animazione della larghezza 150 ms ease-out. Si espande all'ingresso del mouse nella linguetta, si richiude 400 ms dopo l'uscita dal bordo della finestra. Click sulla linguetta o click sinistro sulla tray lo fissa aperto (icona puntina); secondo click o `Esc` lo sblocca.
+- Espanso: larghezza 320 px, altezza in base al contenuto (massimo 80 % dello schermo, poi scroll). Animazione della larghezza 150 ms ease-out. Si espande all'ingresso del mouse nella linguetta, si richiude 400 ms dopo l'uscita dal bordo della finestra. Click sulla linguetta o click sinistro sulla tray lo fissa aperto (icona puntina); un secondo click sulla linguetta o sulla tray lo sblocca (la finestra non prende mai il focus, quindi nessuna scorciatoia da tastiera).
 - Card agente: intestazione con icona, nome ("Claude Code", "Codex"), badge piano; una riga per finestra con etichetta, barra a colori (verde < 50 %, ambra 50–80 %, rosso > 80 %, oppure `severity` dell'API), percentuale e countdown al reset ("2h 10m", "3g 4h"); riga extra usage se presente; riga di stato se `Stale`, `TokenExpired`, `NoData` o hook non installati (link "Installa"); elenco sessioni con pallino, nome, fase, tempo dall'ultimo evento.
 - Colori dei pallini: `Working` verde `#3FB950` con pulsazione lenta; `NeedsInput` ambra `#D29922`; `Idle` grigio pieno `#8B8B93`; `Error` rosso `#F85149`; nessuna sessione grigio contorno.
 - Il notch non ruba il focus (`WS_EX_NOACTIVATE`) e non è click-through: i click servono per fissare e per i link.
