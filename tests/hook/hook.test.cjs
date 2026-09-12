@@ -71,3 +71,24 @@ test('end to end: garbage on stdin still exits 0 and writes nothing', () => {
   assert.equal(fs.existsSync(eventsFile), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('truncation never leaves a lone surrogate', () => {
+  const obj = JSON.parse(buildLine('codex', {
+    hook_event_name: 'Stop', session_id: 's4',
+    last_assistant_message: 'a'.repeat(199) + '\u{1F600}' + 'tail',
+  }));
+  assert.equal(obj.message.length, 199);
+  for (let i = 0; i < obj.message.length; i++) {
+    const c = obj.message.charCodeAt(i);
+    assert.ok(c < 0xD800 || c > 0xDFFF, `lone surrogate at index ${i}`);
+  }
+});
+
+test('truncation keeps a complete surrogate pair that fits', () => {
+  const obj = JSON.parse(buildLine('codex', {
+    hook_event_name: 'Stop', session_id: 's5',
+    last_assistant_message: 'a'.repeat(198) + '\u{1F600}' + 'tail',
+  }));
+  assert.equal(obj.message.length, 200);
+  assert.equal(obj.message.slice(198), '\u{1F600}');
+});

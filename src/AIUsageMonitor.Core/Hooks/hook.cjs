@@ -15,7 +15,13 @@ function str(value) {
 
 function truncate(value) {
   const s = str(value);
-  return s === null ? null : s.length > MAX_MESSAGE ? s.slice(0, MAX_MESSAGE) : s;
+  if (s === null || s.length <= MAX_MESSAGE) return s;
+  let out = s.slice(0, MAX_MESSAGE);
+  // Slicing on UTF-16 code units can cut a surrogate pair in half; a lone high
+  // surrogate makes the JSON unreadable for strict UTF-16 consumers (.NET).
+  const last = out.charCodeAt(out.length - 1);
+  if (last >= 0xD800 && last <= 0xDBFF) out = out.slice(0, -1);
+  return out;
 }
 
 function buildLine(agent, payload) {
