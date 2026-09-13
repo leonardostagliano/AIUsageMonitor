@@ -10,8 +10,9 @@ public class SessionTrackerTests
 
     private static HookEvent Ev(string evt, string sid = "s1", AgentKind agent = AgentKind.Claude, string? cwd = @"C:\Users\demo\AIUsageMonitor",
         string? notificationType = null, string? message = null, string? source = null, int plusSeconds = 0,
-        string? agentId = null, string? agentType = null) =>
-        new(T0.AddSeconds(plusSeconds), agent, evt, sid, cwd, notificationType, message, source, agentId, agentType);
+        string? agentId = null, string? agentType = null, string? transcriptPath = null, string? agentTranscriptPath = null) =>
+        new(T0.AddSeconds(plusSeconds), agent, evt, sid, cwd, notificationType, message, source, agentId, agentType,
+            transcriptPath, agentTranscriptPath);
 
     [Fact]
     public void SessionStart_creates_an_idle_session_named_after_cwd()
@@ -428,6 +429,50 @@ public class SessionTrackerTests
         Assert.Equal(SubagentPhase.Done, sub.Phase);
         Assert.Equal(T0.AddSeconds(2), sub.EndedAt);
         Assert.Equal("Explore", sub.AgentType);
+    }
+
+    [Fact]
+    public void Transcript_paths_land_on_the_session_and_on_the_subagent()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit", transcriptPath: @"C:\p\s1.jsonl"));
+        Assert.Equal(@"C:\p\s1.jsonl", tracker.Sessions.Single().TranscriptPath);
+
+        // A SubagentStop arrives with the agent transcript only: it lands on the subagent, and the session keeps
+        // the path it already knows (the parent transcript_path of a subagent event is not taken).
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        Assert.Null(Assert.Single(tracker.Sessions.Single().Subagents!).TranscriptPath);
+
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 2,
+            transcriptPath: @"C:\p\other.jsonl", agentTranscriptPath: @"C:\p\s1\subagents\agent-a1.jsonl"));
+        var s = tracker.Sessions.Single();
+        Assert.Equal(@"C:\p\s1.jsonl", s.TranscriptPath);
+        Assert.Equal(@"C:\p\s1\subagents\agent-a1.jsonl", Assert.Single(s.Subagents!).TranscriptPath);
+
+        // An event without a transcript path never clears what is already known.
+        tracker.Apply(Ev("Stop", plusSeconds: 3));
+        Assert.Equal(@"C:\p\s1.jsonl", tracker.Sessions.Single().TranscriptPath);
+        Assert.Equal(@"C:\p\s1\subagents\agent-a1.jsonl", Assert.Single(tracker.Sessions.Single().Subagents!).TranscriptPath);
+    }
+
+    [Fact]
+    public void An_unmatched_subagent_stop_keeps_its_agent_transcript_path()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStop", agentId: "a9", plusSeconds: 1,
+            agentTranscriptPath: @"C:\p\s1\subagents\agent-a9.jsonl"));
+        var sub = Assert.Single(tracker.Sessions.Single().Subagents!);
+        Assert.Equal(SubagentPhase.Done, sub.Phase);
+        Assert.Equal(@"C:\p\s1\subagents\agent-a9.jsonl", sub.TranscriptPath);
+    }
+
+    [Fact]
+    public void The_first_event_of_a_session_carries_its_transcript_path()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("SessionStart", source: "startup", transcriptPath: @"C:\p\s1.jsonl"));
+        Assert.Equal(@"C:\p\s1.jsonl", tracker.Sessions.Single().TranscriptPath);
     }
 
     [Fact]

@@ -102,13 +102,16 @@ public sealed class SessionTracker
         }
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
-        // A `with` update on the existing record so state this state machine does not own (TranscriptPath,
-        // Tokens, Subagents, and anything added later) survives every subsequent event instead of being
-        // silently reset by a positional rebuild.
+        // Every Claude hook payload carries the session transcript; an event without one (Codex, an older hook)
+        // must not clear the path the token counter is already reading.
+        var transcriptPath = e.TranscriptPath ?? existing?.TranscriptPath;
+        // A `with` update on the existing record so state this state machine does not own (Tokens, Subagents,
+        // and anything added later) survives every subsequent event instead of being silently reset by a
+        // positional rebuild.
         var updated = existing is null
             ? new SessionState(
                 e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
-                phase.Value, message, e.Ts, e.Ts, AwaitingSubagents: awaiting)
+                phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, AwaitingSubagents: awaiting)
             : existing with
             {
                 DisplayName = DisplayNameFor(cwd, e.SessionId),
@@ -116,6 +119,7 @@ public sealed class SessionTracker
                 Phase = phase.Value,
                 Message = message,
                 LastEventAt = e.Ts,
+                TranscriptPath = transcriptPath,
                 AwaitingSubagents = awaiting
             };
         _sessions[key] = updated;
@@ -125,6 +129,8 @@ public sealed class SessionTracker
     /// <summary>
     /// SubagentStart/SubagentStop carry the parent session id plus the agent identity: they keep the per-session
     /// subagent list up to date and defer the Idle transition of a Stop that arrived while agents were still running.
+    /// Only <c>agent_transcript_path</c> is taken from them (onto the subagent): whether their <c>transcript_path</c>
+    /// is the parent session's file is unverified, so SessionState.TranscriptPath is left to the ordinary events.
     /// </summary>
     private SessionChange ApplySubagentEvent(HookEvent e, (AgentKind Agent, string SessionId) key, SessionState? existing)
     {
@@ -198,7 +204,8 @@ public sealed class SessionTracker
         if (index >= 0)
         {
             var known = list[index];
-            // Task 10 adds HookEvent.AgentTranscriptPath (SubagentStop carries it): set TranscriptPath here when it lands.
+            // agent_transcript_path is what SubagentStop carries (SubagentStart has none): the token counter reads
+            // it, so it is kept once known and never cleared by a later event that omits it.
             list[index] = started
                 // A SubagentStart for an agent that is already Running is a refresh (the Codex rollout fallback
                 // re-announces a long-lived child), not a new run: its StartedAt must not jump forward.
@@ -207,15 +214,22 @@ public sealed class SessionTracker
                     AgentType = e.AgentType ?? known.AgentType,
                     Phase = SubagentPhase.Running,
                     StartedAt = known.Phase == SubagentPhase.Running ? known.StartedAt : e.Ts,
-                    EndedAt = null
+                    EndedAt = null,
+                    TranscriptPath = e.AgentTranscriptPath ?? known.TranscriptPath
                 }
-                : known with { AgentType = e.AgentType ?? known.AgentType, Phase = SubagentPhase.Done, EndedAt = e.Ts };
+                : known with
+                {
+                    AgentType = e.AgentType ?? known.AgentType,
+                    Phase = SubagentPhase.Done,
+                    EndedAt = e.Ts,
+                    TranscriptPath = e.AgentTranscriptPath ?? known.TranscriptPath
+                };
         }
         else
         {
             list.Add(new SubagentState(
                 e.AgentId ?? NextAnonymousId(list, e.Ts), e.AgentType, started ? SubagentPhase.Running : SubagentPhase.Done,
-                e.Ts, started ? null : e.Ts, null, TokenUsage.Zero));
+                e.Ts, started ? null : e.Ts, e.AgentTranscriptPath, TokenUsage.Zero));
         }
         return TrimDone(list);
     }
