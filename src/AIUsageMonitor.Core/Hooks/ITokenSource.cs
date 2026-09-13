@@ -1,0 +1,19 @@
+using AIUsageMonitor.Core.Models;
+
+namespace AIUsageMonitor.Core.Hooks;
+
+/// <summary>
+/// Where <see cref="HookEventPump"/> gets the token totals it pushes into the tracker. The App implements it on top
+/// of <see cref="ClaudeTranscriptTokenCounter"/> (transcript paths) and <see cref="CodexTokenCounter"/> (rollouts).
+/// Both members run on the pump thread and may do IO; returning <c>null</c> means "nothing to say about this
+/// session right now" and leaves the totals already known untouched (a locked or missing transcript must never
+/// reset a row to zero).
+/// </summary>
+public interface ITokenSource
+{
+    /// <summary>Total usage of the session itself, or null when it cannot be determined.</summary>
+    TokenUsage? SessionTokens(SessionState session);
+
+    /// <summary>Usage per subagent id (only the ids it knows about), or null when there is nothing to report.</summary>
+    IReadOnlyDictionary<string, TokenUsage>? SubagentTokens(SessionState session);
+}

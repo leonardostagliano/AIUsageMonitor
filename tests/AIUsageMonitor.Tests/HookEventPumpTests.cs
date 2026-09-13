@@ -549,4 +549,280 @@ public class HookEventPumpTests
         Assert.Equal(1, session.ActiveSubagents);
         Assert.Equal(0, raised);
     }
+
+    /// <summary>
+    /// Stands in for the App's counters: it hands back whatever the test staged for a session (and its subagents)
+    /// and records which sessions were asked, so a test can tell a refresh that happened from one that did not.
+    /// </summary>
+    private sealed class FakeTokenSource : ITokenSource
+    {
+        public Dictionary<string, TokenUsage> Session { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, Dictionary<string, TokenUsage>> Subagents { get; } = new(StringComparer.Ordinal);
+        public List<string> Reads { get; } = [];
+        public Exception? Throw { get; set; }
+
+        public TokenUsage? SessionTokens(SessionState session)
+        {
+            Reads.Add(session.SessionId);
+            if (Throw is not null) throw Throw;
+            return Session.TryGetValue(session.SessionId, out var tokens) ? tokens : null;
+        }
+
+        public IReadOnlyDictionary<string, TokenUsage>? SubagentTokens(SessionState session) =>
+            Subagents.TryGetValue(session.SessionId, out var subagents) ? subagents : null;
+    }
+
+    [Fact]
+    public void Pump_refreshes_the_tokens_right_after_a_stop()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var source = new FakeTokenSource();
+        source.Session["s1"] = new TokenUsage(11, 22, 33, 44);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            // Long cadence: only the Stop can refresh here, so the test cannot pass by way of the periodic pass.
+            TokenRefreshEvery = TimeSpan.FromHours(1),
+            TokenSource = source
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now));
+        pump.Pump();
+        Assert.Null(Assert.Single(tracker.Sessions).Tokens);
+
+        File.AppendAllText(paths.EventsFile, Line("Stop", "s1", now.AddSeconds(1)));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, session.Phase);
+        Assert.Equal(new TokenUsage(11, 22, 33, 44), session.Tokens);
+    }
+
+    [Fact]
+    public void Pump_refreshes_the_tokens_right_after_a_stop_failure()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var source = new FakeTokenSource();
+        source.Session["s1"] = new TokenUsage(1, 2, 3, 4);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            TokenRefreshEvery = TimeSpan.FromHours(1),
+            TokenSource = source
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now) + Line("StopFailure", "s1", now.AddSeconds(1)));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Error, session.Phase);
+        Assert.Equal(new TokenUsage(1, 2, 3, 4), session.Tokens);
+    }
+
+    [Fact]
+    public void Pump_refreshes_the_subagent_tokens_right_after_a_subagent_stop()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var source = new FakeTokenSource();
+        source.Session["s1"] = new TokenUsage(10, 10, 10, 10);
+        source.Subagents["s1"] = new Dictionary<string, TokenUsage>(StringComparer.Ordinal) { ["a1"] = new(1, 1, 1, 1) };
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            TokenRefreshEvery = TimeSpan.FromHours(1),
+            TokenSource = source
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "s1", now) +
+            SubagentLine("SubagentStart", "s1", "a1", now.AddSeconds(1)) +
+            Line("Stop", "s1", now.AddSeconds(2)) +
+            SubagentLine("SubagentStop", "s1", "a1", now.AddSeconds(3)));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, session.Phase);
+        Assert.Equal(new TokenUsage(10, 10, 10, 10), session.Tokens);
+        Assert.Equal(new TokenUsage(1, 1, 1, 1), session.SubagentTokens);
+    }
+
+    [Fact]
+    public void Pump_refreshes_the_working_sessions_on_the_token_cadence_and_leaves_the_idle_ones_alone()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var source = new FakeTokenSource();
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            TokenRefreshEvery = TimeSpan.FromSeconds(30),
+            TokenSource = source
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "working", now) +
+            Line("Stop", "idle", now) +
+            Line("Notification", "needsinput", now, "permission_prompt"));
+        pump.Pump();
+        Assert.Equal(3, tracker.Sessions.Count);
+        source.Reads.Clear(); // the Stop of "idle" refreshed once, as it should
+
+        source.Session["working"] = new TokenUsage(1, 0, 0, 0);
+        source.Session["needsinput"] = new TokenUsage(2, 0, 0, 0);
+        source.Session["idle"] = new TokenUsage(3, 0, 0, 0);
+        clock.Advance(TimeSpan.FromSeconds(31));
+        pump.Pump();
+
+        Assert.Equal(["needsinput", "working"], source.Reads.OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(new TokenUsage(1, 0, 0, 0), tracker.Sessions.Single(s => s.SessionId == "working").Tokens);
+        Assert.Equal(new TokenUsage(2, 0, 0, 0), tracker.Sessions.Single(s => s.SessionId == "needsinput").Tokens);
+        Assert.Null(tracker.Sessions.Single(s => s.SessionId == "idle").Tokens);
+    }
+
+    [Fact]
+    public void Pump_does_not_refresh_the_tokens_before_the_cadence_elapses()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var source = new FakeTokenSource();
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            TokenRefreshEvery = TimeSpan.FromSeconds(30),
+            TokenSource = source
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now));
+        pump.Pump();
+        clock.Advance(TimeSpan.FromSeconds(29));
+        pump.Pump();
+
+        Assert.Empty(source.Reads);
+    }
+
+    [Fact]
+    public void Pump_raises_no_change_when_the_token_totals_are_unchanged()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        var source = new FakeTokenSource();
+        source.Session["s1"] = new TokenUsage(1, 2, 3, 4);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            TokenRefreshEvery = TimeSpan.FromSeconds(30),
+            TokenSource = source
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now));
+        pump.Pump();
+        Assert.Single(changes);
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        pump.Pump();
+        Assert.Equal(2, changes.Count); // the first totals land as one Updated
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        pump.Pump();
+        Assert.Equal(2, changes.Count); // same totals: no UI churn
+    }
+
+    [Fact]
+    public void Pump_reports_a_failing_token_source_and_keeps_pumping()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var errors = new List<Exception>();
+        var source = new FakeTokenSource { Throw = new IOException("transcript locked") };
+        source.Session["s1"] = new TokenUsage(1, 2, 3, 4);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            TokenRefreshEvery = TimeSpan.FromSeconds(30),
+            TokenSource = source,
+            OnError = errors.Add
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now) + Line("Stop", "s1", now.AddSeconds(1)));
+        pump.Pump();
+
+        Assert.IsType<IOException>(Assert.Single(errors));
+        Assert.Equal(SessionPhase.Idle, Assert.Single(tracker.Sessions).Phase);
+
+        // The next cycle picks the counters up again.
+        source.Throw = null;
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now.AddSeconds(2)) + Line("Stop", "s1", now.AddSeconds(3)));
+        pump.Pump();
+
+        Assert.Equal(new TokenUsage(1, 2, 3, 4), Assert.Single(tracker.Sessions).Tokens);
+    }
+
+    /// <summary>
+    /// The last SubagentStop of a Codex session is synthesised by the rollout scan, not read from events.jsonl: it
+    /// must refresh the tokens too, or the row would keep the totals of the child's second-to-last scan forever.
+    /// </summary>
+    [Fact]
+    public void Pump_refreshes_the_tokens_when_the_last_codex_child_thread_stops()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var source = new FakeTokenSource();
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            TokenRefreshEvery = TimeSpan.FromHours(1),
+            TokenSource = source,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        // Driven by hand: Start() would also arm the FileSystemWatcher and the 2 s poll, and a background Pump()
+        // racing these explicit ones would scan the rollouts at an unpredictable moment.
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        source.Session["c1"] = new TokenUsage(100, 200, 300, 400);
+        source.Subagents["c1"] = new Dictionary<string, TokenUsage>(StringComparer.Ordinal) { ["child-1"] = new(1, 2, 3, 4) };
+        clock.Advance(TimeSpan.FromSeconds(30));
+        CodexChildRollout(paths, "child-1", "c1", running: false, clock.UtcNow);
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, session.Phase);
+        Assert.Equal(new TokenUsage(100, 200, 300, 400), session.Tokens);
+        Assert.Equal(new TokenUsage(1, 2, 3, 4), session.SubagentTokens);
+    }
 }

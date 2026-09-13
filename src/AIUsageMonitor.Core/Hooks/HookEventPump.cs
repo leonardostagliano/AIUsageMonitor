@@ -15,6 +15,7 @@ public sealed class HookEventPump : IDisposable
     private Timer? _poll;
     private DateTimeOffset _lastStaleSweep;
     private DateTimeOffset _lastCodexScan;
+    private DateTimeOffset _lastTokenRefresh;
     /// <summary>
     /// Child thread ids this pump has announced per Codex session, with the instant of the announcement: only these
     /// are ever stopped here, and the instant says when a still-running child must be announced again so the
@@ -42,6 +43,19 @@ public sealed class HookEventPump : IDisposable
     /// rollouts and the pump turns what it finds into the same events the hook bridge would have written. Null disables it.
     /// </summary>
     public CodexSubagentScanner? CodexSubagents { get; init; }
+
+    /// <summary>
+    /// How often the token totals of the sessions that are still busy (Working or NeedsInput) are read again. Idle
+    /// sessions are left alone: their transcript is not growing, and re-reading every one of them would spend IO on
+    /// rows that cannot change. A session that ends is refreshed once by its Stop, which is what closes the count.
+    /// </summary>
+    public TimeSpan TokenRefreshEvery { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Reads the token totals of a session and of its subagents (the App combines the Claude transcript counter and
+    /// the Codex rollout counter). Null disables token counting entirely. All its IO runs on the pump thread.
+    /// </summary>
+    public ITokenSource? TokenSource { get; init; }
 
     /// <summary>Where unexpected failures go (the App wires a FileLogger): the pump never lets one escape a thread-pool callback.</summary>
     public Action<Exception>? OnError { get; init; }
@@ -74,6 +88,7 @@ public sealed class HookEventPump : IDisposable
                 SyncCodexSubagents(silent: true);
                 _lastStaleSweep = _clock.UtcNow;
                 _lastCodexScan = _clock.UtcNow;
+                _lastTokenRefresh = _clock.UtcNow;
             }
             catch (Exception ex)
             {
@@ -104,6 +119,14 @@ public sealed class HookEventPump : IDisposable
                 {
                     _lastCodexScan = _clock.UtcNow;
                     SyncCodexSubagents(silent: false);
+                }
+                if (TokenSource is not null && _clock.UtcNow - _lastTokenRefresh >= TokenRefreshEvery)
+                {
+                    _lastTokenRefresh = _clock.UtcNow;
+                    // Only the busy sessions: an Idle transcript is not growing any more, and its last total was
+                    // already read by the Stop (or the last SubagentStop) that ended the turn.
+                    foreach (var session in _tracker.Sessions.Where(s => s.Phase is SessionPhase.Working or SessionPhase.NeedsInput))
+                        RefreshTokens(session);
                 }
                 if (_clock.UtcNow - _lastStaleSweep >= StaleSweepEvery)
                 {
@@ -146,7 +169,37 @@ public sealed class HookEventPump : IDisposable
                     foreach (var id in _synthesisedChildren.Keys) synced.Add(id);
                 }
             }
-            _tracker.Apply(ev);
+            ApplyTracked(ev);
+        }
+    }
+
+    /// <summary>
+    /// Applies one event and, when it is the end of a turn or of a subagent, reads the token totals right away: those
+    /// sessions leave the Working/NeedsInput set the periodic refresh visits, so this is the last chance to record
+    /// what the turn really cost before the row goes quiet.
+    /// </summary>
+    private void ApplyTracked(HookEvent ev)
+    {
+        _tracker.Apply(ev);
+        if (TokenSource is null || ev.Event is not ("Stop" or "StopFailure" or "SubagentStop")) return;
+        var session = _tracker.Sessions.FirstOrDefault(s => s.Agent == ev.Agent && s.SessionId == ev.SessionId);
+        if (session is not null) RefreshTokens(session);
+    }
+
+    /// <summary>
+    /// Reads the totals for one session and hands them to the tracker, which raises Changed only if something moved.
+    /// The source reads files: a locked transcript is reported and the other sessions keep their refresh.
+    /// </summary>
+    private void RefreshTokens(SessionState session)
+    {
+        if (TokenSource is null) return;
+        try
+        {
+            _tracker.UpdateTokens(session.Agent, session.SessionId, TokenSource.SessionTokens(session), TokenSource.SubagentTokens(session));
+        }
+        catch (Exception ex)
+        {
+            Report(ex);
         }
     }
 
@@ -199,7 +252,9 @@ public sealed class HookEventPump : IDisposable
 
             if (events.Count == 0) continue;
             if (silent) _tracker.ApplySilently(events);
-            else foreach (var e in events) _tracker.Apply(e);
+            // ApplyTracked, not Apply: the SubagentStop that ends the last Codex child is synthesised here, and it is
+            // the one that takes the session Idle — the totals must be read before the row stops being refreshed.
+            else foreach (var e in events) ApplyTracked(e);
         }
     }
 

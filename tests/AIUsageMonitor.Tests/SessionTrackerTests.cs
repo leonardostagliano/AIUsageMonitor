@@ -543,4 +543,93 @@ public class SessionTrackerTests
         Assert.Equal("al lavoro", s.PhaseLabel);
         Assert.Equal(0, s.ActiveSubagents);
     }
+
+    [Fact]
+    public void UpdateTokens_stores_the_session_and_subagent_totals_and_raises_one_update()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStart", agentId: "a2", plusSeconds: 2));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        var change = tracker.UpdateTokens(AgentKind.Claude, "s1", new TokenUsage(10, 20, 30, 40),
+            new Dictionary<string, TokenUsage> { ["a1"] = new(1, 2, 3, 4), ["a2"] = new(5, 6, 7, 8) });
+
+        Assert.Equal(SessionChangeKind.Updated, change!.Kind);
+        // The phase does not move on a token refresh, so the App never toasts "Turno completato" for one.
+        Assert.Equal(SessionPhase.Working, change.PreviousPhase);
+        Assert.Equal(SessionPhase.Working, change.Session.Phase);
+        var s = Assert.Single(tracker.Sessions);
+        Assert.Equal(new TokenUsage(10, 20, 30, 40), s.Tokens);
+        Assert.Equal(new TokenUsage(6, 8, 10, 12), s.SubagentTokens);
+        Assert.Equal(2, s.ActiveSubagents);
+        Assert.Equal(T0.AddSeconds(2), s.LastEventAt); // a refresh is not an event: the stale sweep must not be pushed back
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void UpdateTokens_raises_nothing_when_the_totals_did_not_change()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        var subagents = new Dictionary<string, TokenUsage> { ["a1"] = new(1, 2, 3, 4) };
+        tracker.UpdateTokens(AgentKind.Claude, "s1", new TokenUsage(10, 20, 30, 40), subagents);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        Assert.Null(tracker.UpdateTokens(AgentKind.Claude, "s1", new TokenUsage(10, 20, 30, 40), subagents));
+
+        Assert.Empty(changes);
+    }
+
+    [Fact]
+    public void UpdateTokens_keeps_the_known_totals_when_a_counter_reports_nothing()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.UpdateTokens(AgentKind.Claude, "s1", new TokenUsage(10, 20, 30, 40),
+            new Dictionary<string, TokenUsage> { ["a1"] = new(1, 2, 3, 4) });
+
+        Assert.Null(tracker.UpdateTokens(AgentKind.Claude, "s1", null, null));
+
+        var s = Assert.Single(tracker.Sessions);
+        Assert.Equal(new TokenUsage(10, 20, 30, 40), s.Tokens);
+        Assert.Equal(new TokenUsage(1, 2, 3, 4), s.SubagentTokens);
+    }
+
+    [Fact]
+    public void UpdateTokens_updates_only_one_subagent_and_ignores_unknown_ids()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStart", agentId: "a2", plusSeconds: 2));
+        tracker.UpdateTokens(AgentKind.Claude, "s1", null,
+            new Dictionary<string, TokenUsage> { ["a1"] = new(1, 0, 0, 0), ["a2"] = new(2, 0, 0, 0) });
+
+        var change = tracker.UpdateTokens(AgentKind.Claude, "s1", null,
+            new Dictionary<string, TokenUsage> { ["a2"] = new(5, 0, 0, 0), ["ghost"] = new(9, 0, 0, 0) });
+
+        var s = change!.Session;
+        Assert.Equal(new TokenUsage(1, 0, 0, 0), s.Subagents!.Single(x => x.AgentId == "a1").Tokens);
+        Assert.Equal(new TokenUsage(5, 0, 0, 0), s.Subagents!.Single(x => x.AgentId == "a2").Tokens);
+        Assert.Equal(2, s.Subagents!.Count);
+    }
+
+    [Fact]
+    public void UpdateTokens_ignores_a_session_it_does_not_know()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        Assert.Null(tracker.UpdateTokens(AgentKind.Claude, "nope", new TokenUsage(1, 1, 1, 1), null));
+
+        Assert.Empty(changes);
+        Assert.Empty(tracker.Sessions);
+    }
 }

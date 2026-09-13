@@ -269,6 +269,63 @@ public sealed class SessionTracker
     }
 
     /// <summary>
+    /// Stores the token totals read from the transcripts (or the Codex rollouts) for a session and, by agent id, for
+    /// its subagents. A null total means "unknown right now" and keeps the value already stored: a transcript that
+    /// could not be read must never blank a row. Changed fires once, as <see cref="SessionChangeKind.Updated"/> with
+    /// the current phase as the previous one, only when at least one total really moved — the counters run every few
+    /// seconds and an unconditional event would repaint the notch (and re-evaluate the toasts) for nothing.
+    /// Returns null when nothing changed or the session is unknown.
+    /// </summary>
+    public SessionChange? UpdateTokens(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens)
+    {
+        SessionChange? change;
+        lock (_gate) change = UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens);
+        if (change is not null) Raise(change);
+        return change;
+    }
+
+    private SessionChange? UpdateTokensCore(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens)
+    {
+        var key = (agent, sessionId);
+        if (!_sessions.TryGetValue(key, out var session)) return null;
+
+        var tokens = session.Tokens;
+        var changed = false;
+        if (sessionTokens is not null && sessionTokens != tokens)
+        {
+            tokens = sessionTokens;
+            changed = true;
+        }
+
+        var subagents = session.Subagents;
+        if (subagentTokens is { Count: > 0 } && session.Subagents is { Count: > 0 } known)
+        {
+            List<SubagentState>? updatedList = null;
+            for (var i = 0; i < known.Count; i++)
+            {
+                // Ids the source does not know about keep what they have; ids it reports that the session never saw
+                // are ignored (the subagent list is owned by the events, not by the counters).
+                if (!subagentTokens.TryGetValue(known[i].AgentId, out var usage) || usage == known[i].Tokens) continue;
+                updatedList ??= [.. known];
+                updatedList[i] = known[i] with { Tokens = usage };
+            }
+            if (updatedList is not null)
+            {
+                subagents = updatedList;
+                changed = true;
+            }
+        }
+
+        if (!changed) return null;
+
+        // LastEventAt is deliberately left alone: a token refresh is not session activity, and pushing it forward
+        // would keep a dead session out of the 12 h stale sweep forever.
+        var updated = session with { Tokens = tokens, Subagents = subagents };
+        _sessions[key] = updated;
+        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase);
+    }
+
+    /// <summary>
     /// Marks the subagents of every session that has heard nothing from them for <paramref name="timeout"/> as Done,
     /// so a subagent that died without a SubagentStop cannot pin its session to "al lavoro" forever.
     /// </summary>
