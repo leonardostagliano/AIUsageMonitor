@@ -13,6 +13,7 @@ test('maps a Claude Notification payload', () => {
   const line = buildLine('claude', {
     hook_event_name: 'Notification', session_id: 's1', cwd: 'C:\\p\\demo',
     notification_type: 'permission_prompt', message: 'Bash needs approval',
+    transcript_path: 'C:\\Users\\demo\\.claude\\projects\\p\\s1.jsonl',
   });
   const obj = JSON.parse(line);
   assert.equal(obj.agent, 'claude');
@@ -22,6 +23,8 @@ test('maps a Claude Notification payload', () => {
   assert.equal(obj.notification_type, 'permission_prompt');
   assert.equal(obj.message, 'Bash needs approval');
   assert.equal(obj.source, null);
+  assert.equal(obj.transcript_path, 'C:\\Users\\demo\\.claude\\projects\\p\\s1.jsonl');
+  assert.equal(obj.agent_transcript_path, null);
   assert.match(obj.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });
 
@@ -40,11 +43,16 @@ test('drops events fired inside a subagent context, except SubagentStart/Subagen
   assert.equal(start.session_id, 's1');
   assert.equal(start.agent_id, 'a1');
   assert.equal(start.agent_type, 'Explore');
-  const stop = JSON.parse(buildLine('codex', { hook_event_name: 'SubagentStop', session_id: 's2', agent_id: 'b7', last_assistant_message: 'done' }));
+  assert.equal(start.agent_transcript_path, null);
+  const stop = JSON.parse(buildLine('codex', {
+    hook_event_name: 'SubagentStop', session_id: 's2', agent_id: 'b7', last_assistant_message: 'done',
+    agent_transcript_path: '/home/demo/.claude/projects/p/s2/subagents/agent-b7.jsonl',
+  }));
   assert.equal(stop.event, 'SubagentStop');
   assert.equal(stop.agent_id, 'b7');
   assert.equal(stop.agent_type, null);
   assert.equal(stop.message, 'done');
+  assert.equal(stop.agent_transcript_path, '/home/demo/.claude/projects/p/s2/subagents/agent-b7.jsonl');
 });
 
 test('regular events carry agent_id null', () => {
@@ -66,6 +74,18 @@ test('truncates long messages to 200 chars and ignores non-string fields', () =>
   assert.equal(obj.message.length, 200);
   assert.equal(obj.cwd, null);
   assert.equal(obj.source, null);
+});
+
+test('transcript_path is only kept when a string, agent_transcript_path only fires on SubagentStop', () => {
+  const nonString = JSON.parse(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1', transcript_path: 42 }));
+  assert.equal(nonString.transcript_path, null);
+  const noField = JSON.parse(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1' }));
+  assert.equal(noField.transcript_path, null);
+  // SubagentStart also does not surface agent_transcript_path, only SubagentStop does.
+  const start = JSON.parse(buildLine('claude', { hook_event_name: 'SubagentStart', session_id: 's1', agent_id: 'a1', agent_transcript_path: '/should/not/appear.jsonl' }));
+  assert.equal(start.agent_transcript_path, null);
+  const stopBadType = JSON.parse(buildLine('claude', { hook_event_name: 'SubagentStop', session_id: 's1', agent_id: 'a1', agent_transcript_path: 99 }));
+  assert.equal(stopBadType.agent_transcript_path, null);
 });
 
 test('end to end: appends one line to the events file and exits 0', () => {

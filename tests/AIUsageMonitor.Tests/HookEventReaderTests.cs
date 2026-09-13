@@ -34,6 +34,16 @@ public class HookEventReaderTests
         Assert.Null(HookEventParser.Parse(Line1)!.AgentId);
     }
 
+    [Fact]
+    public void Parse_reads_transcript_paths()
+    {
+        var ev = HookEventParser.Parse("""{"ts":"2026-09-13T10:15:02Z","agent":"claude","event":"SubagentStop","session_id":"s1","cwd":null,"notification_type":null,"message":null,"source":null,"agent_id":"a1","agent_type":"Explore","transcript_path":"C:\\p\\s1.jsonl","agent_transcript_path":"C:\\p\\s1\\subagents\\agent-a1.jsonl"}""")!;
+        Assert.Equal(@"C:\p\s1.jsonl", ev.TranscriptPath);
+        Assert.Equal(@"C:\p\s1\subagents\agent-a1.jsonl", ev.AgentTranscriptPath);
+        Assert.Null(HookEventParser.Parse(Line1)!.TranscriptPath);
+        Assert.Null(HookEventParser.Parse(Line1)!.AgentTranscriptPath);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("not json")]

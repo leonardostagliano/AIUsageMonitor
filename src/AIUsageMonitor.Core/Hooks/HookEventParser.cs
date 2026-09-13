@@ -24,7 +24,8 @@ public static class HookEventParser
 
             return new HookEvent(ts, agent, evt, sessionId,
                 GetString(root, "cwd"), GetString(root, "notification_type"), GetString(root, "message"), GetString(root, "source"),
-                GetString(root, "agent_id"), GetString(root, "agent_type"));
+                GetString(root, "agent_id"), GetString(root, "agent_type"),
+                GetString(root, "transcript_path"), GetString(root, "agent_transcript_path"));
         }
         catch (JsonException)
         {

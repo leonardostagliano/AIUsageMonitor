@@ -76,4 +76,6 @@ public sealed record HookEvent(
     string? Message,
     string? Source,
     string? AgentId = null,
-    string? AgentType = null);
+    string? AgentType = null,
+    string? TranscriptPath = null,
+    string? AgentTranscriptPath = null);

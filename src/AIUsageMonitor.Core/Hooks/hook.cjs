@@ -44,6 +44,8 @@ function buildLine(agent, payload) {
     source: str(payload.source),
     agent_id: isSubagentEvent && payload.agent_id != null ? String(payload.agent_id) : null,
     agent_type: isSubagentEvent ? str(payload.agent_type) : null,
+    transcript_path: str(payload.transcript_path),
+    agent_transcript_path: event === 'SubagentStop' ? str(payload.agent_transcript_path) : null,
   });
 }
 
