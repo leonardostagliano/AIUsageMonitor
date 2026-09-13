@@ -27,6 +27,11 @@ public sealed class HookEventPump : IDisposable
     /// subagent timeout cannot release a child the scanner can plainly see is alive.
     /// </summary>
     private readonly Dictionary<string, Dictionary<string, DateTimeOffset>> _synthesisedChildren = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Instant of the newest SubagentStart/SubagentStop the hook bridge reported for each Codex session: while it is
+    /// younger than <see cref="CodexHookGrace"/> that session counts its subagents from the hooks alone.
+    /// </summary>
+    private readonly Dictionary<string, DateTimeOffset> _hookSubagents = new(StringComparer.Ordinal);
 
     public TimeSpan ReplayWindow { get; init; } = TimeSpan.FromHours(24);
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromHours(12);
@@ -48,6 +53,24 @@ public sealed class HookEventPump : IDisposable
     /// rollouts and the pump turns what it finds into the same events the hook bridge would have written. Null disables it.
     /// </summary>
     public CodexSubagentScanner? CodexSubagents { get; init; }
+
+    /// <summary>
+    /// Whether the rollout fallback may run at all (the App wires the user setting). It is read at every scan, so
+    /// switching it off — or back on — takes effect without restarting the app; the children already announced are
+    /// stopped as soon as it goes off. Null means always on.
+    /// </summary>
+    public Func<bool>? CodexSubagentsEnabled { get; init; }
+
+    /// <summary>
+    /// How long a SubagentStart/SubagentStop reported by the hook bridge keeps the rollout fallback out of that Codex
+    /// session. Codex does emit the two events once the groups are approved with <c>/hooks</c>, and its
+    /// <c>agent_id</c> is not necessarily the child thread id: with both producers live the same child would be
+    /// counted twice (one child reading "al lavoro · 2 agenti"), the subagent summary would carry an entry no rollout
+    /// total can match, and the deferred Idle would wait for two stops. The hooks win — they are the authoritative
+    /// source — and the fallback comes back only if they go quiet for a whole grace window, which is deliberately
+    /// long: it spans the idle stretches between two subagents of the same session, and any new hook event renews it.
+    /// </summary>
+    public TimeSpan CodexHookGrace { get; init; } = TimeSpan.FromHours(6);
 
     /// <summary>
     /// How often the token totals of the sessions that are still busy (Working or NeedsInput) are read again. Idle
@@ -82,7 +105,10 @@ public sealed class HookEventPump : IDisposable
             try
             {
                 // Silent replay: no Changed events, so the UI does not toast history.
-                var replayed = _reader.ReadAll(_clock.UtcNow - ReplayWindow);
+                var replayed = _reader.ReadAll(_clock.UtcNow - ReplayWindow).ToList();
+                // Before the state is rebuilt: a Codex session whose hooks reported subagents within the replay
+                // window must not get the rollout fallback on top of them at the very first scan.
+                NoteHookSubagents(replayed);
                 _tracker.ApplySilently(replayed);
                 _tracker.RemoveStaleSilently(StaleAfter);
                 // A session whose subagents stopped reporting before the app started must not come back as
@@ -173,6 +199,9 @@ public sealed class HookEventPump : IDisposable
     /// </summary>
     private void ApplyBatch(IReadOnlyList<HookEvent> batch)
     {
+        // Whole batch first: a SubagentStart that sits after the Stop in the same batch still proves the hooks are
+        // reporting, and the scan the Stop triggers must already know it.
+        NoteHookSubagents(batch);
         HashSet<string>? synced = null;
         foreach (var ev in batch)
         {
@@ -239,13 +268,24 @@ public sealed class HookEventPump : IDisposable
         var live = sessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
         foreach (var gone in _synthesisedChildren.Keys.Where(id => !live.Contains(id)).ToList())
             _synthesisedChildren.Remove(gone);
+        foreach (var gone in _hookSubagents.Keys.Where(id => !live.Contains(id)).ToList())
+            _hookSubagents.Remove(gone);
 
+        var enabled = CodexSubagentsEnabled?.Invoke() ?? true;
         var now = _clock.UtcNow;
         // Half the timeout: a child still running at that point is announced again, which refreshes
         // LastSubagentEventAt, so SweepSubagentTimeouts can only release children the scanner no longer sees.
         var refreshAfter = SubagentTimeout / 2;
         foreach (var session in sessions)
         {
+            // Two producers for one child would double it: the fallback stands down for a session whose hooks report
+            // subagents (and for all of them when the setting is off), releasing whatever it had announced.
+            if (!enabled || HooksReportSubagents(session.SessionId, now))
+            {
+                ReleaseSynthesisedChildren(session, now, silent);
+                continue;
+            }
+
             if (!_synthesisedChildren.TryGetValue(session.SessionId, out var announced))
                 _synthesisedChildren[session.SessionId] = announced = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
 
@@ -279,6 +319,31 @@ public sealed class HookEventPump : IDisposable
             // the one that takes the session Idle — the totals must be read before the row stops being refreshed.
             else foreach (var e in events) ApplyTracked(e);
         }
+    }
+
+    /// <summary>Records the Codex sessions whose subagents the hook bridge itself is reporting.</summary>
+    private void NoteHookSubagents(IEnumerable<HookEvent> events)
+    {
+        foreach (var ev in events)
+        {
+            if (ev.Agent != AgentKind.Codex || ev.Event is not ("SubagentStart" or "SubagentStop")) continue;
+            if (!_hookSubagents.TryGetValue(ev.SessionId, out var at) || ev.Ts > at) _hookSubagents[ev.SessionId] = ev.Ts;
+        }
+    }
+
+    private bool HooksReportSubagents(string sessionId, DateTimeOffset now) =>
+        _hookSubagents.TryGetValue(sessionId, out var at) && now - at < CodexHookGrace;
+
+    /// <summary>
+    /// Stops the children this pump had announced for a session the fallback no longer owns (its hooks took over, or
+    /// the setting went off). Leaving them running would pin the session to "al lavoro" until the 30-minute timeout.
+    /// </summary>
+    private void ReleaseSynthesisedChildren(SessionState session, DateTimeOffset now, bool silent)
+    {
+        if (!_synthesisedChildren.Remove(session.SessionId, out var announced) || announced.Count == 0) return;
+        var events = announced.Keys.Select(child => SyntheticSubagentEvent("SubagentStop", session, child, now)).ToList();
+        if (silent) _tracker.ApplySilently(events);
+        else foreach (var e in events) ApplyTracked(e);
     }
 
     private static bool IsRunning(SessionState session, string agentId) =>

@@ -67,9 +67,13 @@ public sealed class AppServices : IDisposable
         Pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), Sessions, paths, Clock)
         {
             OnError = ex => Log.Error("HookEventPump", ex),
-            // Fallback per i thread figli di Codex, che potrebbero non emettere SubagentStart/SubagentStop:
-            // lo scanner legge i rollout e la pump li trasforma negli stessi eventi del bridge.
+            // Fallback per i thread figli di Codex finche' i suoi hook SubagentStart/SubagentStop non sono attivi
+            // (i gruppi vanno approvati in Codex con /hooks): lo scanner legge i rollout e la pump li trasforma
+            // negli stessi eventi del bridge. La pump lo spegne da sola per le sessioni Codex i cui hook riportano
+            // i subagenti - altrimenti lo stesso figlio verrebbe contato due volte - e l'opzione lo disattiva del
+            // tutto; il predicato viene riletto a ogni scansione, quindi il cambio non richiede un riavvio.
             CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, Clock),
+            CodexSubagentsEnabled = () => Settings.Current.CodexSubagentFallback,
             // Totali dei token di sessione e subagenti: tutta la sua IO gira sul thread della pump.
             TokenSource = tokens
         };

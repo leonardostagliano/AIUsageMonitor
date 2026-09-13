@@ -53,6 +53,7 @@ public sealed class SettingsViewModel : ObservableObject
     public bool CodexEnabled { get => _draft.CodexEnabled; set { _draft.CodexEnabled = value; Raise(); } }
     public int ClaudeRefreshSeconds { get => _draft.ClaudeRefreshSeconds; set { _draft.ClaudeRefreshSeconds = value; Raise(); } }
     public int CodexRefreshSeconds { get => _draft.CodexRefreshSeconds; set { _draft.CodexRefreshSeconds = value; Raise(); } }
+    public bool CodexSubagentFallback { get => _draft.CodexSubagentFallback; set { _draft.CodexSubagentFallback = value; Raise(); } }
     public int MonitorIndex { get => Math.Min(_draft.MonitorIndex, Math.Max(0, Monitors.Count - 1)); set { _draft.MonitorIndex = value; Raise(); } }
     public int VerticalOffset { get => _draft.VerticalOffset; set { _draft.VerticalOffset = value; Raise(); } }
     public int CollapseDelayMs { get => _draft.CollapseDelayMs; set { _draft.CollapseDelayMs = value; Raise(); } }

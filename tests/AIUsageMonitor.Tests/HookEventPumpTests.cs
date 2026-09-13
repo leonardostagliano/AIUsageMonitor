@@ -7,8 +7,8 @@ namespace AIUsageMonitor.Tests;
 
 public class HookEventPumpTests
 {
-    private static string SubagentLine(string evt, string sid, string agentId, DateTimeOffset ts) =>
-        $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"claude","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":null,"message":null,"source":null,"agent_id":"{{agentId}}","agent_type":"general-purpose"}""" + "\n";
+    private static string SubagentLine(string evt, string sid, string agentId, DateTimeOffset ts, string agent = "claude", string agentType = "general-purpose") =>
+        $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"{{agent}}","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":null,"message":null,"source":null,"agent_id":"{{agentId}}","agent_type":"{{agentType}}"}""" + "\n";
 
     private static string Line(string evt, string sid, DateTimeOffset ts, string? notificationType = null, string agent = "claude") =>
         $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"{{agent}}","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":{{(notificationType is null ? "null" : $"\"{notificationType}\"")}},"message":null,"source":null}""" + "\n";
@@ -548,6 +548,150 @@ public class HookEventPumpTests
         Assert.Equal(SessionPhase.Working, session.Phase);
         Assert.Equal(1, session.ActiveSubagents);
         Assert.Equal(0, raised);
+    }
+
+    /// <summary>
+    /// Codex 0.154 does emit SubagentStart/SubagentStop once the hook groups are approved, and its agent_id is not
+    /// necessarily the child thread id: the same child would then be counted twice ("al lavoro · 2 agenti" for one
+    /// child) and the deferred Idle would wait for both. A session whose hooks report subagents therefore owns its
+    /// own count and the rollout scan stays out of it.
+    /// </summary>
+    [Fact]
+    public void Pump_skips_the_rollout_fallback_for_a_codex_session_whose_hooks_report_subagents()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            SubagentLine("SubagentStart", "c1", "hook-1", now, agent: "codex", agentType: "review") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, session.Phase);
+        Assert.Equal("al lavoro · 1 agente", session.PhaseLabel);
+        Assert.Equal("hook-1", Assert.Single(session.Subagents!).AgentId);
+    }
+
+    /// <summary>
+    /// The hooks may be approved while the app is running: the children the pump had synthesised before that must be
+    /// stopped at once, or the session would keep waiting for rollout children that the hooks now report themselves.
+    /// </summary>
+    [Fact]
+    public void Pump_stops_the_children_it_synthesised_when_the_codex_hooks_start_reporting()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "c1", now, agent: "codex"));
+        pump.Pump();
+        Assert.Equal(1, Assert.Single(tracker.Sessions).ActiveSubagents);
+
+        clock.Advance(TimeSpan.FromSeconds(30));
+        File.AppendAllText(paths.EventsFile, SubagentLine("SubagentStart", "c1", "hook-1", clock.UtcNow, agent: "codex", agentType: "review"));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(1, session.ActiveSubagents);
+        Assert.Equal("hook-1", Assert.Single(session.Subagents!, s => s.Phase == SubagentPhase.Running).AgentId);
+        Assert.Equal(SubagentPhase.Done, Assert.Single(session.Subagents!, s => s.AgentId == "child-1").Phase);
+    }
+
+    /// <summary>
+    /// The suppression expires: a session that reported subagents through the hooks long ago (a Codex build where
+    /// the events stopped arriving, a group whose approval was revoked) gets the rollout fallback back.
+    /// </summary>
+    [Fact]
+    public void Pump_resumes_the_rollout_fallback_when_the_hook_grace_expires()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexHookGrace = TimeSpan.FromMinutes(10),
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            SubagentLine("SubagentStart", "c1", "hook-1", now, agent: "codex", agentType: "review") +
+            SubagentLine("SubagentStop", "c1", "hook-1", now, agent: "codex", agentType: "review"));
+        pump.Pump();
+        Assert.Equal(0, Assert.Single(tracker.Sessions).ActiveSubagents);
+
+        clock.Advance(TimeSpan.FromMinutes(11));
+        CodexChildRollout(paths, "child-1", "c1", running: true, clock.UtcNow);
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(1, session.ActiveSubagents);
+        Assert.Equal("child-1", Assert.Single(session.Subagents!, s => s.Phase == SubagentPhase.Running).AgentId);
+    }
+
+    /// <summary>The fallback is a setting: switching it off leaves the rollouts alone without rebuilding the app.</summary>
+    [Fact]
+    public void Pump_ignores_the_codex_rollouts_when_the_fallback_is_switched_off()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var enabled = false;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock),
+            CodexSubagentsEnabled = () => enabled
+        };
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        var off = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, off.Phase);
+        Assert.Equal(0, off.ActiveSubagents);
+
+        // Switched back on while the app runs: the next scan picks the child up with no restart.
+        enabled = true;
+        clock.Advance(TimeSpan.FromSeconds(30));
+        pump.Pump();
+
+        Assert.Equal(1, Assert.Single(tracker.Sessions).ActiveSubagents);
     }
 
     /// <summary>

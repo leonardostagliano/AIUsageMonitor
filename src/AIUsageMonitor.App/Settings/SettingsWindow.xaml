@@ -37,13 +37,15 @@
     <GroupBox Header="Agenti">
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
         <CheckBox Content="Claude Code" IsChecked="{Binding ClaudeEnabled}"/>
         <Label Grid.Column="1" Content="refresh (s)"/>
         <TextBox Grid.Column="2" Text="{Binding ClaudeRefreshSeconds, UpdateSourceTrigger=PropertyChanged}"/>
         <CheckBox Grid.Row="1" Content="Codex" IsChecked="{Binding CodexEnabled}"/>
         <Label Grid.Row="1" Grid.Column="1" Content="refresh (s)"/>
         <TextBox Grid.Row="1" Grid.Column="2" Text="{Binding CodexRefreshSeconds, UpdateSourceTrigger=PropertyChanged}"/>
+        <CheckBox Grid.Row="2" Grid.ColumnSpan="3" Content="Codex: rileva i thread figli dai rollout" IsChecked="{Binding CodexSubagentFallback}"
+                  ToolTip="Conta i thread figli di Codex leggendo i file di rollout, utile finché i gruppi hook di Codex non sono approvati con /hooks. Per le sessioni i cui hook riportano già i subagenti viene ignorato automaticamente."/>
       </Grid>
     </GroupBox>
 
