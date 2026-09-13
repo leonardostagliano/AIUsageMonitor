@@ -86,9 +86,21 @@ public sealed class SessionTracker
         };
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
-        var updated = new SessionState(
-            e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
-            phase.Value, message, e.Ts, existing?.StartedAt ?? e.Ts);
+        // A `with` update on the existing record so state this state machine does not own (TranscriptPath,
+        // Tokens, Subagents, and anything added later) survives every subsequent event instead of being
+        // silently reset by a positional rebuild.
+        var updated = existing is null
+            ? new SessionState(
+                e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
+                phase.Value, message, e.Ts, e.Ts)
+            : existing with
+            {
+                DisplayName = DisplayNameFor(cwd, e.SessionId),
+                Cwd = cwd,
+                Phase = phase.Value,
+                Message = message,
+                LastEventAt = e.Ts
+            };
         _sessions[key] = updated;
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
     }
