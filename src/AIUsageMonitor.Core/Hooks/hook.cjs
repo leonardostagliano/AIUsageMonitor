@@ -27,10 +27,11 @@ function truncate(value) {
 function buildLine(agent, payload) {
   if (agent !== 'claude' && agent !== 'codex') return null;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
-  if (payload.agent_id) return null; // Claude subagent context: not a user-facing session
   const event = str(payload.hook_event_name);
   const sessionId = payload.session_id == null ? null : String(payload.session_id);
   if (!event || !sessionId) return null;
+  const isSubagentEvent = event === 'SubagentStart' || event === 'SubagentStop';
+  if (payload.agent_id && !isSubagentEvent) return null; // fired inside a subagent's own context
   const message = payload.message ?? payload.last_assistant_message ?? payload.error ?? null;
   return JSON.stringify({
     ts: new Date().toISOString(),
@@ -41,6 +42,8 @@ function buildLine(agent, payload) {
     notification_type: str(payload.notification_type),
     message: truncate(message),
     source: str(payload.source),
+    agent_id: isSubagentEvent && payload.agent_id != null ? String(payload.agent_id) : null,
+    agent_type: isSubagentEvent ? str(payload.agent_type) : null,
   });
 }
 

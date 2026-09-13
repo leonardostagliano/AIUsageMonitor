@@ -32,8 +32,25 @@ test('uses last_assistant_message for Stop and keeps source for SessionStart', (
   assert.equal(start.source, 'resume');
 });
 
-test('skips subagent payloads', () => {
+test('drops events fired inside a subagent context, except SubagentStart/SubagentStop', () => {
   assert.equal(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1', agent_id: 'a1' }), null);
+  assert.equal(buildLine('claude', { hook_event_name: 'PreToolUse', session_id: 's1', agent_id: 'a1' }), null);
+  const start = JSON.parse(buildLine('claude', { hook_event_name: 'SubagentStart', session_id: 's1', cwd: 'C:\\p', agent_id: 'a1', agent_type: 'Explore' }));
+  assert.equal(start.event, 'SubagentStart');
+  assert.equal(start.session_id, 's1');
+  assert.equal(start.agent_id, 'a1');
+  assert.equal(start.agent_type, 'Explore');
+  const stop = JSON.parse(buildLine('codex', { hook_event_name: 'SubagentStop', session_id: 's2', agent_id: 'b7', last_assistant_message: 'done' }));
+  assert.equal(stop.event, 'SubagentStop');
+  assert.equal(stop.agent_id, 'b7');
+  assert.equal(stop.agent_type, null);
+  assert.equal(stop.message, 'done');
+});
+
+test('regular events carry agent_id null', () => {
+  const obj = JSON.parse(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1' }));
+  assert.equal(obj.agent_id, null);
+  assert.equal(obj.agent_type, null);
 });
 
 test('skips unknown agents and malformed payloads', () => {
