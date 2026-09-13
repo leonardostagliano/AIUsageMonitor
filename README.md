@@ -13,6 +13,20 @@ Ispirata ad [AgentBar](https://github.com/scari/AgentBar) (macOS), riscritta da 
 
 > _Screenshot: `docs/screenshot.png` (da aggiungere)._
 
+## Aspetto
+
+Tray, menu della tray e finestra **Impostazioni** condividono la stessa palette scura del notch
+(sfondo `#1B1B1F`, superfici `#2A2A30` con hover `#3A3A42` e stato premuto `#45454E`, testo bianco
+con sottotitoli in grigio chiaro, accento verde `#3FB950`), con contrasto testo/sfondo verificato
+da test automatici (WCAG AA, ≥ 4.5:1). La finestra Impostazioni ha la barra del titolo scura (DWM
+immersive dark mode) oltre ai controlli ristilizzati; l'apertura e la chiusura del notch usano una
+dissolvenza incrociata tra linguetta e pannello, così non si sovrappongono più durante la
+transizione.
+
+Per controllare l'aspetto senza passare dal tray, l'eseguibile accetta due argomenti di debug:
+`AIUsageMonitor.exe --settings` apre subito la finestra Impostazioni, `AIUsageMonitor.exe
+--tray-menu` apre il menu della tray al centro dello schermo primario.
+
 ## Requisiti
 
 - Windows 10/11 x64.
