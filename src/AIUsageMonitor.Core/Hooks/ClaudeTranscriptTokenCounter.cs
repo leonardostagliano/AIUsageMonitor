@@ -11,9 +11,18 @@ namespace AIUsageMonitor.Core.Hooks;
 /// </summary>
 /// <remarks>
 /// Claude writes one <c>type: "assistant"</c> line per content block of the same API response — text, thinking,
-/// tool_use — and every one of them repeats the SAME <c>message.usage</c>. Summing them naively overstates the total
-/// by ~2.7× on a real session, so the usage of a <c>requestId</c> is counted once and the following lines that carry
-/// it are skipped. A line without <c>requestId</c> cannot be deduped and counts on its own.
+/// tool_use — and every one of them repeats the <c>message.usage</c> of that response. Summing them naively
+/// overstates the total by ~2.7× on a real session, so each <c>requestId</c> contributes its usage only once.
+/// <para>
+/// That repeated usage is identical only in the main transcript. In a subagent transcript the intermediate lines of a
+/// streamed response carry a PARTIAL usage (<c>output_tokens</c> still growing, the other three components already
+/// final) and the last line carries the real one: on the measured corpus 571 of 586 subagent transcripts have at
+/// least one request whose first and last line differ, and keeping the first line loses most of the output tokens.
+/// So the counter remembers the usage already counted per <c>requestId</c> and adds only the growth a later line
+/// brings, never a negative delta (no request out of 18 736 was ever non-monotone, and a decrease must not lower the
+/// total). Counting only the line with a non-null <c>stop_reason</c> is not an option: 4 317 of those requests have
+/// no such line at all. A line without <c>requestId</c> cannot be deduped and counts on its own.
+/// </para>
 /// </remarks>
 /// <remarks>Not thread-safe: callers serialize access (the pump does all its IO on its own thread).</remarks>
 public sealed class ClaudeTranscriptTokenCounter
@@ -21,11 +30,13 @@ public sealed class ClaudeTranscriptTokenCounter
     private readonly Dictionary<string, TranscriptState> _states = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Upper bound on the request ids remembered per transcript. Duplicate lines of one response are adjacent, so a
-    /// generous bound is only a safety net; once it is hit the oldest ids are forgotten and a very late duplicate
-    /// would be counted twice, which is preferable to a set that grows for the whole life of the app.
+    /// Upper bound on the requests remembered per transcript (the id plus the usage already counted for it).
+    /// Duplicate lines of one response are adjacent, so the bound is only a safety net; once it is hit the oldest
+    /// requests are forgotten and a very late duplicate would be counted again, which is preferable to a map that
+    /// grows for the whole life of the app. 2 000 leaves more than 3× headroom over the busiest transcript measured
+    /// (582 distinct request ids), and each entry now carries four longs on top of the 28-character id.
     /// </summary>
-    public int MaxSeenRequestIds { get; init; } = 10_000;
+    public int MaxSeenRequestIds { get; init; } = 2_000;
 
     /// <summary>Token total of <paramref name="transcriptPath"/>, including everything appended since the last call.</summary>
     /// <remarks>Never throws: an unreadable file or an unparseable line leaves the last known total in place.</remarks>
@@ -104,15 +115,34 @@ public sealed class ClaudeTranscriptTokenCounter
             var requestId = root.TryGetProperty("requestId", out var id) && id.ValueKind == JsonValueKind.String
                 ? id.GetString()
                 : null;
-            // The id is remembered only once its usage has actually been added: a first line that carries the id but
-            // no usage must not hide the real numbers of the lines that follow it.
-            if (requestId is not null && !state.MarkSeen(requestId, MaxSeenRequestIds)) return;
-
-            state.Total += new TokenUsage(
+            var counted = new TokenUsage(
                 Long(usage, "input_tokens"),
                 Long(usage, "output_tokens"),
                 Long(usage, "cache_read_input_tokens"),
                 Long(usage, "cache_creation_input_tokens"));
+
+            // A line without requestId cannot be deduped and adds whole.
+            if (requestId is null)
+            {
+                state.Total += counted;
+                return;
+            }
+
+            // Otherwise only the growth over what this request has already contributed is added, so the final
+            // (largest) usage of a streamed response wins whether its lines land in one read or in two consecutive
+            // ones. A first line carrying the id but no usage at all returned above without remembering anything, so
+            // the real numbers of the lines that follow it are still added in full.
+            var before = state.Counted(requestId);
+            state.Total += new TokenUsage(
+                Math.Max(0, counted.Input - before.Input),
+                Math.Max(0, counted.Output - before.Output),
+                Math.Max(0, counted.CacheRead - before.CacheRead),
+                Math.Max(0, counted.CacheWrite - before.CacheWrite));
+            state.Remember(requestId, new TokenUsage(
+                Math.Max(counted.Input, before.Input),
+                Math.Max(counted.Output, before.Output),
+                Math.Max(counted.CacheRead, before.CacheRead),
+                Math.Max(counted.CacheWrite, before.CacheWrite)), MaxSeenRequestIds);
         }
         catch (JsonException)
         {
@@ -125,10 +155,10 @@ public sealed class ClaudeTranscriptTokenCounter
             ? number
             : 0;
 
-    /// <summary>Per-transcript state: where the reading stopped, which responses were counted, and the running total.</summary>
+    /// <summary>Per-transcript state: where the reading stopped, what each response contributed, and the total.</summary>
     private sealed class TranscriptState
     {
-        private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TokenUsage> _counted = new(StringComparer.Ordinal);
         private readonly Queue<string> _order = new();
 
         public long Offset { get; set; }
@@ -139,17 +169,22 @@ public sealed class ClaudeTranscriptTokenCounter
         {
             Offset = 0;
             Total = TokenUsage.Zero;
-            _seen.Clear();
+            _counted.Clear();
             _order.Clear();
         }
 
-        /// <summary>Records <paramref name="requestId"/>; false when it had already been counted.</summary>
-        public bool MarkSeen(string requestId, int limit)
+        /// <summary>Usage already added to the total for <paramref name="requestId"/> (zero when never seen).</summary>
+        public TokenUsage Counted(string requestId) =>
+            _counted.TryGetValue(requestId, out var usage) ? usage : TokenUsage.Zero;
+
+        /// <summary>Stores what <paramref name="requestId"/> has contributed, evicting the oldest past the bound.</summary>
+        public void Remember(string requestId, TokenUsage usage, int limit)
         {
-            if (!_seen.Add(requestId)) return false;
-            _order.Enqueue(requestId);
-            while (_order.Count > limit && _order.TryDequeue(out var oldest)) _seen.Remove(oldest);
-            return true;
+            // Eviction order is first-seen: the repeated lines of one response are adjacent, so re-enqueueing an id
+            // on every one of them would only make the queue grow without changing which requests survive.
+            if (!_counted.ContainsKey(requestId)) _order.Enqueue(requestId);
+            _counted[requestId] = usage;
+            while (_order.Count > limit && _order.TryDequeue(out var oldest)) _counted.Remove(oldest);
         }
     }
 }

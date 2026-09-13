@@ -145,6 +145,49 @@ public class ClaudeTranscriptTokenCounterTests
         Assert.Equal(new TokenUsage(10, 20, 30, 40), counter.Read(file));
     }
 
+    /// <summary>
+    /// The streamed shape of a real subagent transcript: Claude writes the intermediate content-block lines with a
+    /// partial <c>message.usage</c> (<c>output_tokens</c> still growing) and the final line with the real one, the
+    /// other three components identical. Keeping the first line would undercount almost every response.
+    /// </summary>
+    [Fact]
+    public void Growing_usage_of_one_request_is_counted_at_its_largest()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("session.jsonl", Join(
+            Assistant("req_a", 4, 1, 25_000, 120, "a1"),
+            Assistant("req_a", 4, 339, 25_000, 120, "a2")));
+
+        Assert.Equal(new TokenUsage(4, 339, 25_000, 120), new ClaudeTranscriptTokenCounter().Read(file));
+    }
+
+    /// <summary>The growth lands on whichever read sees the later line, so an incremental read totals the same.</summary>
+    [Fact]
+    public void Growing_usage_split_across_two_reads_adds_only_the_delta()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("session.jsonl", Join(Assistant("req_a", 4, 1, 25_000, 120, "a1")));
+        var counter = new ClaudeTranscriptTokenCounter();
+
+        Assert.Equal(new TokenUsage(4, 1, 25_000, 120), counter.Read(file));
+
+        File.AppendAllText(file, Join(Assistant("req_a", 4, 339, 25_000, 120, "a2")));
+
+        Assert.Equal(new TokenUsage(4, 339, 25_000, 120), counter.Read(file));
+    }
+
+    /// <summary>A later line is never smaller in practice; if one ever is, it must not subtract from the total.</summary>
+    [Fact]
+    public void A_smaller_later_usage_never_lowers_the_total()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("session.jsonl", Join(
+            Assistant("req_a", 10, 20, 30, 40, "a1"),
+            Assistant("req_a", 1, 2, 3, 4, "a2")));
+
+        Assert.Equal(new TokenUsage(10, 20, 30, 40), new ClaudeTranscriptTokenCounter().Read(file));
+    }
+
     [Fact]
     public void Forget_drops_the_state_so_the_next_read_starts_over()
     {
