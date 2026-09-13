@@ -1,0 +1,60 @@
+using AIUsageMonitor.Core.Hooks;
+using AIUsageMonitor.Core.Infrastructure;
+using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Usage;
+
+if (args.Contains("--install-hooks"))
+{
+    var inst = new HookInstaller(AppPaths.Default, new SystemClock());
+    foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex })
+        Console.WriteLine($"{agent.DisplayName()}: {inst.Install(agent).Status}");
+    return;
+}
+if (args.Contains("--remove-hooks"))
+{
+    var inst = new HookInstaller(AppPaths.Default, new SystemClock());
+    foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex })
+        Console.WriteLine($"{agent.DisplayName()}: {inst.Remove(agent).Status}");
+    return;
+}
+
+var paths = AppPaths.Default;
+var clock = new SystemClock();
+var now = clock.UtcNow;
+
+Console.WriteLine("== Quota ==");
+var providers = new IUsageProvider[]
+{
+    new ClaudeUsageProvider(paths, new HttpClient(), clock),
+    new CodexUsageProvider(paths, clock)
+};
+foreach (var provider in providers)
+{
+    var snap = await provider.FetchAsync();
+    Console.WriteLine($"{snap.Agent.DisplayName()}  piano={snap.PlanLabel ?? "-"}  stato={snap.Status} {snap.StatusMessage}");
+    foreach (var w in snap.Windows)
+    {
+        var reset = w.ResetsAt is { } r ? $"reset tra {CountdownFormatter.Until(r, now)}" : "reset sconosciuto";
+        Console.WriteLine($"   {w.Label,-12} {w.Percent,5:0}%  {w.Severity,-8} {reset}");
+    }
+    if (snap.ExtraUsage is not null) Console.WriteLine($"   {snap.ExtraUsage}");
+}
+
+Console.WriteLine();
+Console.WriteLine("== Hook ==");
+var installer = new HookInstaller(paths, clock);
+foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex })
+{
+    var status = installer.GetStatus(agent);
+    Console.WriteLine($"{agent.DisplayName(),-12} {status.Status,-14} {status.Detail}");
+}
+
+Console.WriteLine();
+Console.WriteLine("== Sessioni (ultime 24h dal file eventi) ==");
+var tracker = new SessionTracker(clock, (agent, id) => agent == AgentKind.Codex ? new CodexSessionResolver(paths.CodexSessionsDir).ResolveCwd(id) : null);
+var reader = new HookEventReader(paths.EventsFile, paths.RotatedEventsFile);
+tracker.ApplySilently(reader.ReadAll(now - TimeSpan.FromHours(24)));
+tracker.RemoveStaleSilently(TimeSpan.FromHours(12));
+if (tracker.Sessions.Count == 0) Console.WriteLine("nessuna sessione (installa gli hook e avvia un agente)");
+foreach (var s in tracker.Sessions)
+    Console.WriteLine($"{s.Agent.DisplayName(),-12} {s.DisplayName,-30} {s.PhaseLabel,-14} {CountdownFormatter.Since(s.LastEventAt, now)} fa  {s.Message}");

@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/AIUsageMonitor.Core/AIUsageMonitor.Core.csproj" />
+    <Project Path="src/AIUsageMonitor.Probe/AIUsageMonitor.Probe.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/AIUsageMonitor.Tests/AIUsageMonitor.Tests.csproj" />
