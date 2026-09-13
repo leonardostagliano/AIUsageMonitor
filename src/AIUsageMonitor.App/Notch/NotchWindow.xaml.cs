@@ -160,13 +160,16 @@ public partial class NotchWindow : Window, INotchHost
     /// convertirebbe in pixel usando la scala del monitor corrente, spedendo la finestra fuori da ogni schermo.
     /// Lo spostamento genera un WM_DPICHANGED: l'handler <c>DpiChanged</c> richiama questo metodo come seconda passata
     /// quando la finestra e' ormai ridimensionata con la scala di destinazione.
+    /// L'ordinamento degli schermi e' quello di <see cref="EnumerateScreens"/>: il primario e' sempre l'indice 0,
+    /// cosi' il default <c>MonitorIndex = 0</c> non finisce su uno schermo secondario. La lista dei monitor esposta
+    /// dalle impostazioni (Task 6) deve usare lo stesso metodo, altrimenti gli indici non corrisponderebbero.
     /// </summary>
     public void Reposition()
     {
         var settings = _services.Settings.Current;
-        var screens = WinForms.Screen.AllScreens;
+        var screens = EnumerateScreens();
         if (screens.Length == 0) return;
-        var screen = settings.MonitorIndex < screens.Length ? screens[settings.MonitorIndex] : WinForms.Screen.PrimaryScreen ?? screens[0];
+        var screen = settings.MonitorIndex < screens.Length ? screens[settings.MonitorIndex] : screens[0];
         var area = screen.WorkingArea;
         var scale = GetScaleFor(area);
 
@@ -188,6 +191,15 @@ public partial class NotchWindow : Window, INotchHost
             1.0, Width * scale, height * scale, settings.VerticalOffset * scale);
         SetWindowPos(handle, IntPtr.Zero, (int)Math.Round(left), (int)Math.Round(top), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
+
+    /// <summary>
+    /// Schermi nell'ordine usato da <c>MonitorIndex</c>: il primario per primo, gli altri nell'ordine di
+    /// <c>Screen.AllScreens</c>. Windows non garantisce che <c>AllScreens[0]</c> sia il primario, quindi senza questo
+    /// riordino il default <c>MonitorIndex = 0</c> aprirebbe la notch su uno schermo secondario. <c>OrderByDescending</c>
+    /// e' stabile, percio' l'ordine relativo dei monitor non primari resta quello di sistema.
+    /// </summary>
+    internal static WinForms.Screen[] EnumerateScreens() =>
+        WinForms.Screen.AllScreens.OrderByDescending(s => s.Primary).ToArray();
 
     /// <summary>Scala DPI effettiva del monitor che contiene l'area indicata; ripiega sulla scala della finestra corrente.</summary>
     private double GetScaleFor(System.Drawing.Rectangle area)
