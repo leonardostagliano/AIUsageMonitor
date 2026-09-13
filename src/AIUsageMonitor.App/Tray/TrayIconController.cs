@@ -1,3 +1,4 @@
+using System.Windows.Threading;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
 using AIUsageMonitor.App.Startup;
@@ -17,6 +18,7 @@ public sealed class TrayIconController : IDisposable
     private readonly WinForms.ToolStripMenuItem _hooksClaude;
     private readonly WinForms.ToolStripMenuItem _hooksCodex;
     private readonly Action<string, string, NoticeKind> _notice;
+    private readonly DispatcherTimer _singleClickTimer;
     private TrayIconRenderer.RenderedIcon? _rendered;
 
     /// <summary>Set by App.xaml.cs once the settings window exists (Task 7). Null-safe.</summary>
@@ -46,9 +48,29 @@ public sealed class TrayIconController : IDisposable
         _menu.Items.Add("Esci", null, (_, _) => System.Windows.Application.Current.Shutdown());
         _menu.Opening += (_, _) => RefreshMenuState();
 
+        // Spec 8.1 assegna due azioni distinte a click e doppio click, ma NotifyIcon alza MouseClick gia' sul primo
+        // click di un doppio click (sopprime solo il secondo WM_LBUTTONUP): senza attesa ogni doppio click aprirebbe
+        // le impostazioni fissando anche il notch. Il fissaggio parte quindi solo se entro DoubleClickTime non arriva
+        // il doppio click, che ferma il timer.
+        _singleClickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Math.Max(1, WinForms.SystemInformation.DoubleClickTime)) };
+        _singleClickTimer.Tick += (_, _) =>
+        {
+            _singleClickTimer.Stop();
+            notch.TogglePin();
+        };
+
         _icon = new WinForms.NotifyIcon { Visible = true, Text = "AIUsageMonitor", ContextMenuStrip = _menu };
-        _icon.MouseClick += (_, e) => { if (e.Button == WinForms.MouseButtons.Left) notch.TogglePin(); };
-        _icon.DoubleClick += (_, _) => OpenSettings?.Invoke();
+        _icon.MouseClick += (_, e) =>
+        {
+            if (e.Button != WinForms.MouseButtons.Left) return;
+            _singleClickTimer.Stop();
+            _singleClickTimer.Start();
+        };
+        _icon.DoubleClick += (_, _) =>
+        {
+            _singleClickTimer.Stop();
+            OpenSettings?.Invoke();
+        };
         _icon.BalloonTipClicked += (_, _) => notch.Pin();
 
         services.StateChanged += () => UiDispatcher.Post(UpdateIcon);
@@ -117,6 +139,7 @@ public sealed class TrayIconController : IDisposable
     public void Dispose()
     {
         _services.Notice -= _notice;
+        _singleClickTimer.Stop();
         _icon.Visible = false;
         _icon.Dispose();
         _menu.Dispose();
