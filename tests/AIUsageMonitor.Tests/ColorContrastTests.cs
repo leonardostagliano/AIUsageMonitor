@@ -23,6 +23,8 @@ public class ColorContrastTests
     public void Palette_pairs_meet_aa(string fg, string bg) =>
         Assert.True(ColorContrast.Ratio(fg, bg) >= 4.5, $"{fg} on {bg} = {ColorContrast.Ratio(fg, bg):0.00}");
 
+    // #6E6E76 (the first draft of this colour) measures 2.82:1 on #2A2A30 and fails the 3:1 floor.
+    // ThemePaletteTests keeps Theme.xaml's TextDisabled brush equal to the value pinned here.
     [Fact]
     public void Disabled_text_meets_3_to_1() =>
         Assert.True(ColorContrast.Ratio("#7A7A82", "#2A2A30") >= 3.0);
