@@ -90,7 +90,17 @@ public sealed class AppServices : IDisposable
         lock (_gate)
         {
             if (_hookStatus.TryGetValue(agent, out var cached) && Clock.UtcNow - cached.At < HookStatusTtl) return cached.Report;
-            var report = Hooks.GetStatus(agent);
+            HookStatusReport report;
+            try
+            {
+                report = Hooks.GetStatus(agent);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // File in uso da Claude Code/Codex mentre riscrivono la config: errore transitorio, non va messo in cache.
+                Log.Error($"HookStatus {agent}", ex);
+                return new HookStatusReport(Core.Hooks.HookStatus.ConfigInvalid, $"Impossibile leggere la configurazione: {ex.Message}");
+            }
             _hookStatus[agent] = (report, Clock.UtcNow);
             return report;
         }

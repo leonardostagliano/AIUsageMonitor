@@ -57,21 +57,32 @@ public sealed class TrayIconController : IDisposable
     public void ShowBalloon(string title, string text, WinForms.ToolTipIcon kind) =>
         _icon.ShowBalloonTip(5000, title, text, kind);
 
+    /// <summary>
+    /// Ogni voce è protetta singolarmente: il menu deve aprirsi anche se leggere lo stato hook o il registro fallisce
+    /// (es. sharing violation mentre Claude Code riscrive settings.json). Un'eccezione qui finirebbe in
+    /// WinForms.Application.ThreadException, non in DispatcherUnhandledException.
+    /// </summary>
     private void RefreshMenuState()
     {
         _toggleNotch.Text = _notch.IsNotchVisible ? "Nascondi notch" : "Mostra notch";
-        _autoStart.Checked = AutoStart.IsEnabled();
+        _autoStart.Checked = Safe(AutoStart.IsEnabled, false, "AutoStart.IsEnabled");
         _hooksClaude.Text = $"Claude Code — {StatusLabel(AgentKind.Claude)}";
         _hooksCodex.Text = $"Codex — {StatusLabel(AgentKind.Codex)}";
     }
 
-    private string StatusLabel(AgentKind agent) => _services.HookStatus(agent).Status switch
+    private T Safe<T>(Func<T> read, T fallback, string what)
+    {
+        try { return read(); }
+        catch (Exception ex) { _services.Log.Error($"{what} failed", ex); return fallback; }
+    }
+
+    private string StatusLabel(AgentKind agent) => Safe(() => _services.HookStatus(agent).Status switch
     {
         Core.Hooks.HookStatus.Installed => "installati",
         Core.Hooks.HookStatus.Partial => "parziali, completa",
         Core.Hooks.HookStatus.ConfigInvalid => "config non valida",
         _ => "installa"
-    };
+    }, "stato non disponibile", $"HookStatus {agent}");
 
     private void InstallHooks(AgentKind agent)
     {
