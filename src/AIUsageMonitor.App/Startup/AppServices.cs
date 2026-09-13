@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net.Http;
+using AIUsageMonitor.App.Terminal;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
@@ -25,6 +26,7 @@ public sealed class AppServices : IDisposable
     public SessionTracker Sessions { get; }
     public HookInstaller Hooks { get; }
     public HookEventPump Pump { get; }
+    public TerminalRegistry Terminals { get; }
 
     /// <summary>Raised on a background thread whenever usage or sessions change. Marshal with UiDispatcher.</summary>
     public event Action? StateChanged;
@@ -34,6 +36,7 @@ public sealed class AppServices : IDisposable
 
     private readonly Dictionary<AgentKind, (HookStatusReport Report, DateTimeOffset At)> _hookStatus = new();
     private readonly object _gate = new();
+    private readonly TerminalFocuser _focuser;
     private FileSystemWatcher? _codexWatcher;
     private Timer? _codexDebounce;
 
@@ -78,12 +81,23 @@ public sealed class AppServices : IDisposable
             TokenSource = tokens
         };
 
+        // "Vai al terminale": il pane di Herdr e la catena dei processi vanno risolti quando l'evento arriva, perche'
+        // il processo che ha eseguito l'hook vive pochi secondi mentre la finestra del terminale resta.
+        var herdr = new HerdrClient { OnLog = Log.Info };
+        Terminals = new TerminalRegistry(Clock) { OnLog = Log.Info };
+        _focuser = new TerminalFocuser(herdr, Terminals, Log.Info);
+
         Usage.UsageUpdated += _ => StateChanged?.Invoke();
         // Removed arriva dallo sweep della pump, cioe' dallo stesso thread che chiama il token source: e' il punto
         // giusto per liberare l'offset e i requestId del transcript di una sessione che non esiste piu'.
         Sessions.Changed += change =>
         {
-            if (change.Kind == SessionChangeKind.Removed) tokens.Forget(change.Session);
+            if (change.Kind == SessionChangeKind.Removed)
+            {
+                tokens.Forget(change.Session);
+                Terminals.Forget(change.Session.Agent, change.Session.SessionId);
+            }
+            else Terminals.Observe(change.Session);
             StateChanged?.Invoke();
         };
         Settings.Changed += _ => { RefreshAll(); StateChanged?.Invoke(); };
@@ -161,6 +175,13 @@ public sealed class AppServices : IDisposable
         Notice?.Invoke(title, text, installed ? NoticeKind.Info : NoticeKind.Warning);
         return report;
     }
+
+    /// <summary>
+    /// Porta in primo piano il terminale della sessione. Gira tutta su un thread di background (CLI di Herdr e
+    /// scansione dei processi) e non solleva mai: torna false quando nessuna strategia ha funzionato, e in quel caso
+    /// il chiamante mostra il toast "Terminale non trovato".
+    /// </summary>
+    public Task<bool> FocusTerminalAsync(SessionState session) => _focuser.FocusAsync(session);
 
     public void InvalidateHookStatus()
     {

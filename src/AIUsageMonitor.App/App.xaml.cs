@@ -59,6 +59,10 @@ public partial class App : Application
             // nascosta di TrayMenuHost ha gia' un HWND da portare in primo piano.
             if (e.Args.Contains("--tray-menu"))
                 Dispatcher.BeginInvoke(() => _tray?.ShowMenuAtScreenCentre(), DispatcherPriority.Background);
+            // Argomento di debug: porta in primo piano il terminale di una sessione senza passare dal click nel
+            // notch, per verificare la catena delle strategie dal log.
+            var focus = Array.IndexOf(e.Args, "--focus-session");
+            if (focus >= 0 && focus + 1 < e.Args.Length) _ = FocusSessionAsync(_services, e.Args[focus + 1]);
         }
         catch (Exception ex)
         {
@@ -73,6 +77,30 @@ public partial class App : Application
         }
 
         _services.Log.Info("AIUsageMonitor started");
+    }
+
+    /// <summary>
+    /// Corpo di <c>--focus-session</c>: aspetta che il replay silenzioso della pump abbia ricostruito le sessioni,
+    /// poi chiede il focus e ne scrive l'esito nel log. Solo diagnostica: non tocca la UI.
+    /// </summary>
+    private static async Task FocusSessionAsync(AppServices services, string sessionId)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            var session = services.Sessions.Sessions.FirstOrDefault(s => string.Equals(s.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session is null)
+            {
+                services.Log.Warn($"--focus-session {sessionId}: sessione sconosciuta ({services.Sessions.Sessions.Count} sessioni note)");
+                return;
+            }
+            var focused = await services.FocusTerminalAsync(session);
+            services.Log.Info($"--focus-session {sessionId}: {(focused ? "terminale in primo piano" : "Terminale non trovato")}");
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error("--focus-session", ex);
+        }
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs args)
