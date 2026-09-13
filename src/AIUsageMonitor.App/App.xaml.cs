@@ -12,6 +12,7 @@ public partial class App : Application
     private SingleInstance? _single;
     private AppServices? _services;
     private TrayIconController? _tray;
+    private NotchWindow? _notch;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -36,7 +37,14 @@ public partial class App : Application
 
         try
         {
-            INotchHost notch = new StubNotchHost();
+            var placeholder = new { Agents = new[]
+            {
+                new { Name = "Claude Code", Icon = (System.Windows.Media.Geometry)FindResource("ClaudeIcon"), AggregateBrush = PhaseVisuals.Brush(null), AggregateStroke = PhaseVisuals.Brush(Core.Models.SessionPhase.Idle) },
+                new { Name = "Codex", Icon = (System.Windows.Media.Geometry)FindResource("CodexIcon"), AggregateBrush = PhaseVisuals.Brush(Core.Models.SessionPhase.Working), AggregateStroke = (System.Windows.Media.Brush)System.Windows.Media.Brushes.Transparent },
+            } };
+            var notch = new NotchWindow(_services, placeholder);
+            _notch = notch;
+            if (_services.Settings.Current.NotchVisible) notch.Show();
             _tray = new TrayIconController(_services, notch);
             _single.ShowNotchRequested += () => Dispatcher.BeginInvoke(notch.Pin);
 
@@ -68,17 +76,10 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _notch?.Close();
         _tray?.Dispose();
         _services?.Dispose();
         _single?.Dispose();
         base.OnExit(e);
-    }
-
-    private sealed class StubNotchHost : INotchHost
-    {
-        public bool IsNotchVisible => false;
-        public void Pin() { }
-        public void TogglePin() { }
-        public void ToggleVisible() { }
     }
 }

@@ -1,0 +1,43 @@
+<Window x:Class="AIUsageMonitor.App.Notch.NotchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AIUsageMonitor"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
+        SizeToContent="Height" Width="320" MinHeight="60" Focusable="False">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="NotchTemplates.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+  <Grid>
+    <!-- Pannello espanso. Hidden (non Collapsed) da chiuso, cosi' la finestra conserva l'altezza del pannello e la linguetta non salta sotto il mouse. -->
+    <Border x:Name="Panel" HorizontalAlignment="Right" Width="320" Visibility="Hidden" Opacity="0"
+            CornerRadius="12,0,0,12" Background="{StaticResource NotchBackground}"
+            BorderBrush="{StaticResource NotchBorder}" BorderThickness="1,1,0,1" Padding="14,12"
+            MouseLeftButtonDown="Tab_MouseLeftButtonDown">
+      <Border.RenderTransform>
+        <TranslateTransform x:Name="PanelSlide" X="320"/>
+      </Border.RenderTransform>
+      <DockPanel>
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+          <TextBlock x:Name="PinGlyph" DockPanel.Dock="Right" Text="&#x1F4CC;" FontSize="12" Visibility="Collapsed" Foreground="{StaticResource TextMuted}" ToolTip="Fissato: clicca la linguetta o l'icona nella tray per sbloccare"/>
+          <TextBlock Text="AI Usage" FontWeight="SemiBold"/>
+        </DockPanel>
+        <ScrollViewer x:Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <ItemsControl ItemsSource="{Binding Agents}" ItemTemplate="{StaticResource AgentCardTemplate}"/>
+        </ScrollViewer>
+      </DockPanel>
+    </Border>
+
+    <!-- Linguetta chiusa: 28 px di larghezza, una riga da 36 px per agente, centrata verticalmente sul bordo destro. -->
+    <Border x:Name="Tab" HorizontalAlignment="Right" VerticalAlignment="Center" Width="28" Padding="0,6"
+            CornerRadius="10,0,0,10" Background="{StaticResource NotchBackground}"
+            BorderBrush="{StaticResource NotchBorder}" BorderThickness="1,1,0,1" Cursor="Hand"
+            MouseEnter="Tab_MouseEnter" MouseLeftButtonDown="Tab_MouseLeftButtonDown">
+      <ItemsControl ItemsSource="{Binding Agents}" ItemTemplate="{StaticResource TabItemTemplate}"/>
+    </Border>
+  </Grid>
+</Window>

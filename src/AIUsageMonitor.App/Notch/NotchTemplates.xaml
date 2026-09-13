@@ -1,0 +1,12 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <DataTemplate x:Key="TabItemTemplate">
+    <StackPanel Height="36" Width="28">
+      <Path Data="{Binding Icon}" Fill="White" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,2,0,3"/>
+      <Ellipse Width="8" Height="8" Fill="{Binding AggregateBrush}" Stroke="{Binding AggregateStroke}" StrokeThickness="1" HorizontalAlignment="Center"/>
+    </StackPanel>
+  </DataTemplate>
+  <DataTemplate x:Key="AgentCardTemplate">
+    <TextBlock Text="{Binding Name}" Margin="0,0,0,8"/>
+  </DataTemplate>
+</ResourceDictionary>
