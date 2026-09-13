@@ -51,7 +51,9 @@ foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex })
 
 Console.WriteLine();
 Console.WriteLine("== Sessioni (ultime 24h dal file eventi) ==");
-var tracker = new SessionTracker(clock, (agent, id) => agent == AgentKind.Codex ? new CodexSessionResolver(paths.CodexSessionsDir).ResolveCwd(id) : null);
+// One resolver for the whole run: it caches hits and misses, so a session without cwd is not re-scanned on every event.
+var codexResolver = new CodexSessionResolver(paths.CodexSessionsDir, clock);
+var tracker = new SessionTracker(clock, (agent, id) => agent == AgentKind.Codex ? codexResolver.ResolveCwd(id) : null);
 var reader = new HookEventReader(paths.EventsFile, paths.RotatedEventsFile);
 tracker.ApplySilently(reader.ReadAll(now - TimeSpan.FromHours(24)));
 tracker.RemoveStaleSilently(TimeSpan.FromHours(12));
