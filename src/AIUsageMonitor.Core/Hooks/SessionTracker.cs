@@ -90,6 +90,26 @@ public sealed class SessionTracker
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
     }
 
+    /// <summary>Applies events without raising Changed (startup replay).</summary>
+    public void ApplySilently(IEnumerable<HookEvent> events)
+    {
+        lock (_gate)
+        {
+            foreach (var e in events) ApplyCore(e);
+        }
+    }
+
+    /// <summary>Removes stale sessions without raising Changed (startup replay).</summary>
+    public void RemoveStaleSilently(TimeSpan maxAge)
+    {
+        lock (_gate)
+        {
+            var cutoff = _clock.UtcNow - maxAge;
+            foreach (var key in _sessions.Where(kv => kv.Value.LastEventAt < cutoff).Select(kv => kv.Key).ToList())
+                _sessions.Remove(key);
+        }
+    }
+
     public IReadOnlyList<SessionChange> RemoveStale(TimeSpan maxAge)
     {
         var removed = new List<SessionChange>();
