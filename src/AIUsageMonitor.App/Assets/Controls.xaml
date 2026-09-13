@@ -185,7 +185,7 @@
             <ContentPresenter Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                               Margin="10,0,28,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
             <Popup x:Name="PART_Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True"
-                   PopupAnimation="Fade" StaysOpen="False" Focusable="False">
+                   PopupAnimation="Fade" Focusable="False">
               <Border Background="{StaticResource WindowBackground}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" CornerRadius="8"
                       MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,4,0,0" Padding="0,4">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
