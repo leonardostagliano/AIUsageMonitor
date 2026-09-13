@@ -22,7 +22,15 @@ namespace AIUsageMonitor.Core.Hooks;
 /// </para>
 /// </remarks>
 /// <remarks>Build one instance per app lifetime: it caches the thread→rollout and rollout→session_meta lookups for
-/// <see cref="CacheTtl"/>, so a refresh does not re-enumerate the sessions directory from scratch.</remarks>
+/// <see cref="CacheTtl"/>, so a refresh does not re-enumerate the sessions directory from scratch, and it remembers
+/// the last total read for every thread it has seen.</remarks>
+/// <remarks>
+/// "Could not read" is never reported as "zero tokens": a rollout locked by an antivirus scan, rotated mid-read or
+/// enumerated while the directory is busy leaves the last known total of that thread in place (as
+/// <see cref="ClaudeTranscriptTokenCounter"/> does) instead of dropping a live session from millions to zero for a
+/// whole <see cref="CacheTtl"/>. <see cref="TryReadThread"/> and <see cref="TryReadChildren"/> expose the difference
+/// between a fresh read and a stale or incomplete one, the way <c>CodexSubagentScanner.TryGetActiveChildren</c> does.
+/// </remarks>
 /// <remarks>Not thread-safe for the caller's purposes beyond its own locks: the pump does all its IO on one thread.</remarks>
 public sealed class CodexTokenCounter
 {
@@ -38,6 +46,13 @@ public sealed class CodexTokenCounter
     private readonly IClock _clock;
     private readonly Dictionary<string, (string? Path, DateTimeOffset At)> _byThread = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (RolloutMeta Meta, DateTimeOffset At)> _meta = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Newest total actually read for each thread, never expired: it is what a failed read falls back to. One entry
+    /// per thread ever asked about (four longs plus the id), so the same bound as the other caches is a safety net
+    /// rather than a working limit — a machine reaches it only after thousands of distinct threads in one app run.
+    /// </summary>
+    private readonly Dictionary<string, TokenUsage> _lastKnown = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
 
     public CodexTokenCounter(string sessionsDir, IClock? clock = null)
@@ -55,29 +70,90 @@ public sealed class CodexTokenCounter
     /// <summary>Upper bound on the lines read from the end of a rollout while looking for its newest token_count.</summary>
     public int MaxLinesPerFile { get; init; } = 5000;
 
-    /// <summary>Cumulative token usage of <paramref name="threadId"/>; zero when its rollout is unknown or carries no totals.</summary>
-    /// <remarks>Never throws: an unreadable or vanished rollout reads as zero.</remarks>
+    /// <summary>
+    /// Cumulative token usage of <paramref name="threadId"/>: the newest total of its rollout, the last total read
+    /// for it when this sweep could not read one, zero when its rollout is unknown and none was ever read.
+    /// </summary>
+    /// <remarks>Never throws. Use <see cref="TryReadThread"/> to tell a fresh total from a stale one.</remarks>
     public TokenUsage ReadThread(string threadId)
     {
-        if (string.IsNullOrWhiteSpace(threadId)) return TokenUsage.Zero;
-        var path = ResolvePath(threadId);
-        return path is null ? TokenUsage.Zero : ReadTokens(path) ?? TokenUsage.Zero;
+        TryReadThread(threadId, out var tokens);
+        return tokens;
+    }
+
+    /// <summary>
+    /// Cumulative token usage of <paramref name="threadId"/>. Returns false when the totals could not be read at all
+    /// (the rollout is locked, vanished mid-read, or the sessions directory could not be enumerated):
+    /// <paramref name="tokens"/> is then the last total read for that thread — zero when there is none — and the
+    /// caller must keep what it already shows instead of reading it as "this session used nothing".
+    /// </summary>
+    public bool TryReadThread(string threadId, out TokenUsage tokens)
+    {
+        tokens = TokenUsage.Zero;
+        // Nothing to look for: a conclusive "no tokens", not a failed read.
+        if (string.IsNullOrWhiteSpace(threadId)) return true;
+
+        if (!TryResolvePath(threadId, out var path))
+        {
+            tokens = LastKnown(threadId);
+            return false;
+        }
+
+        // No rollout carries this thread (yet): its last known total, or zero when it never had one. A rollout never
+        // un-writes its token_count, so a thread whose file was rotated away keeps the total it had reached.
+        if (path is null)
+        {
+            tokens = LastKnown(threadId);
+            return true;
+        }
+
+        var usage = ReadTokens(path, out var failed);
+        if (usage is { } fresh)
+        {
+            Remember(threadId, fresh);
+            tokens = fresh;
+            return true;
+        }
+
+        // The file was read but carries no usable total: a thread that has not finished its first turn yet.
+        tokens = LastKnown(threadId);
+        return !failed;
     }
 
     /// <summary>
     /// The threads whose <c>session_meta.parent_thread_id</c> is <paramref name="parentThreadId"/>, with their own
     /// cumulative totals and the last write time of their rollout. Empty both when there are none and when the
-    /// sessions directory could not be enumerated.
+    /// sessions directory could not be enumerated — use <see cref="TryReadChildren"/> to tell the two apart.
     /// </summary>
     public IReadOnlyList<(string ThreadId, TokenUsage Tokens, DateTime LastWriteUtc)> ReadChildren(string parentThreadId)
     {
-        var children = new List<(string ThreadId, TokenUsage Tokens, DateTime LastWriteUtc)>();
-        if (string.IsNullOrWhiteSpace(parentThreadId)) return children;
+        TryReadChildren(parentThreadId, out var children);
+        return children;
+    }
 
-        foreach (var file in RecentRollouts())
+    /// <summary>
+    /// The children of <paramref name="parentThreadId"/> with their own cumulative totals. Returns false when the
+    /// sweep was incomplete — the rollouts could not be enumerated, a candidate's <c>session_meta</c> could not be
+    /// read (it may well be a child of this very parent), or a child's totals are not known at all — in which case
+    /// <paramref name="children"/> holds only what could be established and the caller must merge it with the
+    /// children it already knows instead of replacing them. A child whose rollout could not be re-read but whose
+    /// total was read before keeps that total and does not make the sweep incomplete.
+    /// </summary>
+    public bool TryReadChildren(string parentThreadId, out IReadOnlyList<(string ThreadId, TokenUsage Tokens, DateTime LastWriteUtc)> children)
+    {
+        children = [];
+        if (string.IsNullOrWhiteSpace(parentThreadId)) return true;
+        if (!TryRecentRollouts(out var files)) return false;
+
+        var found = new List<(string ThreadId, TokenUsage Tokens, DateTime LastWriteUtc)>();
+        var complete = true;
+        foreach (var file in files)
         {
             var meta = MetaFor(file.FullName);
-            if (meta?.ParentThreadId is not { } parent) continue;
+            // A rollout whose first lines could not be read may well be a child: the sweep no longer proves anything
+            // about it, so it is reported as incomplete instead of as "not a child".
+            if (meta is null) { complete = false; continue; }
+            if (meta.ParentThreadId is not { } parent) continue;
             if (!string.Equals(parent, parentThreadId, StringComparison.OrdinalIgnoreCase)) continue;
             // A thread that names itself as its parent is not a child of anything.
             if (string.Equals(meta.ThreadId, parent, StringComparison.OrdinalIgnoreCase)) continue;
@@ -85,90 +161,152 @@ public sealed class CodexTokenCounter
             var threadId = meta.ThreadId ?? ThreadIdFromFileName(file.Name);
             if (string.IsNullOrWhiteSpace(threadId)) continue;
             // Two rollouts of the same thread (a resumed child): the newest wins, the list is already ordered.
-            if (children.Any(c => string.Equals(c.ThreadId, threadId, StringComparison.OrdinalIgnoreCase))) continue;
+            if (found.Any(c => string.Equals(c.ThreadId, threadId, StringComparison.OrdinalIgnoreCase))) continue;
 
-            children.Add((threadId, ReadTokens(file.FullName) ?? TokenUsage.Zero, file.LastWriteTimeUtc));
+            var usage = ReadTokens(file.FullName, out var failed);
+            if (usage is { } fresh) Remember(threadId, fresh);
+            else if (failed && !Knows(threadId)) complete = false;
+
+            found.Add((threadId, usage ?? LastKnown(threadId), file.LastWriteTimeUtc));
         }
-        return children;
+
+        children = found;
+        return complete;
     }
 
-    /// <summary>The rollout of <paramref name="threadId"/>, from the cache when it is still fresh.</summary>
-    private string? ResolvePath(string threadId)
+    /// <summary>The last total read for <paramref name="threadId"/>, zero when none ever was.</summary>
+    private TokenUsage LastKnown(string threadId)
+    {
+        lock (_gate) return _lastKnown.TryGetValue(threadId, out var tokens) ? tokens : TokenUsage.Zero;
+    }
+
+    private bool Knows(string threadId)
+    {
+        lock (_gate) return _lastKnown.ContainsKey(threadId);
+    }
+
+    /// <summary>Stores a total that was actually read, so a later failed read can fall back to it.</summary>
+    private void Remember(string threadId, TokenUsage tokens)
+    {
+        lock (_gate)
+        {
+            // Past the bound the whole map is dropped rather than grown without limit: the live threads then rebuild
+            // their entry on their very next refresh, which costs one read each.
+            if (_lastKnown.Count >= MetaCacheLimit && !_lastKnown.ContainsKey(threadId)) _lastKnown.Clear();
+            _lastKnown[threadId] = tokens;
+        }
+    }
+
+    /// <summary>
+    /// The rollout of <paramref name="threadId"/>, from the cache when it is still fresh. Returns false when the scan
+    /// could not settle the question, in which case nothing is cached: a transient lock must not be remembered as
+    /// "this thread has no rollout" for a whole <see cref="CacheTtl"/>.
+    /// </summary>
+    private bool TryResolvePath(string threadId, out string? path)
     {
         var now = _clock.UtcNow;
         lock (_gate)
         {
             if (_byThread.TryGetValue(threadId, out var cached) && now - cached.At < CacheTtl
                 && (cached.Path is null || File.Exists(cached.Path)))
-                return cached.Path;
+            {
+                path = cached.Path;
+                return true;
+            }
         }
 
-        var path = ScanForThread(threadId);
+        if (!TryScanForThread(threadId, out path)) return false;
 
         lock (_gate)
         {
             PruneThreadCache(now);
             _byThread[threadId] = (path, now);
         }
-        return path;
+        return true;
     }
 
-    private string? ScanForThread(string threadId)
+    /// <summary>The rollout of a thread, or null when no recent one belongs to it; false when the scan failed.</summary>
+    private bool TryScanForThread(string threadId, out string? path)
     {
+        path = null;
         try
         {
-            if (!Directory.Exists(_sessionsDir)) return null;
+            // No sessions directory at all: a conclusive "no rollout", cheap enough to re-check on every sweep.
+            if (!Directory.Exists(_sessionsDir)) return true;
 
             var byName = Directory.EnumerateFiles(_sessionsDir, $"*{threadId}.jsonl", SearchOption.AllDirectories).FirstOrDefault();
-            if (byName is not null) return byName;
+            if (byName is not null)
+            {
+                path = byName;
+                return true;
+            }
 
             // No file carries the id (a renamed or resumed rollout): fall back to the session_meta of the recent ones,
             // preferring the thread's own id over the conversation id, which every thread of the tree shares.
+            if (!TryRecentRollouts(out var files)) return false;
+
             string? byConversation = null;
-            foreach (var file in RecentRollouts())
+            var complete = true;
+            foreach (var file in files)
             {
                 var meta = MetaFor(file.FullName);
-                if (meta is null) continue;
-                if (string.Equals(meta.ThreadId, threadId, StringComparison.OrdinalIgnoreCase)) return file.FullName;
+                // Unreadable right now: it could be the very rollout we are looking for.
+                if (meta is null) { complete = false; continue; }
+                if (string.Equals(meta.ThreadId, threadId, StringComparison.OrdinalIgnoreCase))
+                {
+                    path = file.FullName;
+                    return true;
+                }
                 if (byConversation is null && string.Equals(meta.SessionId, threadId, StringComparison.OrdinalIgnoreCase))
                     byConversation = file.FullName;
             }
-            return byConversation;
+            path = byConversation;
+            // A miss is only conclusive when every candidate could be inspected.
+            return path is not null || complete;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
                                       or NotSupportedException or System.Security.SecurityException)
         {
-            return null;
+            path = null;
+            return false;
         }
     }
 
-    /// <summary>The rollouts touched within <see cref="LookBack"/>, newest first; empty when the directory cannot be read.</summary>
-    private IReadOnlyList<FileInfo> RecentRollouts()
+    /// <summary>
+    /// The rollouts touched within <see cref="LookBack"/>, newest first. Returns false when the enumeration failed —
+    /// the empty list is then meaningless, as opposed to the empty list of a directory that simply has no rollouts.
+    /// </summary>
+    private bool TryRecentRollouts(out IReadOnlyList<FileInfo> files)
     {
+        files = [];
         try
         {
-            if (!Directory.Exists(_sessionsDir)) return [];
+            if (!Directory.Exists(_sessionsDir)) return true;
             var cutoff = (_clock.UtcNow - LookBack).UtcDateTime;
-            return new DirectoryInfo(_sessionsDir)
+            files = new DirectoryInfo(_sessionsDir)
                 .EnumerateFiles("*.jsonl", SearchOption.AllDirectories)
                 .Where(f => f.LastWriteTimeUtc >= cutoff)
                 .OrderByDescending(f => f.LastWriteTimeUtc)
                 .Take(MaxFilesToScan)
                 .ToList();
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
                                       or NotSupportedException or System.Security.SecurityException)
         {
-            return [];
+            files = [];
+            return false;
         }
     }
 
     /// <summary>
-    /// The newest <c>token_count</c> of a rollout mapped onto a <see cref="TokenUsage"/>; null when the file could not
-    /// be read or carries no usable totals (a <c>token_count</c> with a null <c>info</c> is skipped, not counted as zero).
+    /// The newest <c>token_count</c> of a rollout mapped onto a <see cref="TokenUsage"/>; null when the file carries
+    /// no usable totals (a <c>token_count</c> with a null <c>info</c> is skipped, not counted as zero) or could not be
+    /// read at all, which <paramref name="failed"/> reports so the caller can keep the last total instead of zero.
     /// </summary>
-    private TokenUsage? ReadTokens(string path)
+    private TokenUsage? ReadTokens(string path, out bool failed)
     {
+        failed = false;
         try
         {
             foreach (var line in ReverseLineReader.ReadLinesFromEnd(path).Take(MaxLinesPerFile))
@@ -182,7 +320,8 @@ public sealed class CodexTokenCounter
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
                                       or NotSupportedException or System.Security.SecurityException)
         {
-            // One locked or vanished rollout reads as "unknown": the caller keeps zero.
+            // One locked or vanished rollout reads as "unknown": the caller keeps the last total it read.
+            failed = true;
         }
         return null;
     }

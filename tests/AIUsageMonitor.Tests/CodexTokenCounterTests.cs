@@ -214,4 +214,116 @@ public class CodexTokenCounterTests
         Assert.Equal(Child, child.ThreadId);
         Assert.Equal(new TokenUsage(400, 200, 600, 50), child.Tokens);
     }
+
+    /// <summary>Holds a rollout the way an antivirus scan or a backup does: every read of it then fails.</summary>
+    private static FileStream Exclusive(string path) => new(path, FileMode.Open, FileAccess.Read, FileShare.None);
+
+    [Fact]
+    public void ReadThread_keeps_the_last_known_total_when_the_rollout_stops_being_readable()
+    {
+        using var dir = new TempDir();
+        var counter = Build(dir);
+        var file = Rollout(dir, FileNameFor(Parent), Parent, null, [TokenCount(Now.AddMinutes(-3), 1000, 600, 50, 200)]);
+
+        Assert.True(counter.TryReadThread(Parent, out var first));
+        Assert.Equal(new TokenUsage(400, 200, 600, 50), first);
+
+        using (Exclusive(file))
+        {
+            // The count must not fall to zero because one sweep could not open the file.
+            Assert.False(counter.TryReadThread(Parent, out var locked));
+            Assert.Equal(new TokenUsage(400, 200, 600, 50), locked);
+            Assert.Equal(new TokenUsage(400, 200, 600, 50), counter.ReadThread(Parent));
+        }
+
+        Assert.Equal(new TokenUsage(400, 200, 600, 50), counter.ReadThread(Parent));
+    }
+
+    [Fact]
+    public void TryReadThread_reports_a_thread_without_a_rollout_as_a_conclusive_zero()
+    {
+        using var dir = new TempDir();
+        Rollout(dir, FileNameFor(Parent), Parent, null, [TokenCount(Now.AddMinutes(-3), 1000, 600, 50, 200)]);
+        var counter = Build(dir);
+
+        Assert.True(counter.TryReadThread(Stranger, out var tokens));
+        Assert.Equal(TokenUsage.Zero, tokens);
+        Assert.True(counter.TryReadThread(string.Empty, out var none));
+        Assert.Equal(TokenUsage.Zero, none);
+    }
+
+    [Fact]
+    public void ReadThread_does_not_cache_a_miss_caused_by_an_unreadable_rollout()
+    {
+        using var dir = new TempDir();
+        var clock = new FakeClock(Now);
+        var counter = Build(dir, clock);
+        // The file name does not carry the id: the thread can only be found through its session_meta.
+        var file = Rollout(dir, "rollout-2026-09-13T11-58-00-renamed.jsonl", Parent, null,
+            [TokenCount(Now.AddMinutes(-3), 1000, 600, 50, 200)]);
+
+        using (Exclusive(file))
+        {
+            Assert.False(counter.TryReadThread(Parent, out var tokens));
+            Assert.Equal(TokenUsage.Zero, tokens);
+        }
+
+        // Well inside the TTL: the failed scan must not be remembered as "this thread has no rollout".
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(new TokenUsage(400, 200, 600, 50), counter.ReadThread(Parent));
+    }
+
+    [Fact]
+    public void ReadChildren_keeps_the_last_known_total_of_a_child_that_stops_being_readable()
+    {
+        using var dir = new TempDir();
+        var counter = Build(dir);
+        Rollout(dir, FileNameFor(Parent), Parent, null, [TokenCount(Now.AddMinutes(-3), 9000, 0, 0, 900)]);
+        var childFile = Rollout(dir, FileNameFor(Child), Child, Parent,
+            [TokenCount(Now.AddMinutes(-3), 1000, 600, 50, 200)]);
+
+        Assert.Equal(new TokenUsage(400, 200, 600, 50), Assert.Single(counter.ReadChildren(Parent)).Tokens);
+
+        using (Exclusive(childFile))
+        {
+            // Its session_meta is still cached, so the child is still known: only its totals could not be refreshed.
+            Assert.True(counter.TryReadChildren(Parent, out var children));
+            var child = Assert.Single(children);
+            Assert.Equal(Child, child.ThreadId);
+            Assert.Equal(new TokenUsage(400, 200, 600, 50), child.Tokens);
+        }
+    }
+
+    [Fact]
+    public void TryReadChildren_reports_a_sweep_that_could_not_read_every_candidate_as_incomplete()
+    {
+        using var dir = new TempDir();
+        var counter = Build(dir);
+        Rollout(dir, FileNameFor(Parent), Parent, null, [TokenCount(Now.AddMinutes(-3), 9000, 0, 0, 900)]);
+        Rollout(dir, FileNameFor(Sibling), Sibling, Parent, [TokenCount(Now.AddMinutes(-3), 10, 0, 0, 5)]);
+        var childFile = Rollout(dir, FileNameFor(Child), Child, Parent,
+            [TokenCount(Now.AddMinutes(-3), 1000, 600, 50, 200)]);
+
+        using (Exclusive(childFile))
+        {
+            Assert.False(counter.TryReadChildren(Parent, out var children));
+            // What could be established is still returned: the caller merges it with the children it knows.
+            Assert.Equal(Sibling, Assert.Single(children).ThreadId);
+        }
+
+        Assert.True(counter.TryReadChildren(Parent, out var complete));
+        Assert.Equal(2, complete.Count);
+    }
+
+    [Fact]
+    public void TryReadChildren_reports_a_normal_sweep_as_complete()
+    {
+        using var dir = new TempDir();
+        Rollout(dir, FileNameFor(Parent), Parent, null, [TokenCount(Now.AddMinutes(-3), 9000, 0, 0, 900)]);
+
+        Assert.True(Build(dir).TryReadChildren(Parent, out var children));
+        Assert.Empty(children);
+        Assert.True(Build(dir).TryReadChildren(string.Empty, out var none));
+        Assert.Empty(none);
+    }
 }
