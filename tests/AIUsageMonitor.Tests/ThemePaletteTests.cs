@@ -28,6 +28,8 @@ public class ThemePaletteTests
         ["AccentText"] = "#FF0B1A10",
         ["TextDisabled"] = "#FF7A7A82",
         ["Focus"] = "#FF7AA2F7",
+        ["Grey"] = "#FF8B8B93",
+        ["Card"] = "#14FFFFFF",
     };
 
     [Fact]
@@ -55,6 +57,11 @@ public class ThemePaletteTests
     [InlineData("AccentText", "Accent", 4.5)]
     [InlineData("Amber", "WindowBackground", 4.5)]
     [InlineData("TextDisabled", "Surface", 3.0)]
+    [InlineData("TextPrimary", "Card", 4.5)]
+    [InlineData("TextMuted", "Card", 4.5)]
+    // WCAG 1.4.11: il contorno della CheckBox a riposo (Grey) e in hover (TextMuted) deve staccarsi dalla card.
+    // Con NotchBorder, che il template usava prima, il rapporto era 1.48:1 e la casella non spuntata spariva.
+    [InlineData("Grey", "Card", 3.0)]
     public void Theme_pairs_meet_their_floor(string foreground, string background, double floor)
     {
         var theme = ThemeBrushes();
@@ -64,11 +71,20 @@ public class ThemePaletteTests
         Assert.True(ratio >= floor, $"{foreground} ({fg}) on {background} ({bg}) = {ratio:0.00}, below {floor:0.0}");
     }
 
-    /// <summary>The shipped colour when the brush exists, otherwise the pinned one it must be added as.</summary>
-    private static string Resolve(IReadOnlyDictionary<string, string> theme, string key) =>
-        theme.TryGetValue(key, out var shipped) ? shipped
-        : Pinned.TryGetValue(key, out var pinned) ? pinned
-        : throw new InvalidOperationException($"'{key}' is neither in Theme.xaml nor pinned here");
+    /// <summary>
+    /// The shipped colour when the brush exists, otherwise the pinned one it must be added as. A translucent brush
+    /// (Card) is flattened over WindowBackground first: a WCAG ratio is only defined between opaque colours, and that
+    /// composite is what the eye actually sees behind the cards.
+    /// </summary>
+    private static string Resolve(IReadOnlyDictionary<string, string> theme, string key)
+    {
+        var colour =
+            theme.TryGetValue(key, out var shipped) ? shipped
+            : Pinned.TryGetValue(key, out var pinned) ? pinned
+            : throw new InvalidOperationException($"'{key}' is neither in Theme.xaml nor pinned here");
+        var opaque = colour.TrimStart('#').Length != 8 || colour.StartsWith("#FF", StringComparison.OrdinalIgnoreCase);
+        return opaque ? colour : ColorContrast.Over(colour, Resolve(theme, "WindowBackground"));
+    }
 
     private static Dictionary<string, string> ThemeBrushes()
     {

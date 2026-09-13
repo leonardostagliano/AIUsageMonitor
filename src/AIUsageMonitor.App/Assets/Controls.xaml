@@ -82,8 +82,12 @@
       <Setter.Value>
         <ControlTemplate TargetType="CheckBox">
           <StackPanel Orientation="Horizontal" Background="Transparent">
+            <!-- Il contorno NON puo' essere NotchBorder (#1FFFFFFF): su una card composita #2D2D31 misura 1.48:1 e la
+                 casella non spuntata sparisce, mentre quella spuntata e' Accent a 5.4:1, quindi il pannello sembra
+                 "tutto acceso". Grey (4.06:1) supera il minimo 3:1 di WCAG 1.4.11 per i bordi dei controlli e resta
+                 piu' spento di TextMuted, che e' il colore dell'hover. Il rapporto e' fissato da ThemePaletteTests. -->
             <Border x:Name="Box" Width="18" Height="18" CornerRadius="5" Background="{StaticResource Surface}"
-                    BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" VerticalAlignment="Center">
+                    BorderBrush="{StaticResource Grey}" BorderThickness="1" VerticalAlignment="Center">
               <Path x:Name="Check" Data="M3,9 L7,13 L15,5" Stroke="{StaticResource AccentText}" StrokeThickness="2"
                     StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
             </Border>
@@ -204,7 +208,7 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="GroupBox">
-          <Border Background="#14FFFFFF" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" CornerRadius="12" Padding="14,10,14,12">
+          <Border Background="{StaticResource Card}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" CornerRadius="12" Padding="14,10,14,12">
             <DockPanel>
               <ContentPresenter DockPanel.Dock="Top" ContentSource="Header" Margin="0,0,0,8" TextElement.Foreground="{StaticResource TextMuted}"
                                 TextElement.FontSize="11" TextElement.FontWeight="SemiBold"/>

@@ -29,6 +29,28 @@ public class ColorContrastTests
     public void Disabled_text_meets_3_to_1() =>
         Assert.True(ColorContrast.Ratio("#7A7A82", "#2A2A30") >= 3.0);
 
+    // WCAG 1.4.11: i bordi che identificano un controllo vogliono 3:1, non 4.5:1, ma un floor c'e'.
+    // La casella non spuntata vive su una card #14FFFFFF sopra #1B1B1F, cioe' #2D2D31.
+    [Theory]
+    [InlineData("#8B8B93")]   // Grey: contorno della CheckBox a riposo
+    [InlineData("#A0A0A8")]   // TextMuted: contorno in hover
+    public void Checkbox_outline_meets_the_non_text_3_to_1(string outline) =>
+        Assert.True(ColorContrast.Ratio(outline, "#2D2D31") >= 3.0,
+            $"{outline} on the card = {ColorContrast.Ratio(outline, "#2D2D31"):0.00}");
+
+    // Il colore che il bordo NON puo' avere: e' quello che rendeva invisibile la casella non spuntata.
+    [Fact]
+    public void The_notch_border_would_not_meet_it() =>
+        Assert.True(ColorContrast.Ratio(ColorContrast.Over("#1FFFFFFF", "#2D2D31"), "#2D2D31") < 3.0);
+
+    [Theory]
+    [InlineData("#14FFFFFF", "#1B1B1F", "#2D2D31")]   // card delle impostazioni
+    [InlineData("#FF123456", "#000000", "#123456")]   // opaco: resta se stesso
+    [InlineData("#00FFFFFF", "#1B1B1F", "#1B1B1F")]   // trasparente: resta lo sfondo
+    [InlineData("#123456", "#FFFFFF", "#123456")]     // senza alpha: opaco
+    public void Over_composites_translucent_colours(string hex, string backdrop, string expected) =>
+        Assert.Equal(expected, ColorContrast.Over(hex, backdrop), ignoreCase: true);
+
     [Fact]
     public void Alpha_prefix_is_ignored() =>
         Assert.Equal(ColorContrast.Ratio("#FFFFFFFF", "#FF1B1B1F"), ColorContrast.Ratio("#FFFFFF", "#1B1B1F"));
