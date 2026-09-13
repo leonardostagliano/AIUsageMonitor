@@ -34,8 +34,10 @@
       </DockPanel>
     </Border>
 
-    <!-- Linguetta chiusa: 28 px di larghezza, una riga da 36 px per agente, centrata verticalmente sul bordo destro. -->
-    <Border x:Name="Tab" HorizontalAlignment="Right" VerticalAlignment="Center" Width="28" Padding="0,6"
+    <!-- Linguetta chiusa: 28 px di larghezza, una riga da 36 px per agente, centrata verticalmente sul bordo destro.
+         La visibilita' non cambia mai: durante la transizione la linguetta sfuma in opacita' (e perde l'hit test)
+         insieme al pannello, cosi' le due superfici non sono mai entrambe opache. -->
+    <Border x:Name="Tab" HorizontalAlignment="Right" VerticalAlignment="Center" Width="28" Padding="0,6" Opacity="1"
             CornerRadius="10,0,0,10" Background="{StaticResource NotchBackground}"
             BorderBrush="{StaticResource NotchBorder}" BorderThickness="1,1,0,1" Cursor="Hand"
             MouseEnter="Tab_MouseEnter" MouseLeftButtonDown="Tab_MouseLeftButtonDown">

@@ -23,7 +23,8 @@ public partial class NotchWindow : Window, INotchHost
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
-    private static readonly Duration AnimationDuration = new(TimeSpan.FromMilliseconds(150));
+    private static readonly Duration SlideDuration = new(TimeSpan.FromMilliseconds(150));
+    private static readonly Duration FadeDuration = new(TimeSpan.FromMilliseconds(90));
 
     private readonly AppServices _services;
     private readonly DispatcherTimer _collapseTimer;
@@ -72,9 +73,9 @@ public partial class NotchWindow : Window, INotchHost
     private void Tab_MouseEnter(object sender, MouseEventArgs e) => Expand();
 
     /// <summary>
-    /// Gestisce il click sia sulla linguetta sia sullo sfondo del pannello: appena il pannello si apre copre la
-    /// linguetta (che viene nascosta a fine animazione), quindi senza il secondo handler il click di fissaggio —
-    /// e soprattutto quello di sblocco — sarebbe raggiungibile solo nei 150 ms dell'animazione. I controlli
+    /// Gestisce il click sia sulla linguetta sia sullo sfondo del pannello: appena il pannello si apre la linguetta
+    /// sfuma e smette di ricevere il mouse (<c>IsHitTestVisible = false</c>), quindi senza il secondo handler il click
+    /// di fissaggio — e soprattutto quello di sblocco — non sarebbe piu' raggiungibile. I controlli
     /// interattivi dentro il pannello marcano l'evento Handled e non arrivano qui.
     /// </summary>
     private void Tab_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -125,12 +126,14 @@ public partial class NotchWindow : Window, INotchHost
             _pinned = false;
             _expanded = false;
             PinGlyph.Visibility = Visibility.Collapsed;
-            Tab.Visibility = Visibility.Visible;
             PanelSlide.BeginAnimation(TranslateTransform.XProperty, null);
             Panel.BeginAnimation(OpacityProperty, null);
+            Tab.BeginAnimation(OpacityProperty, null);
             PanelSlide.X = Panel.ActualWidth > 0 ? Panel.ActualWidth : Width;
             Panel.Opacity = 0;
             Panel.Visibility = Visibility.Hidden;
+            Tab.Opacity = 1;
+            Tab.IsHitTestVisible = true;
             Hide();
         }
 
@@ -140,23 +143,47 @@ public partial class NotchWindow : Window, INotchHost
         _services.Settings.Save(settings);
     }
 
+    /// <summary>
+    /// Apertura in dissolvenza incrociata: la linguetta sparisce nei primi 90 ms mentre il pannello scivola dentro in
+    /// 150 ms e diventa opaco solo dopo (fade ritardato di 30 ms), cosi' non esiste un fotogramma con le due superfici
+    /// opache una accanto all'altra. La linguetta non viene piu' nascosta con <c>Visibility</c>: resta nel layout a
+    /// opacita' 0 e perde l'hit test, quindi non puo' scatenare <c>MouseEnter</c> mentre e' invisibile ne' rubare il
+    /// click al pannello (che nella Grid le sta sotto).
+    /// </summary>
     private void Expand()
     {
         if (_expanded) return;
         _expanded = true;
         _collapseTimer.Stop();
         Panel.Visibility = Visibility.Visible;
-        Animate(PanelSlide, TranslateTransform.XProperty, 0);
-        Animate(Panel, OpacityProperty, 1, () => { if (_expanded) Tab.Visibility = Visibility.Hidden; });
+        Tab.IsHitTestVisible = false;
+        RunStoryboard(
+            Fade(Tab, 0, TimeSpan.Zero),
+            Slide(0),
+            Fade(Panel, 1, TimeSpan.FromMilliseconds(30)),
+            completed: null);
     }
 
+    /// <summary>
+    /// Chiusura speculare: prima sfuma il pannello, che intanto scivola fuori, e la linguetta torna opaca solo dopo
+    /// 60 ms, quando il pannello e' ormai quasi trasparente. Il guard su <c>_expanded</c> nel completamento copre la
+    /// corsa hover-in/hover-out rapido: se nel frattempo e' ripartita un'apertura, il ripristino non deve rimettere il
+    /// pannello a Hidden ne' riabilitare l'hit test della linguetta.
+    /// </summary>
     private void Collapse()
     {
         if (!_expanded || _pinned) return;
         _expanded = false;
-        Tab.Visibility = Visibility.Visible;
-        Animate(PanelSlide, TranslateTransform.XProperty, Panel.ActualWidth > 0 ? Panel.ActualWidth : Width);
-        Animate(Panel, OpacityProperty, 0, () => { if (!_expanded) Panel.Visibility = Visibility.Hidden; });
+        RunStoryboard(
+            Fade(Panel, 0, TimeSpan.Zero),
+            Slide(Panel.ActualWidth > 0 ? Panel.ActualWidth : Width),
+            Fade(Tab, 1, TimeSpan.FromMilliseconds(60)),
+            completed: () =>
+            {
+                if (_expanded) return;
+                Panel.Visibility = Visibility.Hidden;
+                Tab.IsHitTestVisible = true;
+            });
     }
 
     private void ScheduleCollapse()
@@ -166,11 +193,49 @@ public partial class NotchWindow : Window, INotchHost
         _collapseTimer.Start();
     }
 
-    private static void Animate(IAnimatable target, DependencyProperty property, double to, Action? completed = null)
+    private static DoubleAnimation Fade(UIElement target, double to, TimeSpan beginTime)
     {
-        var animation = new DoubleAnimation(to, AnimationDuration) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
-        if (completed is not null) animation.Completed += (_, _) => completed();
-        target.BeginAnimation(property, animation);
+        var animation = new DoubleAnimation(to, FadeDuration)
+        {
+            BeginTime = beginTime,
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        Storyboard.SetTarget(animation, target);
+        Storyboard.SetTargetProperty(animation, new PropertyPath(OpacityProperty));
+        return animation;
+    }
+
+    /// <summary>
+    /// Scorrimento orizzontale del pannello. Il bersaglio e' il Border, non direttamente <c>PanelSlide</c>: uno
+    /// storyboard che punta con <c>SetTarget</c> a un Freezable fuori dall'albero visuale non applica nulla (il
+    /// pannello resterebbe traslato fuori dalla finestra, quindi invisibile), mentre il percorso di proprieta'
+    /// <c>(RenderTransform).(TranslateTransform.X)</c> arriva alla trasformata come farebbe lo XAML. Il clock finisce
+    /// comunque sulla <c>X</c> della trasformata, percio' <c>PanelSlide.BeginAnimation(X, null)</c> lo rimuove.
+    /// </summary>
+    private DoubleAnimation Slide(double to)
+    {
+        var animation = new DoubleAnimation(to, SlideDuration) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        Storyboard.SetTarget(animation, Panel);
+        Storyboard.SetTargetProperty(animation, new PropertyPath("(0).(1)", UIElement.RenderTransformProperty, TranslateTransform.XProperty));
+        return animation;
+    }
+
+    /// <summary>
+    /// Fa partire le tre animazioni come un unico storyboard, cosi' i tempi restano agganciati fra loro. Lo storyboard
+    /// non e' controllabile di proposito: <c>Begin(this, isControllable: true)</c> registrerebbe ogni istanza nella
+    /// tabella della finestra e, con un'istanza nuova a ogni apertura/chiusura, quelle in <c>HoldEnd</c> non
+    /// verrebbero mai rimosse. Non controllabile, l'handoff <c>SnapshotAndReplace</c> sostituisce comunque i clock
+    /// della transizione precedente partendo dal valore corrente (un hover in/out rapido non fa saltare nulla) e
+    /// <c>BeginAnimation(prop, null)</c> in <c>SetVisible</c> continua a ripulire tutto.
+    /// </summary>
+    private void RunStoryboard(DoubleAnimation first, DoubleAnimation second, DoubleAnimation third, Action? completed)
+    {
+        var storyboard = new Storyboard { FillBehavior = FillBehavior.HoldEnd };
+        storyboard.Children.Add(first);
+        storyboard.Children.Add(second);
+        storyboard.Children.Add(third);
+        if (completed is not null) storyboard.Completed += (_, _) => completed();
+        storyboard.Begin(this);
     }
 
     private void ApplySettings()
