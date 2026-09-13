@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Threading;
+using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
+using AIUsageMonitor.App.Notifications;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.App.Tray;
 using WinForms = System.Windows.Forms;
@@ -13,6 +15,7 @@ public partial class App : Application
     private AppServices? _services;
     private TrayIconController? _tray;
     private NotchWindow? _notch;
+    private ToastService? _toasts;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -44,6 +47,8 @@ public partial class App : Application
             _single.ShowNotchRequested += () => Dispatcher.BeginInvoke(notch.Pin);
 
             _services.Start();
+            // Dopo Start(): il replay silenzioso della pump e' gia' finito, quindi la cronologia non genera toast.
+            _toasts = new ToastService(_services, (title, text, icon) => UiDispatcher.Post(() => _tray?.ShowBalloon(title, text, icon)));
         }
         catch (Exception ex)
         {
