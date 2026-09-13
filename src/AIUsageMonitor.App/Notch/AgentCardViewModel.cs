@@ -105,17 +105,7 @@ public sealed class AgentCardViewModel : ObservableObject
         while (Sessions.Count > sessions.Count) Sessions.RemoveAt(Sessions.Count - 1);
     }
 
-    private void InstallHooks()
-    {
-        try
-        {
-            var report = _services.Hooks.Install(Agent);
-            _services.Log.Info($"Hook install {Agent} from notch: {report.Status} {report.Detail}");
-        }
-        catch (Exception ex)
-        {
-            _services.Log.Error($"Hook install {Agent} failed", ex);
-        }
-        _services.InvalidateHookStatus();
-    }
+    // Stesso percorso del menu tray: AppServices logga, invalida lo stato in cache e mostra il messaggio
+    // (Detail per Codex e per ogni esito diverso da Installed, incluso ConfigInvalid con il percorso del file).
+    private void InstallHooks() => _services.InstallHooks(Agent);
 }

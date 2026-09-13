@@ -8,6 +8,9 @@ using AIUsageMonitor.Core.Usage;
 
 namespace AIUsageMonitor.App.Startup;
 
+/// <summary>Severity of a user-facing notice; the tray maps it to the balloon icon.</summary>
+public enum NoticeKind { Info, Warning, Error }
+
 /// <summary>Composition root: owns every Core service and republishes their events as one StateChanged.</summary>
 public sealed class AppServices : IDisposable
 {
@@ -25,6 +28,9 @@ public sealed class AppServices : IDisposable
 
     /// <summary>Raised on a background thread whenever usage or sessions change. Marshal with UiDispatcher.</summary>
     public event Action? StateChanged;
+
+    /// <summary>Raised on the calling thread with a message to surface to the user (rendered as a tray balloon).</summary>
+    public event Action<string, string, NoticeKind>? Notice;
 
     private readonly Dictionary<AgentKind, (HookStatusReport Report, DateTimeOffset At)> _hookStatus = new();
     private readonly object _gate = new();
@@ -104,6 +110,37 @@ public sealed class AppServices : IDisposable
             _hookStatus[agent] = (report, Clock.UtcNow);
             return report;
         }
+    }
+
+    /// <summary>
+    /// Unico punto di installazione hook (menu tray e link nella card del notch): installa, invalida lo stato in cache
+    /// e alza sempre un Notice, perche' ogni esito ha un messaggio che l'utente deve vedere. Codex esegue i gruppi solo
+    /// dopo l'approvazione (`trusted_hash` in config.toml) e GetStatus torna comunque Installed quando i 4 eventi ci sono:
+    /// il Detail contiene gia' "da approvare in Codex con /hooks" (HookInstaller.CodexTrustHint), quindi per Codex si
+    /// mostra sempre il Detail. ConfigInvalid non scrive nulla e il Detail porta il percorso del file (spec 11).
+    /// Torna null se l'installazione ha sollevato un'eccezione (gia' loggata e notificata).
+    /// </summary>
+    public HookStatusReport? InstallHooks(AgentKind agent)
+    {
+        var title = $"{agent.DisplayName()} · hook";
+        HookStatusReport report;
+        try
+        {
+            report = Hooks.Install(agent);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Hook install {agent} failed", ex);
+            Notice?.Invoke(title, ex.Message, NoticeKind.Error);
+            return null;
+        }
+
+        InvalidateHookStatus();
+        Log.Info($"Hook install {agent}: {report.Status} {report.Detail}");
+        var installed = report.Status == Core.Hooks.HookStatus.Installed;
+        var text = installed && agent != AgentKind.Codex ? "Hook installati" : report.Detail;
+        Notice?.Invoke(title, text, installed ? NoticeKind.Info : NoticeKind.Warning);
+        return report;
     }
 
     public void InvalidateHookStatus()

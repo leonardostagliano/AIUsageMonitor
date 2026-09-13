@@ -16,6 +16,7 @@ public sealed class TrayIconController : IDisposable
     private readonly WinForms.ToolStripMenuItem _autoStart;
     private readonly WinForms.ToolStripMenuItem _hooksClaude;
     private readonly WinForms.ToolStripMenuItem _hooksCodex;
+    private readonly Action<string, string, NoticeKind> _notice;
     private TrayIconRenderer.RenderedIcon? _rendered;
 
     /// <summary>Set by App.xaml.cs once the settings window exists (Task 7). Null-safe.</summary>
@@ -32,8 +33,8 @@ public sealed class TrayIconController : IDisposable
         _menu.Items.Add(_toggleNotch);
 
         var hooks = new WinForms.ToolStripMenuItem("Installa hook");
-        _hooksClaude = new WinForms.ToolStripMenuItem("Claude Code", null, (_, _) => InstallHooks(AgentKind.Claude));
-        _hooksCodex = new WinForms.ToolStripMenuItem("Codex", null, (_, _) => InstallHooks(AgentKind.Codex));
+        _hooksClaude = new WinForms.ToolStripMenuItem("Claude Code", null, (_, _) => services.InstallHooks(AgentKind.Claude));
+        _hooksCodex = new WinForms.ToolStripMenuItem("Codex", null, (_, _) => services.InstallHooks(AgentKind.Codex));
         hooks.DropDownItems.Add(_hooksClaude);
         hooks.DropDownItems.Add(_hooksCodex);
         _menu.Items.Add(hooks);
@@ -51,11 +52,22 @@ public sealed class TrayIconController : IDisposable
         _icon.BalloonTipClicked += (_, _) => notch.Pin();
 
         services.StateChanged += () => UiDispatcher.Post(UpdateIcon);
+        // Unico renderer dei messaggi utente: AppServices.InstallHooks alza il Notice da entrambi i punti di ingresso
+        // (menu tray e link "installa hook" nella card del notch), cosi' lo stesso click dice sempre la stessa cosa.
+        _notice = (title, text, kind) => UiDispatcher.Post(() => ShowBalloon(title, text, BalloonIcon(kind)));
+        services.Notice += _notice;
         UpdateIcon();
     }
 
     public void ShowBalloon(string title, string text, WinForms.ToolTipIcon kind) =>
         _icon.ShowBalloonTip(5000, title, text, kind);
+
+    private static WinForms.ToolTipIcon BalloonIcon(NoticeKind kind) => kind switch
+    {
+        NoticeKind.Error => WinForms.ToolTipIcon.Error,
+        NoticeKind.Warning => WinForms.ToolTipIcon.Warning,
+        _ => WinForms.ToolTipIcon.Info
+    };
 
     /// <summary>
     /// Ogni voce è protetta singolarmente: il menu deve aprirsi anche se leggere lo stato hook o il registro fallisce
@@ -84,25 +96,6 @@ public sealed class TrayIconController : IDisposable
         _ => "installa"
     }, "stato non disponibile", $"HookStatus {agent}");
 
-    private void InstallHooks(AgentKind agent)
-    {
-        try
-        {
-            var report = _services.Hooks.Install(agent);
-            _services.InvalidateHookStatus();
-            _services.Log.Info($"Hook install {agent}: {report.Status} {report.Detail}");
-            // Codex esegue i gruppi solo dopo l'approvazione (`trusted_hash` in config.toml): il report contiene già
-            // "da approvare in Codex con /hooks" (HookInstaller.CodexTrustHint), quindi per Codex si mostra sempre il Detail.
-            var balloon = report.Status == Core.Hooks.HookStatus.Installed && agent != AgentKind.Codex ? "Hook installati" : report.Detail;
-            ShowBalloon($"{agent.DisplayName()} · hook", balloon, WinForms.ToolTipIcon.Info);
-        }
-        catch (Exception ex)
-        {
-            _services.Log.Error($"Hook install {agent} failed", ex);
-            ShowBalloon($"{agent.DisplayName()} · hook", ex.Message, WinForms.ToolTipIcon.Error);
-        }
-    }
-
     private void ToggleAutoStart()
     {
         try { AutoStart.SetEnabled(!AutoStart.IsEnabled()); }
@@ -123,6 +116,7 @@ public sealed class TrayIconController : IDisposable
 
     public void Dispose()
     {
+        _services.Notice -= _notice;
         _icon.Visible = false;
         _icon.Dispose();
         _menu.Dispose();
