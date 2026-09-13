@@ -8,6 +8,11 @@ namespace AIUsageMonitor.Core.Usage;
 public sealed class CodexUsageProvider : IUsageProvider
 {
     public const string NoDataMessage = "Nessuna sessione Codex recente";
+    public const string ReadErrorMessage = "Errore lettura sessioni Codex";
+
+    // Accepted range of DateTimeOffset.FromUnixTimeSeconds; out-of-range values (e.g. milliseconds) are ignored.
+    private const long MinUnixSeconds = -62135596800L;
+    private const long MaxUnixSeconds = 253402300799L;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private readonly AppPaths _paths;
@@ -31,6 +36,18 @@ public sealed class CodexUsageProvider : IUsageProvider
     private UsageSnapshot Fetch(CancellationToken cancellationToken)
     {
         var now = _clock.UtcNow;
+        try
+        {
+            return FetchCore(now, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return UsageSnapshot.Empty(Agent, UsageStatus.Error, ReadErrorMessage, now);
+        }
+    }
+
+    private UsageSnapshot FetchCore(DateTimeOffset now, CancellationToken cancellationToken)
+    {
         var dir = _paths.CodexSessionsDir;
         if (!Directory.Exists(dir))
             return UsageSnapshot.Empty(Agent, UsageStatus.NoData, "Codex non trovato", now);
@@ -46,7 +63,7 @@ public sealed class CodexUsageProvider : IUsageProvider
                 .Take(MaxFilesToScan)
                 .ToList();
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return UsageSnapshot.Empty(Agent, UsageStatus.Error, "Cartella sessioni Codex non leggibile", now);
         }
@@ -61,7 +78,7 @@ public sealed class CodexUsageProvider : IUsageProvider
             {
                 rateLimits = FindLatestRateLimits(ReverseLineReader.ReadLinesFromEnd(file.FullName).Take(MaxLinesPerFile));
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 continue;
             }
@@ -112,7 +129,9 @@ public sealed class CodexUsageProvider : IUsageProvider
         var minutes = window.WindowMinutes ?? 0;
         var label = labelPrefix + LabelFor(minutes);
         var percent = Math.Clamp(window.UsedPercent ?? 0, 0, 100);
-        DateTimeOffset? reset = window.ResetsAt is { } seconds ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null;
+        DateTimeOffset? reset = window.ResetsAt is { } seconds && seconds is >= MinUnixSeconds and <= MaxUnixSeconds
+            ? DateTimeOffset.FromUnixTimeSeconds(seconds)
+            : null;
 
         if (reset is { } resetAt && resetAt <= now)
         {

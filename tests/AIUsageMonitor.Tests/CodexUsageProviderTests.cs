@@ -110,4 +110,17 @@ public class CodexUsageProviderTests
         var snap = await provider.FetchAsync();
         Assert.Equal(new[] { "codex 7g", "codex-plus 7g" }, snap.Windows.Select(w => w.Label).ToArray());
     }
+
+    [Theory]
+    [InlineData(1789806273000L)]   // milliseconds mistaken for seconds
+    [InlineData(-62135596801L)]    // below DateTimeOffset.MinValue
+    [InlineData(253402300800L)]    // above DateTimeOffset.MaxValue
+    public void ResolveWindow_ignores_an_out_of_range_reset(long resetsAt)
+    {
+        var w = new CodexRateWindow { UsedPercent = 92, WindowMinutes = 10080, ResetsAt = resetsAt };
+        var window = CodexUsageProvider.ResolveWindow(w, "", Now);
+        Assert.Null(window.ResetsAt);
+        Assert.Equal(92, window.Percent);
+        Assert.Equal("7g", window.Label);
+    }
 }
