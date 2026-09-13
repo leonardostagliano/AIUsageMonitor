@@ -129,7 +129,7 @@ record HookEvent(DateTimeOffset Ts, AgentKind Agent, string Event, string Sessio
 
 ### 7.1 Script hook
 
-`%USERPROFILE%\.aiusagemonitor\hook.cjs` (copiato dall'app all'installazione, sovrascritto se la versione incorporata è più nuova). Invocazione: `node "<path>\hook.cjs" claude` oppure `codex`. Legge tutto lo stdin, estrae i campi, appende una riga a `%USERPROFILE%\.aiusagemonitor\events.jsonl` e termina con exit 0 in ogni caso (mai bloccare l'agente). Salta gli eventi con `agent_id` valorizzato (subagenti Claude).
+`%USERPROFILE%\.aiusagemonitor\hook.cjs` (copiato dall'app all'installazione, sovrascritto se la versione incorporata è più nuova). Invocazione: `node "<path>\hook.cjs" claude` oppure `codex`. Legge tutto lo stdin, estrae i campi, appende una riga a `%USERPROFILE%\.aiusagemonitor\events.jsonl` e termina con exit 0 in ogni caso (mai bloccare l'agente). Lo script inoltra `SubagentStart` e `SubagentStop` (con `agent_id` e `agent_type` della sessione madre) e continua a scartare ogni altro evento che porta `agent_id` (contesto interno di un subagente).
 
 Riga evento:
 
@@ -143,8 +143,8 @@ Riga evento:
 
 | Agente | File | Eventi |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` | `SessionStart`, `UserPromptSubmit`, `Notification`, `PostToolUse` (solo matcher `AskUserQuestion`, per tornare ad "al lavoro" dopo una risposta), `Stop`, `StopFailure`, `SessionEnd` |
-| Codex | `~/.codex/hooks.json` | `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd` |
+| Claude Code | `~/.claude/settings.json` | `SessionStart`, `UserPromptSubmit`, `Notification`, `PostToolUse` (matcher `AskUserQuestion`), `Stop`, `StopFailure`, `SessionEnd`, `SubagentStart`, `SubagentStop` |
+| Codex | `~/.codex/hooks.json` | `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, `SubagentStart`, `SubagentStop` |
 
 Non si registra `PermissionRequest` per non interferire con il flusso dei permessi: `Notification` con `notification_type = permission_prompt` copre il caso.
 
@@ -171,6 +171,12 @@ Non si registra `PermissionRequest` per non interferire con il flusso dei permes
 | `Stop` | → `Idle` (etichetta "finito"), `Message` = ultime 120 battute di `last_assistant_message`, oppure "Turno completato" se assente |
 | `StopFailure` | → `Error`, `Message` = motivo |
 | `SessionEnd` | rimuove la sessione |
+| `SubagentStart` | `ActiveSubagents + 1`; se la fase era `Idle` diventa `Working` |
+| `SubagentStop` | `ActiveSubagents - 1` (mai sotto zero); se arriva a zero e uno `Stop` era già stato visto dopo l'ultimo prompt → `Idle` con il messaggio dello `Stop` |
+| `Stop` con `ActiveSubagents > 0` | resta `Working` (etichetta "al lavoro · N agenti"), lo `Stop` viene ricordato (`AwaitingSubagents`) |
+| timeout subagenti | nessun evento di subagente da 30 minuti con contatore > 0: contatore azzerato; se `AwaitingSubagents` → `Idle` |
+
+Il toast "finito" e il pallino grigio arrivano quindi solo quando anche i subagenti e gli agenti dei workflow hanno terminato. Per Codex, se gli hook `SubagentStart`/`SubagentStop` non vengono emessi per i thread figli, il fallback legge i rollout: un file con `parent_thread_id` uguale alla sessione, modificato negli ultimi 2 minuti e senza `task_complete`/`turn_aborted` dopo l'ultimo `task_started`, conta come subagente attivo.
 
 Regole aggiuntive:
 
