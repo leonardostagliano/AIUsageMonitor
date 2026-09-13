@@ -17,6 +17,22 @@ public static class ProcessTree
     private const uint TH32CS_SNAPPROCESS = 0x00000002;
     private static readonly IntPtr InvalidHandle = new(-1);
 
+    /// <summary>
+    /// Immagini della shell e del sistema che chiudono la risalita: sopra di loro non c'e' nessun terminale.
+    /// Serve perche' <c>explorer.exe</c> possiede una finestra top-level visibile, senza owner e con un titolo
+    /// ("Program Manager", il desktop): senza questo filtro una catena che non contiene un vero terminale - una
+    /// console semplice, la cui finestra appartiene a un <c>conhost.exe</c> figlio e non a un antenato - arriverebbe
+    /// fino a explorer e porterebbe in primo piano il desktop spacciandolo per il terminale della sessione.
+    /// </summary>
+    private static readonly HashSet<string> ShellAndSystemImages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "explorer.exe", "services.exe", "wininit.exe", "winlogon.exe", "lsass.exe", "csrss.exe", "smss.exe"
+    };
+
+    /// <summary>True se il nodo e' la shell o un processo di sistema: chi risale deve fermarsi <em>prima</em> di sondarlo.</summary>
+    public static bool IsShellOrSystem(ProcessNode node) =>
+        node.Pid <= 4 || ShellAndSystemImages.Contains(node.Name);
+
     /// <summary>Mappa pid → nodo di tutti i processi visibili. Vuota se lo snapshot fallisce.</summary>
     public static IReadOnlyDictionary<int, ProcessNode> Snapshot()
     {

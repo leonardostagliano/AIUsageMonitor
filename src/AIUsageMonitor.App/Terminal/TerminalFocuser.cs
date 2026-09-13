@@ -71,20 +71,43 @@ public sealed class TerminalFocuser
         return true;
     }
 
-    /// <summary>Finestra risolta all'arrivo dell'evento; se il processo non c'e' piu' si ritenta dall'agente.</summary>
+    /// <summary>
+    /// Finestra risolta all'arrivo dell'evento; se il processo non c'e' piu' si ritenta dall'agente.
+    /// Ogni pid memorizzato viene riconfrontato con il nome dell'immagine vista al momento della risoluzione: la
+    /// chiusura di un terminale non emette <c>SessionEnd</c>, quindi il target resta valido fino allo sweep (12 ore)
+    /// e in quella finestra Windows puo' aver assegnato lo stesso pid a tutt'altro processo. Senza il controllo, un
+    /// click su una sessione morta porterebbe in primo piano un'applicazione a caso e sopprimerebbe pure il toast.
+    /// </summary>
     private bool TryKnownWindow(TerminalTarget? target)
     {
         if (target is null) return false;
+        var snapshot = ProcessTree.Snapshot();
         if (target.WindowPid is { } windowPid)
         {
-            var hwnd = WindowActivator.FindTopLevelWindow(windowPid);
-            if (hwnd != IntPtr.Zero && WindowActivator.Activate(hwnd))
+            if (!IsStillProcess(snapshot, windowPid, target.WindowPidName))
             {
-                _log($"Focus: attivata la finestra del processo {windowPid} \"{WindowActivator.WindowTitle(hwnd)}\"");
-                return true;
+                _log($"Focus: il processo {windowPid} non e' piu' {target.WindowPidName ?? "-"}, pid riciclato: finestra ignorata");
+            }
+            else
+            {
+                var hwnd = WindowActivator.FindTopLevelWindow(windowPid);
+                if (hwnd != IntPtr.Zero && WindowActivator.Activate(hwnd))
+                {
+                    _log($"Focus: attivata la finestra del processo {windowPid} \"{WindowActivator.WindowTitle(hwnd)}\"");
+                    return true;
+                }
             }
         }
-        if (target.AgentPid is { } agentPid && ActivateAncestorWindow(agentPid)) return true;
+        if (target.AgentPid is { } agentPid)
+        {
+            // Il pid dell'agente serve solo come punto di partenza della risalita, ma un pid riciclato farebbe
+            // risalire una catena estranea: si riparte solo se e' ancora lo stesso processo (o almeno un agente).
+            var name = snapshot.TryGetValue(agentPid, out var node) ? node.Name : null;
+            var same = name is not null && (name.Equals(target.AgentPidName, StringComparison.OrdinalIgnoreCase)
+                || (target.AgentPidName is null && TerminalRegistry.IsAgentProcess(name)));
+            if (!same) _log($"Focus: il processo {agentPid} non e' piu' {target.AgentPidName ?? "un agente"}, pid riciclato: risalita saltata");
+            else if (ActivateAncestorWindow(agentPid, snapshot)) return true;
+        }
         return false;
     }
 
@@ -95,19 +118,26 @@ public sealed class TerminalFocuser
     private bool TryHints(TerminalTarget? target)
     {
         if (target is null) return false;
+        var snapshot = ProcessTree.Snapshot();
         if (target.VscodePid is { } vscodePid)
         {
-            var hwnd = WindowActivator.FindTopLevelWindow(vscodePid);
-            if (hwnd != IntPtr.Zero && WindowActivator.Activate(hwnd))
+            // VSCODE_PID viene dall'ambiente dell'hook e non da una risalita: l'unico nome atteso e' Code*.exe.
+            // Dopo un riavvio di VS Code quel pid puo' essere di chiunque, quindi si controlla prima di attivare.
+            if (snapshot.TryGetValue(vscodePid, out var vscode) && vscode.Name.StartsWith("Code", StringComparison.OrdinalIgnoreCase))
             {
-                _log($"Focus: attivata la finestra di VS Code (pid {vscodePid})");
-                return true;
+                var hwnd = WindowActivator.FindTopLevelWindow(vscodePid);
+                if (hwnd != IntPtr.Zero && WindowActivator.Activate(hwnd))
+                {
+                    _log($"Focus: attivata la finestra di VS Code (pid {vscodePid})");
+                    return true;
+                }
             }
+            else _log($"Focus: il processo {vscodePid} non e' VS Code, pid riciclato: indizio VSCODE_PID ignorato");
         }
         if (target.WtSession is null) return false;
 
         var windows = new List<(int Pid, IntPtr Hwnd)>();
-        foreach (var node in ProcessTree.Snapshot().Values)
+        foreach (var node in snapshot.Values)
         {
             if (!node.Name.StartsWith("WindowsTerminal", StringComparison.OrdinalIgnoreCase)) continue;
             var hwnd = WindowActivator.FindTopLevelWindow(node.Pid);
@@ -123,12 +153,23 @@ public sealed class TerminalFocuser
         return true;
     }
 
-    /// <summary>Risale da un pid fino al primo antenato con una finestra top-level e la attiva.</summary>
-    private bool ActivateAncestorWindow(int pid)
+    /// <summary>
+    /// Risale da un pid fino al primo antenato con una finestra top-level e la attiva. La risalita si ferma prima
+    /// della shell e dei processi di sistema: <c>explorer.exe</c> possiede la finestra del desktop ("Program
+    /// Manager") e supererebbe il filtro "visibile, senza owner, con titolo" di <see cref="WindowActivator"/>.
+    /// Quando nella catena non c'e' nessun terminale - una console semplice, la cui finestra appartiene a un
+    /// <c>conhost.exe</c> figlio e non a un antenato - la risposta giusta e' false: si passa alla strategia
+    /// successiva e, se anche quella fallisce, l'utente vede il toast "Terminale non trovato" invece del desktop.
+    /// </summary>
+    private bool ActivateAncestorWindow(int pid, IReadOnlyDictionary<int, ProcessNode>? snapshot = null)
     {
-        var snapshot = ProcessTree.Snapshot();
-        foreach (var node in ProcessTree.Ancestors(snapshot, pid))
+        foreach (var node in ProcessTree.Ancestors(snapshot ?? ProcessTree.Snapshot(), pid))
         {
+            if (ProcessTree.IsShellOrSystem(node))
+            {
+                _log($"Focus: risalita fermata su {node.Name} ({node.Pid}): nessun terminale in questa catena");
+                return false;
+            }
             var hwnd = WindowActivator.FindTopLevelWindow(node.Pid);
             if (hwnd == IntPtr.Zero) continue;
             var activated = WindowActivator.Activate(hwnd);
@@ -138,7 +179,13 @@ public sealed class TerminalFocuser
         return false;
     }
 
+    /// <summary>True se <paramref name="pid"/> e' ancora vivo e porta il nome visto al momento della risoluzione.</summary>
+    private static bool IsStillProcess(IReadOnlyDictionary<int, ProcessNode> snapshot, int pid, string? expectedName) =>
+        expectedName is not null
+        && snapshot.TryGetValue(pid, out var node)
+        && node.Name.Equals(expectedName, StringComparison.OrdinalIgnoreCase);
+
     private static string Describe(TerminalTarget? target) => target is null
         ? "sconosciuto"
-        : $"pane {target.HerdrPane ?? "-"}, agent {target.AgentPid?.ToString() ?? "-"}, finestra {target.WindowPid?.ToString() ?? "-"}, wt {(target.WtSession is null ? "-" : "si")}, vscode {target.VscodePid?.ToString() ?? "-"}";
+        : $"pane {target.HerdrPane ?? "-"}, agent {target.AgentPid?.ToString() ?? "-"} ({target.AgentPidName ?? "-"}), finestra {target.WindowPid?.ToString() ?? "-"} ({target.WindowPidName ?? "-"}), wt {(target.WtSession is null ? "-" : "si")}, vscode {target.VscodePid?.ToString() ?? "-"}";
 }

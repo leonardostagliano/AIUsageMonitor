@@ -3,8 +3,14 @@ using AIUsageMonitor.Core.Models;
 
 namespace AIUsageMonitor.App.Terminal;
 
-/// <summary>Dove vive una sessione: pane di Herdr, processo dell'agente, processo che possiede la finestra, indizi d'ambiente.</summary>
-public sealed record TerminalTarget(string? HerdrPane, int? AgentPid, int? WindowPid, string? WtSession, int? VscodePid, DateTimeOffset ResolvedAt);
+/// <summary>
+/// Dove vive una sessione: pane di Herdr, processo dell'agente, processo che possiede la finestra, indizi d'ambiente.
+/// Accanto a ogni pid si tiene il nome dell'immagine vista al momento della risoluzione: chiudere un terminale non
+/// emette <c>SessionEnd</c>, quindi il target sopravvive fino allo sweep (12 ore) e nel frattempo Windows puo' aver
+/// riciclato quel pid per un altro processo. Il nome e' il modo piu' economico per accorgersene prima di attivare
+/// una finestra che non c'entra nulla.
+/// </summary>
+public sealed record TerminalTarget(string? HerdrPane, int? AgentPid, string? AgentPidName, int? WindowPid, string? WindowPidName, string? WtSession, int? VscodePid, DateTimeOffset ResolvedAt);
 
 /// <summary>
 /// Tiene, per sessione, il terminale che la ospita. La risoluzione va fatta quando l'evento arriva, non al click:
@@ -64,24 +70,29 @@ public sealed class TerminalRegistry
         try
         {
             int? agentPid = null;
+            string? agentPidName = null;
             int? windowPid = null;
+            string? windowPidName = null;
             if (host.Ppid is { } ppid && ppid > 0)
             {
                 var chain = ProcessTree.Ancestors(ppid);
                 foreach (var node in chain)
                 {
-                    agentPid ??= IsAgentProcess(node.Name) ? node.Pid : null;
-                    if (windowPid is null && WindowActivator.FindTopLevelWindow(node.Pid) != IntPtr.Zero) windowPid = node.Pid;
+                    // La shell e i processi di sistema chiudono la catena: explorer.exe possiede la finestra del
+                    // desktop e la scambieremmo per il terminale della sessione (vedi ProcessTree.IsShellOrSystem).
+                    if (ProcessTree.IsShellOrSystem(node)) break;
+                    if (agentPid is null && IsAgentProcess(node.Name)) (agentPid, agentPidName) = (node.Pid, node.Name);
+                    if (windowPid is null && WindowActivator.FindTopLevelWindow(node.Pid) != IntPtr.Zero) (windowPid, windowPidName) = (node.Pid, node.Name);
                     if (agentPid is not null && windowPid is not null) break;
                 }
-                OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: ppid {ppid} → {chain.Count} antenati, agent {agentPid?.ToString() ?? "-"}, finestra {windowPid?.ToString() ?? "-"}, pane {host.HerdrPane ?? "-"}");
+                OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: ppid {ppid} → {chain.Count} antenati, agent {agentPid?.ToString() ?? "-"}, finestra {windowPid?.ToString() ?? "-"} ({windowPidName ?? "-"}), pane {host.HerdrPane ?? "-"}");
             }
             else
             {
                 OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: nessun ppid, pane {host.HerdrPane ?? "-"}");
             }
 
-            var target = new TerminalTarget(host.HerdrPane, agentPid, windowPid, host.WtSession, host.VscodePid, _clock.UtcNow);
+            var target = new TerminalTarget(host.HerdrPane, agentPid, agentPidName, windowPid, windowPidName, host.WtSession, host.VscodePid, _clock.UtcNow);
             lock (_gate) _targets[key] = target;
         }
         catch (Exception ex)
@@ -96,6 +107,7 @@ public sealed class TerminalRegistry
         }
     }
 
-    private static bool IsAgentProcess(string name) =>
+    /// <summary>Nome di un processo agente (claude/codex/node). Lo riusa <see cref="TerminalFocuser"/> per riconoscere un pid riciclato.</summary>
+    internal static bool IsAgentProcess(string name) =>
         AgentProcessNames.Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 }
