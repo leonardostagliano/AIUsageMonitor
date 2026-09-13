@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>AIUsageMonitor</AssemblyName>
+    <RootNamespace>AIUsageMonitor.App</RootNamespace>
+    <Version>0.1.0</Version>
+    <ApplicationIcon Condition="Exists('Assets\app.ico')">Assets\app.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- WFO0003: the WinForms analyzer wants DPI awareness set through ApplicationHighDpiMode. This is a WPF-first
+         app, whose windows require PerMonitorV2 declared in the manifest; WinForms is only used for NotifyIcon. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- UseWindowsForms adds System.Drawing and System.Windows.Forms as implicit global usings, which collide with
+         System.Windows/System.Windows.Media (Application, Color, Brush, Timer). Every file declares what it needs
+         instead, and imports WinForms through the `WinForms` alias. -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AIUsageMonitor.Core\AIUsageMonitor.Core.csproj" />
+  </ItemGroup>
+</Project>
