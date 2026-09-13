@@ -11,6 +11,12 @@ namespace AIUsageMonitor.Core.Hooks;
 /// running subagent while its newest line is younger than <see cref="ActiveWindow"/> and its newest turn event is
 /// <c>task_started</c> (no <c>task_complete</c>/<c>turn_aborted</c> after it).
 /// </summary>
+/// <remarks>
+/// The id reported for a child is <c>session_meta.payload.id</c>, the thread's OWN id (the same uuid the file name
+/// carries). <c>payload.session_id</c> is the id of the root conversation and is shared by every thread of the tree,
+/// so using it would collapse all the concurrent children of one parent onto a single subagent and make
+/// "al lavoro · N agenti" unreachable.
+/// </remarks>
 /// <remarks>Build one instance per app lifetime: it caches the immutable <c>session_meta</c> of every rollout it has
 /// parsed, so a sweep only re-reads the tail of the files that changed recently.</remarks>
 public sealed class CodexSubagentScanner
@@ -36,8 +42,16 @@ public sealed class CodexSubagentScanner
         _clock = clock ?? new SystemClock();
     }
 
-    /// <summary>How long a child rollout may stay untouched before it stops counting as a running subagent.</summary>
-    public TimeSpan ActiveWindow { get; init; } = TimeSpan.FromMinutes(2);
+    /// <summary>
+    /// How long a child rollout whose turn is still open may stay untouched before it stops counting as a running
+    /// subagent. It is deliberately generous: a running child appends nothing to its rollout while a long exec or
+    /// tool call is in flight (measured on this machine, gaps of several minutes inside turns that then completed
+    /// normally are routine), and reporting such a child as finished would take its session to Idle and toast
+    /// "Turno completato" mid-turn, only to flip back to "al lavoro" on the next scan and toast again at the real
+    /// end. This is a backstop for a child killed without a terminal event, not a liveness probe: the pump's
+    /// 30-minute <c>SubagentTimeout</c> is the real one.
+    /// </summary>
+    public TimeSpan ActiveWindow { get; init; } = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// How far back the enumeration looks for candidate rollouts. It is deliberately much wider than
@@ -98,6 +112,9 @@ public sealed class CodexSubagentScanner
                 if (meta is null) { complete = false; continue; }
                 if (meta.ParentThreadId is not { } parent) continue;
                 if (!string.Equals(parent, parentThreadId, StringComparison.OrdinalIgnoreCase)) continue;
+                // A thread that names itself as its parent is not a child of anything: counting it would make a
+                // session wait for its own turn to finish before it may report "finito".
+                if (string.Equals(meta.ThreadId, parent, StringComparison.OrdinalIgnoreCase)) continue;
 
                 if (ReadTurnState(file.FullName) is not { } turn) { complete = false; continue; }
                 if (!turn.Running) continue;
@@ -266,7 +283,11 @@ public sealed class CodexSubagentScanner
                 if (root.ValueKind != JsonValueKind.Object) continue;
                 if (!root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String || type.GetString() != "session_meta") continue;
                 if (!root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object) continue;
-                return (new RolloutMeta(StringOrNull(payload, "session_id"), StringOrNull(payload, "parent_thread_id") ?? StringOrNull(root, "parent_thread_id")), true);
+                // `payload.id` is the thread's own id in both parent and child rollouts; `payload.session_id` is the
+                // root conversation, identical for every thread of the tree, and must never be used as the thread id.
+                return (new RolloutMeta(
+                    StringOrNull(payload, "id") ?? ThreadIdFromFileName(Path.GetFileName(path)),
+                    StringOrNull(payload, "parent_thread_id") ?? StringOrNull(root, "parent_thread_id")), true);
             }
             catch (JsonException)
             {
@@ -280,7 +301,7 @@ public sealed class CodexSubagentScanner
     private static string? StringOrNull(JsonElement element, string property) =>
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
-    /// <summary>Thread id of a `rollout-&lt;timestamp&gt;-&lt;uuid&gt;.jsonl` whose session_meta carries no session_id.</summary>
+    /// <summary>Thread id of a `rollout-&lt;timestamp&gt;-&lt;uuid&gt;.jsonl` whose session_meta carries no `id`.</summary>
     private static string ThreadIdFromFileName(string fileName)
     {
         var name = Path.GetFileNameWithoutExtension(fileName);

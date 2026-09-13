@@ -31,9 +31,9 @@ public sealed class HookEventPump : IDisposable
     public TimeSpan SubagentTimeout { get; init; } = TimeSpan.FromMinutes(30);
 
     /// <summary>
-    /// Cadence of the Codex rollout scan. It is much shorter than <see cref="StaleSweepEvery"/> on purpose: the
-    /// scanner's own ActiveWindow is 2 minutes, so a sweep every 5 minutes would never sample it, and a child that
-    /// finished would keep its session at "al lavoro" until the next stale sweep.
+    /// Cadence of the Codex rollout scan. It is much shorter than <see cref="StaleSweepEvery"/> on purpose: a child
+    /// thread writes its `task_complete` the instant it finishes, and scanning only every 5 minutes would keep the
+    /// session at "al lavoro · N agenti" — and delay the "Turno completato" toast — for minutes after the real end.
     /// </summary>
     public TimeSpan CodexScanEvery { get; init; } = TimeSpan.FromSeconds(30);
 

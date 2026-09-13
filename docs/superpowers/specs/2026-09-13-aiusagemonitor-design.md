@@ -176,7 +176,7 @@ Non si registra `PermissionRequest` per non interferire con il flusso dei permes
 | `Stop` con `ActiveSubagents > 0` | resta `Working` (etichetta "al lavoro · N agenti"), lo `Stop` viene ricordato (`AwaitingSubagents`) |
 | timeout subagenti | nessun evento di subagente da 30 minuti con contatore > 0: contatore azzerato; se `AwaitingSubagents` → `Idle` |
 
-Il toast "finito" e il pallino grigio arrivano quindi solo quando anche i subagenti e gli agenti dei workflow hanno terminato. Per Codex, se gli hook `SubagentStart`/`SubagentStop` non vengono emessi per i thread figli, il fallback legge i rollout: un file con `parent_thread_id` uguale alla sessione, modificato negli ultimi 2 minuti e senza `task_complete`/`turn_aborted` dopo l'ultimo `task_started`, conta come subagente attivo.
+Il toast "finito" e il pallino grigio arrivano quindi solo quando anche i subagenti e gli agenti dei workflow hanno terminato. Per Codex, se gli hook `SubagentStart`/`SubagentStop` non vengono emessi per i thread figli, il fallback legge i rollout: un file con `parent_thread_id` uguale alla sessione, con attività negli ultimi 15 minuti e senza `task_complete`/`turn_aborted` dopo l'ultimo `task_started`, conta come subagente attivo. L'id del subagente è `session_meta.payload.id` (l'id del thread stesso, lo stesso uuid del nome file): `payload.session_id` è l'id della conversazione radice, uguale per tutti i thread dell'albero, e userlo ridurrebbe a uno tutti i figli concorrenti di uno stesso padre. La finestra di 15 minuti (non 2) è misurata sui rollout reali: un figlio che esegue un comando lungo non scrive nulla per minuti, e dichiararlo finito toasterebbe "Turno completato" a metà turno; il vero backstop resta il timeout subagenti di 30 minuti.
 
 Regole aggiuntive:
 

@@ -16,6 +16,8 @@ public class HookEventPumpTests
     /// <summary>
     /// Writes the rollout of a Codex child thread under the sessions directory the scanner reads. The turn event
     /// carries <paramref name="lastActivity"/> as its timestamp, which is what the scanner reads to decide freshness.
+    /// The session_meta mirrors the real format: <c>id</c> is the thread's own id and <c>session_id</c> is the root
+    /// conversation, shared by every child of the same parent.
     /// </summary>
     private static void CodexChildRollout(AppPaths paths, string threadId, string parentThreadId, bool running, DateTimeOffset lastActivity)
     {
@@ -24,7 +26,7 @@ public class HookEventPumpTests
         var turn = running
             ? $$$"""{"timestamp":"{{{stamp}}}","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"""
             : $$$"""{"timestamp":"{{{stamp}}}","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done"}}""";
-        var meta = $$$"""{"timestamp":"{{{metaStamp}}}","type":"session_meta","payload":{"session_id":"{{{threadId}}}","parent_thread_id":"{{{parentThreadId}}}","cwd":"C:\\demo\\proj"}}""";
+        var meta = $$$"""{"timestamp":"{{{metaStamp}}}","type":"session_meta","payload":{"session_id":"{{{parentThreadId}}}","id":"{{{threadId}}}","parent_thread_id":"{{{parentThreadId}}}","cwd":"C:\\demo\\proj","thread_source":"subagent"}}""";
         var file = Path.Combine(paths.CodexSessionsDir, $"rollout-{threadId}.jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, meta + "\n" + turn + "\n");
@@ -307,6 +309,104 @@ public class HookEventPumpTests
         Assert.Equal(SessionPhase.Working, changes.Last().PreviousPhase);
         // Exactly one completion over the whole scenario: one toast, not one early and one late.
         Assert.Single(changes, c => c.Session.Phase == SessionPhase.Idle);
+    }
+
+    /// <summary>
+    /// Two child threads of the same Codex session run at once: the row must read "al lavoro · 2 agenti", count down
+    /// to "al lavoro · 1 agente" when the first one completes and reach "finito" — with a single Idle change over the
+    /// whole scenario, so the App toasts "Turno completato" exactly once — when the second one does.
+    /// </summary>
+    [Fact]
+    public void Pump_counts_two_concurrent_codex_child_threads_and_toasts_once()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        // Driven by hand: Start() would also arm the FileSystemWatcher and the 2 s poll, and a background Pump()
+        // racing these explicit ones would scan the rollouts at an unpredictable moment.
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        CodexChildRollout(paths, "child-2", "c1", running: true, now.AddSeconds(-10));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        var both = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, both.Phase);
+        Assert.Equal(2, both.ActiveSubagents);
+        Assert.Equal("al lavoro · 2 agenti", both.PhaseLabel);
+        Assert.Equal(["child-1", "child-2"],
+            both.Subagents!.Select(s => s.AgentId).OrderBy(id => id, StringComparer.Ordinal));
+
+        clock.Advance(TimeSpan.FromSeconds(30));
+        CodexChildRollout(paths, "child-1", "c1", running: false, clock.UtcNow);
+        pump.Pump();
+
+        var one = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, one.Phase);
+        Assert.Equal("al lavoro · 1 agente", one.PhaseLabel);
+        Assert.DoesNotContain(changes, c => c.Session.Phase == SessionPhase.Idle);
+
+        clock.Advance(TimeSpan.FromSeconds(30));
+        CodexChildRollout(paths, "child-2", "c1", running: false, clock.UtcNow);
+        pump.Pump();
+
+        var done = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, done.Phase);
+        Assert.Equal("finito", done.PhaseLabel);
+        Assert.Single(changes, c => c.Session.Phase == SessionPhase.Idle);
+    }
+
+    /// <summary>
+    /// A child that goes quiet inside an open turn (a long exec appends nothing to its rollout) must keep its session
+    /// at "al lavoro": releasing it would toast "Turno completato" mid-turn and toast again at the real end.
+    /// </summary>
+    [Fact]
+    public void Pump_keeps_a_quiet_codex_child_whose_turn_is_still_open()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        // Driven by hand: Start() would also arm the FileSystemWatcher and the 2 s poll, and a background Pump()
+        // racing these explicit ones would scan the rollouts at an unpredictable moment.
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        // Five minutes of silence while the child runs a long tool call: the rollout is not touched at all.
+        clock.Advance(TimeSpan.FromMinutes(5));
+        pump.Pump();
+
+        var live = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, live.Phase);
+        Assert.Equal("al lavoro · 1 agente", live.PhaseLabel);
+        Assert.DoesNotContain(changes, c => c.Session.Phase == SessionPhase.Idle);
     }
 
     /// <summary>The rollout scan has its own cadence: it must not wait for the 5-minute stale sweep.</summary>
