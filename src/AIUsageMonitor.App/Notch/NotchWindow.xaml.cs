@@ -85,9 +85,9 @@ public partial class NotchWindow : Window, INotchHost
 
     public void Pin()
     {
+        if (!IsVisible) SetVisible(true);
         _pinned = true;
         PinGlyph.Visibility = Visibility.Visible;
-        if (!IsVisible) Show();
         Expand();
     }
 
@@ -104,12 +104,39 @@ public partial class NotchWindow : Window, INotchHost
         else Pin();
     }
 
-    public void ToggleVisible()
+    public void ToggleVisible() => SetVisible(!IsVisible);
+
+    /// <summary>
+    /// Unico punto che riconcilia i tre stati che prima divergevano: finestra mostrata/nascosta, stato di
+    /// fissaggio/espansione e <c>NotchVisible</c> su disco. Nascondendo si azzera anche il fissaggio, altrimenti il
+    /// click successivo sulla tray chiamerebbe <c>Unpin</c> su una finestra nascosta e non comparirebbe nulla; le
+    /// animazioni vengono rimosse (<c>BeginAnimation(..., null)</c>) per lasciare il pannello nella posizione chiusa,
+    /// visto che un valore animato avrebbe la precedenza sull'assegnazione diretta.
+    /// </summary>
+    private void SetVisible(bool visible)
     {
-        if (IsVisible) Hide();
-        else Show();
+        if (visible)
+        {
+            Show();
+        }
+        else
+        {
+            _collapseTimer.Stop();
+            _pinned = false;
+            _expanded = false;
+            PinGlyph.Visibility = Visibility.Collapsed;
+            Tab.Visibility = Visibility.Visible;
+            PanelSlide.BeginAnimation(TranslateTransform.XProperty, null);
+            Panel.BeginAnimation(OpacityProperty, null);
+            PanelSlide.X = Panel.ActualWidth > 0 ? Panel.ActualWidth : Width;
+            Panel.Opacity = 0;
+            Panel.Visibility = Visibility.Hidden;
+            Hide();
+        }
+
+        if (_services.Settings.Current.NotchVisible == visible) return;
         var settings = _services.Settings.Current.Clone();
-        settings.NotchVisible = IsVisible;
+        settings.NotchVisible = visible;
         _services.Settings.Save(settings);
     }
 
