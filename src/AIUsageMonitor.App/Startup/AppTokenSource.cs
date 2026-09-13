@@ -11,7 +11,7 @@ namespace AIUsageMonitor.App.Startup;
 /// <remarks>
 /// Every member runs on the pump thread — that is where <see cref="HookEventPump"/> does its IO — and so does
 /// <see cref="Forget"/>, wired to the tracker's Removed change, which is raised by the pump's stale sweep. Neither
-/// counter is thread-safe, and that single thread is what keeps them safe.
+/// counter — nor the agent-transcript locator — is thread-safe, and that single thread is what keeps them safe.
 /// <para>
 /// A total of zero is reported as "nothing to say" (null): both counters return zero for a transcript they have not
 /// been able to read yet, and turning that into an update would spend a Changed event — and a whole panel refresh —
@@ -21,6 +21,7 @@ namespace AIUsageMonitor.App.Startup;
 public sealed class AppTokenSource : ITokenSource
 {
     private readonly ClaudeTranscriptTokenCounter _claude = new();
+    private readonly ClaudeAgentTranscriptLocator _claudeAgents = new();
     private readonly CodexTokenCounter _codex;
 
     public AppTokenSource(AppPaths paths, IClock clock) => _codex = new CodexTokenCounter(paths.CodexSessionsDir, clock);
@@ -51,8 +52,12 @@ public sealed class AppTokenSource : ITokenSource
         {
             foreach (var subagent in session.Subagents)
             {
-                if (string.IsNullOrWhiteSpace(subagent.TranscriptPath)) continue;
-                var usage = _claude.Read(subagent.TranscriptPath);
+                // agent_transcript_path arrives only with SubagentStop: while the agent runs — exactly when its
+                // count is worth watching — the path has to be found under the session's own directory.
+                var path = subagent.TranscriptPath
+                           ?? _claudeAgents.Locate(session.TranscriptPath, session.SessionId, subagent.AgentId);
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                var usage = _claude.Read(path);
                 if (usage.Total > 0) totals[subagent.AgentId] = usage;
             }
         }
@@ -66,7 +71,12 @@ public sealed class AppTokenSource : ITokenSource
         if (session.Agent == AgentKind.Codex) return;
         if (!string.IsNullOrWhiteSpace(session.TranscriptPath)) _claude.Forget(session.TranscriptPath);
         foreach (var subagent in session.Subagents ?? [])
+        {
             if (!string.IsNullOrWhiteSpace(subagent.TranscriptPath)) _claude.Forget(subagent.TranscriptPath);
+            // The path found while the agent was running is its own cache entry and its own counter state, and
+            // survives the one SubagentStop later put on the subagent: both go with the session.
+            if (_claudeAgents.Forget(subagent.AgentId) is { } located) _claude.Forget(located);
+        }
     }
 
     private static TokenUsage? NullIfEmpty(TokenUsage usage) => usage.Total > 0 ? usage : null;
