@@ -23,7 +23,8 @@ public static class HookEventParser
             if (!DateTimeOffset.TryParse(GetString(root, "ts"), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var ts)) return null;
 
             return new HookEvent(ts, agent, evt, sessionId,
-                GetString(root, "cwd"), GetString(root, "notification_type"), GetString(root, "message"), GetString(root, "source"));
+                GetString(root, "cwd"), GetString(root, "notification_type"), GetString(root, "message"), GetString(root, "source"),
+                GetString(root, "agent_id"), GetString(root, "agent_type"));
         }
         catch (JsonException)
         {

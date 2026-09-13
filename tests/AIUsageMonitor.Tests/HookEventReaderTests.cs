@@ -24,6 +24,16 @@ public class HookEventReaderTests
         Assert.Null(ev.Source);
     }
 
+    [Fact]
+    public void Parse_reads_subagent_fields()
+    {
+        var ev = HookEventParser.Parse("""{"ts":"2026-09-13T10:15:02Z","agent":"claude","event":"SubagentStart","session_id":"s1","cwd":null,"notification_type":null,"message":null,"source":null,"agent_id":"a1","agent_type":"Explore"}""")!;
+        Assert.Equal("SubagentStart", ev.Event);
+        Assert.Equal("a1", ev.AgentId);
+        Assert.Equal("Explore", ev.AgentType);
+        Assert.Null(HookEventParser.Parse(Line1)!.AgentId);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("not json")]

@@ -32,4 +32,6 @@ public sealed record HookEvent(
     string? Cwd,
     string? NotificationType,
     string? Message,
-    string? Source);
+    string? Source,
+    string? AgentId = null,
+    string? AgentType = null);
