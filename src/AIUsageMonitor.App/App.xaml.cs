@@ -37,12 +37,7 @@ public partial class App : Application
 
         try
         {
-            var placeholder = new { Agents = new[]
-            {
-                new { Name = "Claude Code", Icon = (System.Windows.Media.Geometry)FindResource("ClaudeIcon"), AggregateBrush = PhaseVisuals.Brush(null), AggregateStroke = PhaseVisuals.Brush(Core.Models.SessionPhase.Idle) },
-                new { Name = "Codex", Icon = (System.Windows.Media.Geometry)FindResource("CodexIcon"), AggregateBrush = PhaseVisuals.Brush(Core.Models.SessionPhase.Working), AggregateStroke = (System.Windows.Media.Brush)System.Windows.Media.Brushes.Transparent },
-            } };
-            var notch = new NotchWindow(_services, placeholder);
+            var notch = new NotchWindow(_services, new NotchViewModel(_services));
             _notch = notch;
             if (_services.Settings.Current.NotchVisible) notch.Show();
             _tray = new TrayIconController(_services, notch);
