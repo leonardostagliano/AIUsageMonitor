@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+﻿using System.Text.Json.Nodes;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
@@ -162,5 +162,20 @@ public class HookInstallerTests
         Assert.Equal(HookStatus.Partial, installer.GetStatus(AgentKind.Claude).Status);
         installer.Remove(AgentKind.Claude);
         Assert.Equal(HookStatus.NotInstalled, installer.GetStatus(AgentKind.Claude).Status);
+    }
+
+    [Fact]
+    public void Remove_is_a_no_op_when_none_of_our_hooks_are_present()
+    {
+        using var dir = new TempDir();
+        var (installer, paths) = Build(dir);
+        const string foreign = """{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[]}],"Stop":[]}}""";
+        dir.File(@".claude\settings.json", foreign);
+
+        var report = installer.Remove(AgentKind.Claude);
+
+        Assert.Equal(HookStatus.NotInstalled, report.Status);
+        Assert.Equal(foreign, File.ReadAllText(paths.ClaudeSettingsFile));
+        Assert.True(!Directory.Exists(paths.BackupsDir) || Directory.GetFiles(paths.BackupsDir).Length == 0);
     }
 }

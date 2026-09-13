@@ -153,22 +153,28 @@ public sealed class HookInstaller
         foreach (var eventName in hooks.Select(kv => kv.Key).ToList())
         {
             if (hooks[eventName] is not JsonArray groups) continue;
+            var removedFromEvent = false;
             for (var g = groups.Count - 1; g >= 0; g--)
             {
                 if (groups[g] is not JsonObject group || group["hooks"] is not JsonArray commands) continue;
+                var removedFromGroup = false;
                 for (var c = commands.Count - 1; c >= 0; c--)
                 {
                     if (!IsOurs(commands[c])) continue;
                     commands.RemoveAt(c);
+                    removedFromGroup = true;
+                    removedFromEvent = true;
                     changed = true;
                 }
-                if (commands.Count == 0)
+                // Only prune what this call emptied: never touch groups that were already empty.
+                if (removedFromGroup && commands.Count == 0)
                 {
                     groups.RemoveAt(g);
                     changed = true;
                 }
             }
-            if (groups.Count == 0)
+            // Same for the event key: drop it only if we emptied it ourselves.
+            if (removedFromEvent && groups.Count == 0)
             {
                 hooks.Remove(eventName);
                 changed = true;
