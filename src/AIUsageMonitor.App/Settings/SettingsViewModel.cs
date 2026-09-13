@@ -2,11 +2,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows.Input;
 using AIUsageMonitor.App.Common;
+using AIUsageMonitor.App.Notch;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Models;
 using AIUsageMonitor.Core.Settings;
-using WinForms = System.Windows.Forms;
 
 namespace AIUsageMonitor.App.Settings;
 
@@ -23,7 +23,10 @@ public sealed class SettingsViewModel : ObservableObject
         _services = services;
         _draft = services.Settings.Current.Clone();
         _autoStart = AutoStart.IsEnabled();
-        Monitors = WinForms.Screen.AllScreens.Select((s, i) => $"{i + 1}: {s.DeviceName.TrimStart('\\', '.')} {s.Bounds.Width}x{s.Bounds.Height}{(s.Primary ? " (principale)" : "")}").ToList();
+        // Stessa enumerazione di NotchWindow.Reposition (primario per primo): MonitorIndex e' un indice in QUELLA lista,
+        // non in Screen.AllScreens, che Windows non garantisce inizi dal monitor primario. Usare AllScreens qui
+        // metterebbe "(principale)" sulla riga sbagliata e ancorerebbe la notch a un monitor diverso da quello scelto.
+        Monitors = NotchWindow.EnumerateScreens().Select((s, i) => $"{i + 1}: {s.DeviceName.TrimStart('\\', '.')} {s.Bounds.Width}x{s.Bounds.Height}{(s.Primary ? " (principale)" : "")}").ToList();
 
         SaveCommand = new RelayCommand(Save);
         InstallClaudeHooksCommand = new RelayCommand(() => Install(AgentKind.Claude));

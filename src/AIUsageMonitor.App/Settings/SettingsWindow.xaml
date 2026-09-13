@@ -29,6 +29,10 @@
       <Setter Property="MinWidth" Value="90"/>
     </Style>
   </Window.Resources>
+  <!-- SizeToContent="Height" + ResizeMode="NoResize": su schermi con area di lavoro bassa (1366x768, o 1920x1080 al
+       150%) il contenuto supera l'altezza disponibile. Senza ScrollViewer verrebbe tagliato in basso, senza barra e
+       senza modo di ridimensionare; il tetto lo mette OnSourceInitialized con l'area di lavoro del monitor reale. -->
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
   <StackPanel Margin="14">
     <GroupBox Header="Agenti">
       <Grid>
@@ -97,4 +101,5 @@
       <Button Content="Salva" Command="{Binding SaveCommand}" IsDefault="True" Margin="0,2,0,2"/>
     </StackPanel>
   </StackPanel>
+  </ScrollViewer>
 </Window>
