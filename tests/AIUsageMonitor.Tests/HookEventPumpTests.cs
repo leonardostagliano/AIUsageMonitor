@@ -13,17 +13,22 @@ public class HookEventPumpTests
     private static string Line(string evt, string sid, DateTimeOffset ts, string? notificationType = null, string agent = "claude") =>
         $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"{{agent}}","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":{{(notificationType is null ? "null" : $"\"{notificationType}\"")}},"message":null,"source":null}""" + "\n";
 
-    /// <summary>Writes the rollout of a Codex child thread under the sessions directory the scanner reads.</summary>
-    private static void CodexChildRollout(AppPaths paths, string threadId, string parentThreadId, bool running, DateTimeOffset lastWrite)
+    /// <summary>
+    /// Writes the rollout of a Codex child thread under the sessions directory the scanner reads. The turn event
+    /// carries <paramref name="lastActivity"/> as its timestamp, which is what the scanner reads to decide freshness.
+    /// </summary>
+    private static void CodexChildRollout(AppPaths paths, string threadId, string parentThreadId, bool running, DateTimeOffset lastActivity)
     {
+        var stamp = lastActivity.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+        var metaStamp = lastActivity.AddSeconds(-2).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
         var turn = running
-            ? """{"timestamp":"2026-09-13T11:59:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"""
-            : """{"timestamp":"2026-09-13T11:59:30.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done"}}""";
-        var meta = $$$"""{"timestamp":"2026-09-13T11:58:00.000Z","type":"session_meta","payload":{"session_id":"{{{threadId}}}","parent_thread_id":"{{{parentThreadId}}}","cwd":"C:\\demo\\proj"}}""";
+            ? $$$"""{"timestamp":"{{{stamp}}}","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"""
+            : $$$"""{"timestamp":"{{{stamp}}}","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done"}}""";
+        var meta = $$$"""{"timestamp":"{{{metaStamp}}}","type":"session_meta","payload":{"session_id":"{{{threadId}}}","parent_thread_id":"{{{parentThreadId}}}","cwd":"C:\\demo\\proj"}}""";
         var file = Path.Combine(paths.CodexSessionsDir, $"rollout-{threadId}.jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, meta + "\n" + turn + "\n");
-        File.SetLastWriteTimeUtc(file, lastWrite.UtcDateTime);
+        File.SetLastWriteTimeUtc(file, lastActivity.UtcDateTime);
     }
 
     [Fact]
@@ -272,7 +277,9 @@ public class HookEventPumpTests
             StaleSweepEvery = TimeSpan.Zero,
             CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
         };
-        pump.Start();
+        // Driven by hand: Start() would also arm the FileSystemWatcher and the 2 s poll, and a background Pump()
+        // racing these explicit ones would scan the rollouts at an unpredictable moment.
+        Directory.CreateDirectory(paths.MonitorDir);
 
         CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
         File.AppendAllText(paths.EventsFile,
@@ -285,6 +292,9 @@ public class HookEventPumpTests
         Assert.Equal("al lavoro · 1 agente", working.PhaseLabel);
         Assert.Equal("child-1", Assert.Single(working.Subagents!).AgentId);
         Assert.Equal(CodexSubagentScanner.SyntheticAgentType, working.Subagents!.Single().AgentType);
+        // The Stop must never be applied before the child is announced: an Idle raised here would toast "finito"
+        // while the child thread is still running, and the row would flip back to "al lavoro" on the next scan.
+        Assert.DoesNotContain(changes, c => c.Session.Phase == SessionPhase.Idle);
 
         clock.Advance(TimeSpan.FromSeconds(30));
         CodexChildRollout(paths, "child-1", "c1", running: false, clock.UtcNow);
@@ -295,6 +305,121 @@ public class HookEventPumpTests
         Assert.Equal(0, done.ActiveSubagents);
         Assert.Equal("finito", done.PhaseLabel);
         Assert.Equal(SessionPhase.Working, changes.Last().PreviousPhase);
+        // Exactly one completion over the whole scenario: one toast, not one early and one late.
+        Assert.Single(changes, c => c.Session.Phase == SessionPhase.Idle);
+    }
+
+    /// <summary>The rollout scan has its own cadence: it must not wait for the 5-minute stale sweep.</summary>
+    [Fact]
+    public void Pump_scans_codex_rollouts_on_its_own_cadence()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.FromHours(1),
+            CodexScanEvery = TimeSpan.FromSeconds(30),
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        // Driven by hand: Start() would also arm the FileSystemWatcher and the 2 s poll, and a background Pump()
+        // racing these explicit ones would scan the rollouts at an unpredictable moment.
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        // A child thread that starts mid-turn, with no hook event to trigger a scan.
+        clock.Advance(TimeSpan.FromSeconds(31));
+        CodexChildRollout(paths, "child-1", "c1", running: true, clock.UtcNow);
+        pump.Pump();
+
+        Assert.Equal(1, Assert.Single(tracker.Sessions).ActiveSubagents);
+    }
+
+    /// <summary>A scan that could not read the rollouts must not be taken for "every child finished".</summary>
+    [Fact]
+    public void Pump_keeps_the_codex_children_when_the_rollout_scan_fails()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        // Driven by hand: Start() would also arm the FileSystemWatcher and the 2 s poll, and a background Pump()
+        // racing these explicit ones would scan the rollouts at an unpredictable moment.
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+        Assert.Equal(1, Assert.Single(tracker.Sessions).ActiveSubagents);
+
+        // Renamed rather than deleted: a rename is atomic, while a deleted directory can stay visible (and
+        // enumerate as empty) for a moment, which would make the scan succeed with no children.
+        Directory.Move(paths.CodexSessionsDir, paths.CodexSessionsDir + ".away");
+        clock.Advance(TimeSpan.FromSeconds(30));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, session.Phase);
+        Assert.Equal(1, session.ActiveSubagents);
+    }
+
+    /// <summary>A child thread that outlives the subagent timeout is re-announced, so the sweep never releases it.</summary>
+    [Fact]
+    public void Pump_reannounces_a_codex_child_that_is_still_running()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexScanEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        // Driven by hand: Start() would also arm the FileSystemWatcher and the 2 s poll, and a background Pump()
+        // racing these explicit ones would scan the rollouts at an unpredictable moment.
+        Directory.CreateDirectory(paths.MonitorDir);
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        // The child keeps working for 40 minutes, well past SubagentTimeout.
+        for (var minute = 10; minute <= 40; minute += 10)
+        {
+            clock.Advance(TimeSpan.FromMinutes(10));
+            CodexChildRollout(paths, "child-1", "c1", running: true, clock.UtcNow);
+            pump.Pump();
+
+            var live = Assert.Single(tracker.Sessions);
+            Assert.Equal(SessionPhase.Working, live.Phase);
+            Assert.Equal(1, live.ActiveSubagents);
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        CodexChildRollout(paths, "child-1", "c1", running: false, clock.UtcNow);
+        pump.Pump();
+
+        var done = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, done.Phase);
+        Assert.Equal("finito", done.PhaseLabel);
     }
 
     [Fact]

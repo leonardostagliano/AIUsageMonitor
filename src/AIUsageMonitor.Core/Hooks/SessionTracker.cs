@@ -200,7 +200,15 @@ public sealed class SessionTracker
             var known = list[index];
             // Task 10 adds HookEvent.AgentTranscriptPath (SubagentStop carries it): set TranscriptPath here when it lands.
             list[index] = started
-                ? known with { AgentType = e.AgentType ?? known.AgentType, Phase = SubagentPhase.Running, StartedAt = e.Ts, EndedAt = null }
+                // A SubagentStart for an agent that is already Running is a refresh (the Codex rollout fallback
+                // re-announces a long-lived child), not a new run: its StartedAt must not jump forward.
+                ? known with
+                {
+                    AgentType = e.AgentType ?? known.AgentType,
+                    Phase = SubagentPhase.Running,
+                    StartedAt = known.Phase == SubagentPhase.Running ? known.StartedAt : e.Ts,
+                    EndedAt = null
+                }
                 : known with { AgentType = e.AgentType ?? known.AgentType, Phase = SubagentPhase.Done, EndedAt = e.Ts };
         }
         else

@@ -14,8 +14,13 @@ public sealed class HookEventPump : IDisposable
     private FileSystemWatcher? _watcher;
     private Timer? _poll;
     private DateTimeOffset _lastStaleSweep;
-    /// <summary>Child thread ids this pump has announced per Codex session: only these are stopped when they go quiet.</summary>
-    private readonly Dictionary<string, HashSet<string>> _synthesisedChildren = new(StringComparer.Ordinal);
+    private DateTimeOffset _lastCodexScan;
+    /// <summary>
+    /// Child thread ids this pump has announced per Codex session, with the instant of the announcement: only these
+    /// are ever stopped here, and the instant says when a still-running child must be announced again so the
+    /// subagent timeout cannot release a child the scanner can plainly see is alive.
+    /// </summary>
+    private readonly Dictionary<string, Dictionary<string, DateTimeOffset>> _synthesisedChildren = new(StringComparer.Ordinal);
 
     public TimeSpan ReplayWindow { get; init; } = TimeSpan.FromHours(24);
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromHours(12);
@@ -24,6 +29,13 @@ public sealed class HookEventPump : IDisposable
 
     /// <summary>How long a session waits for a subagent that never sent its SubagentStop before being released.</summary>
     public TimeSpan SubagentTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Cadence of the Codex rollout scan. It is much shorter than <see cref="StaleSweepEvery"/> on purpose: the
+    /// scanner's own ActiveWindow is 2 minutes, so a sweep every 5 minutes would never sample it, and a child that
+    /// finished would keep its session at "al lavoro" until the next stale sweep.
+    /// </summary>
+    public TimeSpan CodexScanEvery { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Fallback used when Codex does not fire SubagentStart/SubagentStop for its child threads: the scanner reads the
@@ -61,6 +73,7 @@ public sealed class HookEventPump : IDisposable
                 // raised, or the replayed session would flip Idle → Working → Idle and toast a turn it never ran.
                 SyncCodexSubagents(silent: true);
                 _lastStaleSweep = _clock.UtcNow;
+                _lastCodexScan = _clock.UtcNow;
             }
             catch (Exception ex)
             {
@@ -85,8 +98,13 @@ public sealed class HookEventPump : IDisposable
         {
             try
             {
-                foreach (var ev in _reader.ReadNew()) _tracker.Apply(ev);
+                ApplyBatch(_reader.ReadNew().ToList());
                 _reader.RotateIfNeeded();
+                if (_clock.UtcNow - _lastCodexScan >= CodexScanEvery)
+                {
+                    _lastCodexScan = _clock.UtcNow;
+                    SyncCodexSubagents(silent: false);
+                }
                 if (_clock.UtcNow - _lastStaleSweep >= StaleSweepEvery)
                 {
                     _lastStaleSweep = _clock.UtcNow;
@@ -94,7 +112,6 @@ public sealed class HookEventPump : IDisposable
                     // Same cadence as the stale removal, on the sessions that survived it: a subagent that died
                     // without a SubagentStop would otherwise pin its session to "al lavoro" until the 12 h sweep.
                     _tracker.SweepSubagentTimeouts(SubagentTimeout);
-                    SyncCodexSubagents(silent: false);
                 }
             }
             catch (Exception ex)
@@ -103,6 +120,33 @@ public sealed class HookEventPump : IDisposable
                 // The hook may be mid-append, a resolver may misbehave: report and let the next poll retry.
                 Report(ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// Applies a batch of events, announcing the live Codex child threads immediately before the Stop that would
+    /// otherwise be applied with no subagent in sight. Codex does not emit SubagentStart for its children, so a Stop
+    /// applied before the scan takes the session to Idle and toasts "Turno completato" while a child is still
+    /// running; the row would then flip back to "al lavoro" on the next scan and toast a second time at the real end.
+    /// The scan runs per session and at most once per batch for each of them (it already covers every session it
+    /// knows), so a session created by an earlier event of this very batch is covered too.
+    /// </summary>
+    private void ApplyBatch(IReadOnlyList<HookEvent> batch)
+    {
+        HashSet<string>? synced = null;
+        foreach (var ev in batch)
+        {
+            if (CodexSubagents is not null && ev.Agent == AgentKind.Codex && ev.Event == "Stop")
+            {
+                synced ??= new HashSet<string>(StringComparer.Ordinal);
+                if (synced.Add(ev.SessionId))
+                {
+                    SyncCodexSubagents(silent: false);
+                    _lastCodexScan = _clock.UtcNow;
+                    foreach (var id in _synthesisedChildren.Keys) synced.Add(id);
+                }
+            }
+            _tracker.Apply(ev);
         }
     }
 
@@ -121,26 +165,46 @@ public sealed class HookEventPump : IDisposable
             _synthesisedChildren.Remove(gone);
 
         var now = _clock.UtcNow;
+        // Half the timeout: a child still running at that point is announced again, which refreshes
+        // LastSubagentEventAt, so SweepSubagentTimeouts can only release children the scanner no longer sees.
+        var refreshAfter = SubagentTimeout / 2;
         foreach (var session in sessions)
         {
             if (!_synthesisedChildren.TryGetValue(session.SessionId, out var announced))
-                _synthesisedChildren[session.SessionId] = announced = new HashSet<string>(StringComparer.Ordinal);
+                _synthesisedChildren[session.SessionId] = announced = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
 
-            var active = CodexSubagents.ActiveChildren(session.SessionId).ToHashSet(StringComparer.Ordinal);
+            // A scan that could not read the rollouts says nothing: keeping the announced children is the only safe
+            // reading, and the timeout sweep stays the single thing that can release them.
+            if (!CodexSubagents.TryGetActiveChildren(session.SessionId, out var children)) continue;
+            var active = children.ToHashSet(StringComparer.Ordinal);
+
             var events = new List<HookEvent>();
-            foreach (var child in active.Where(c => !announced.Contains(c)))
-                events.Add(SyntheticSubagentEvent("SubagentStart", session, child, now));
-            foreach (var child in announced.Where(c => !active.Contains(c)).ToList())
+            var next = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+            foreach (var child in active)
+            {
+                var known = announced.TryGetValue(child, out var at);
+                // A re-announce also recovers a child the timeout already marked Done: UpsertSubagent is idempotent
+                // for a known id, and ApplySubagentEvent takes an Idle session back to Working.
+                if (!known || now - at >= refreshAfter || !IsRunning(session, child))
+                {
+                    events.Add(SyntheticSubagentEvent("SubagentStart", session, child, now));
+                    next[child] = now;
+                }
+                else next[child] = at;
+            }
+            foreach (var child in announced.Keys.Where(c => !active.Contains(c)))
                 events.Add(SyntheticSubagentEvent("SubagentStop", session, child, now));
 
-            announced.Clear();
-            foreach (var child in active) announced.Add(child);
+            _synthesisedChildren[session.SessionId] = next;
 
             if (events.Count == 0) continue;
             if (silent) _tracker.ApplySilently(events);
             else foreach (var e in events) _tracker.Apply(e);
         }
     }
+
+    private static bool IsRunning(SessionState session, string agentId) =>
+        session.Subagents?.Any(s => s.AgentId == agentId && s.Phase == SubagentPhase.Running) ?? false;
 
     private static HookEvent SyntheticSubagentEvent(string name, SessionState session, string childThreadId, DateTimeOffset ts) =>
         new(ts, session.Agent, name, session.SessionId, session.Cwd, null, null, null,
