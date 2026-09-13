@@ -238,6 +238,24 @@
         <ControlTemplate TargetType="ScrollBar">
           <Grid Background="Transparent">
             <Track x:Name="PART_Track" IsDirectionReversed="True">
+              <!-- I due RepeatButton sono invisibili ma servono: senza di loro il click sulla parte vuota della
+                   barra non pagina piu' il contenuto. Essendo ButtonBase marcano anche il click come Handled,
+                   quindi l'evento non risale al bordo del pannello del notch, che lo interpreterebbe come
+                   fissa/sblocca (vedi il commento su Tab_MouseLeftButtonDown in NotchWindow.xaml.cs). -->
+              <Track.DecreaseRepeatButton>
+                <RepeatButton x:Name="PageBack" Command="{x:Static ScrollBar.PageUpCommand}" Focusable="False" IsTabStop="False">
+                  <RepeatButton.Template>
+                    <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                  </RepeatButton.Template>
+                </RepeatButton>
+              </Track.DecreaseRepeatButton>
+              <Track.IncreaseRepeatButton>
+                <RepeatButton x:Name="PageForward" Command="{x:Static ScrollBar.PageDownCommand}" Focusable="False" IsTabStop="False">
+                  <RepeatButton.Template>
+                    <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                  </RepeatButton.Template>
+                </RepeatButton>
+              </Track.IncreaseRepeatButton>
               <Track.Thumb>
                 <Thumb>
                   <Thumb.Template>
@@ -249,6 +267,17 @@
               </Track.Thumb>
             </Track>
           </Grid>
+          <ControlTemplate.Triggers>
+            <!-- Su una barra orizzontale i comandi PageUp/PageDown non si applicano e la direzione del Track va
+                 invertita: senza questo trigger il click sulla parte vuota non pagina (e quindi non verrebbe
+                 marcato Handled). Oggi entrambe le ScrollViewer hanno HorizontalScrollBarVisibility="Disabled",
+                 ma il template resta corretto se un domani ne comparisse una. -->
+            <Trigger Property="Orientation" Value="Horizontal">
+              <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+              <Setter TargetName="PageBack" Property="Command" Value="{x:Static ScrollBar.PageLeftCommand}"/>
+              <Setter TargetName="PageForward" Property="Command" Value="{x:Static ScrollBar.PageRightCommand}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
