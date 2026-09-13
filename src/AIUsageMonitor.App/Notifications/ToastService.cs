@@ -10,10 +10,11 @@ namespace AIUsageMonitor.App.Notifications;
 public sealed class ToastService
 {
     private static readonly TimeSpan MinGapPerAgent = TimeSpan.FromSeconds(3);
+    private const int MaxTrackedSessions = 1000;
 
     private readonly AppServices _services;
     private readonly Action<string, string, WinForms.ToolTipIcon> _show;
-    private readonly HashSet<string> _seen = new();
+    private readonly Dictionary<(AgentKind Agent, string SessionId), string> _lastKey = new();
     private readonly Dictionary<AgentKind, DateTimeOffset> _lastShown = new();
     private readonly object _gate = new();
 
@@ -24,20 +25,38 @@ public sealed class ToastService
         services.Sessions.Changed += OnSessionChanged;
     }
 
+    /// <summary>
+    /// Dedupe come da spec 9: la chiave e' (sessione, fase, messaggio), senza il timestamp dell'evento — Claude Code
+    /// riemette <c>idle_prompt</c> finche' il prompt resta senza risposta e ogni ripetizione avrebbe un <c>ts</c> nuovo,
+    /// quindi con il timestamp nella chiave la stessa toast tornava a ogni riemissione. La chiave viene confrontata con
+    /// l'ultima toast mostrata per quella sessione (non con uno storico globale): cosi' una ripetizione identica viene
+    /// soppressa, ma un nuovo turno che finisce di nuovo con lo stesso messaggio ("Turno completato") notifica ancora.
+    /// Ordine delle guardie: la chiave viene registrata solo dopo che la finestra minima di 3 s ha lasciato passare la
+    /// toast, altrimenti una notifica scartata dal rate limit resterebbe soppressa per sempre.
+    /// </summary>
     private void OnSessionChanged(SessionChange change)
     {
+        var session = change.Session;
+        var id = (session.Agent, session.SessionId);
+        if (change.Kind == SessionChangeKind.Removed)
+        {
+            lock (_gate) _lastKey.Remove(id);
+            return;
+        }
+
         var settings = _services.Settings.Current;
         var toast = Describe(change, settings);
         if (toast is null) return;
 
-        var key = $"{change.Session.Agent}|{change.Session.SessionId}|{change.Session.Phase}|{change.Session.LastEventAt:O}";
+        var key = $"{session.Phase}|{toast.Value.Text}";
         var now = _services.Clock.UtcNow;
         lock (_gate)
         {
-            if (!_seen.Add(key)) return;
-            if (_seen.Count > 1000) _seen.Clear();
-            if (_lastShown.TryGetValue(change.Session.Agent, out var last) && now - last < MinGapPerAgent) return;
-            _lastShown[change.Session.Agent] = now;
+            if (_lastKey.TryGetValue(id, out var previous) && previous == key) return;
+            if (_lastShown.TryGetValue(session.Agent, out var last) && now - last < MinGapPerAgent) return;
+            if (_lastKey.Count >= MaxTrackedSessions) _lastKey.Clear();
+            _lastKey[id] = key;
+            _lastShown[session.Agent] = now;
         }
 
         var (title, text, icon) = toast.Value;
