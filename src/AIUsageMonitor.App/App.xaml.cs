@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
 using AIUsageMonitor.App.Notifications;
+using AIUsageMonitor.App.Settings;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.App.Tray;
 using WinForms = System.Windows.Forms;
@@ -44,6 +45,7 @@ public partial class App : Application
             _notch = notch;
             if (_services.Settings.Current.NotchVisible) notch.Show();
             _tray = new TrayIconController(_services, notch);
+            _tray.OpenSettings = () => SettingsWindow.ShowSingleton(_services);
             _single.ShowNotchRequested += () => Dispatcher.BeginInvoke(notch.Pin);
 
             _services.Start();
