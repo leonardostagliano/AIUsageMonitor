@@ -38,11 +38,17 @@ public sealed record SessionState(
     DateTimeOffset StartedAt,
     string? TranscriptPath = null,
     TokenUsage? Tokens = null,
-    IReadOnlyList<SubagentState>? Subagents = null)
+    IReadOnlyList<SubagentState>? Subagents = null,
+    // A Stop that arrived while subagents were still running: the Idle transition waits for them.
+    bool AwaitingSubagents = false,
+    // Timestamp of the last SubagentStart/SubagentStop, used by the timeout sweep.
+    DateTimeOffset? LastSubagentEventAt = null)
 {
     /// <summary>Italian label shown in the UI. Idle is "pronto" before the first completed turn, "finito" after.</summary>
     public string PhaseLabel => Phase switch
     {
+        SessionPhase.Working when ActiveSubagents == 1 => "al lavoro · 1 agente",
+        SessionPhase.Working when ActiveSubagents > 1 => $"al lavoro · {ActiveSubagents} agenti",
         SessionPhase.Working => "al lavoro",
         SessionPhase.NeedsInput => "attende input",
         SessionPhase.Idle => Message is null ? "pronto" : "finito",

@@ -47,7 +47,15 @@ public class ModelsTests
     {
         var now = DateTimeOffset.UtcNow;
         SessionState Make(SessionPhase p, string? msg) => new(AgentKind.Claude, "s", "demo", null, p, msg, now, now);
+        SessionState WithRunning(int n) => Make(SessionPhase.Working, null) with
+        {
+            Subagents = Enumerable.Range(0, n)
+                .Select(i => new SubagentState("a" + i, null, SubagentPhase.Running, now, null, null, TokenUsage.Zero))
+                .ToList()
+        };
         Assert.Equal("al lavoro", Make(SessionPhase.Working, null).PhaseLabel);
+        Assert.Equal("al lavoro · 1 agente", WithRunning(1).PhaseLabel);
+        Assert.Equal("al lavoro · 3 agenti", WithRunning(3).PhaseLabel);
         Assert.Equal("attende input", Make(SessionPhase.NeedsInput, "x").PhaseLabel);
         Assert.Equal("pronto", Make(SessionPhase.Idle, null).PhaseLabel);
         Assert.Equal("finito", Make(SessionPhase.Idle, "Turno completato").PhaseLabel);

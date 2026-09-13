@@ -9,8 +9,9 @@ public class SessionTrackerTests
     private static readonly DateTimeOffset T0 = new(2026, 9, 13, 10, 0, 0, TimeSpan.Zero);
 
     private static HookEvent Ev(string evt, string sid = "s1", AgentKind agent = AgentKind.Claude, string? cwd = @"C:\Users\demo\AIUsageMonitor",
-        string? notificationType = null, string? message = null, string? source = null, int plusSeconds = 0) =>
-        new(T0.AddSeconds(plusSeconds), agent, evt, sid, cwd, notificationType, message, source);
+        string? notificationType = null, string? message = null, string? source = null, int plusSeconds = 0,
+        string? agentId = null, string? agentType = null) =>
+        new(T0.AddSeconds(plusSeconds), agent, evt, sid, cwd, notificationType, message, source, agentId, agentType);
 
     [Fact]
     public void SessionStart_creates_an_idle_session_named_after_cwd()
@@ -207,5 +208,170 @@ public class SessionTrackerTests
         Assert.Equal(2, tracker.RemoveStale(TimeSpan.FromHours(12)).Count);
         Assert.Empty(tracker.Sessions);
         Assert.Equal(2, errors.Count);
+    }
+
+    [Fact]
+    public void Subagents_keep_the_session_working_after_stop_until_they_finish()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", agentType: "general-purpose", plusSeconds: 2));
+        tracker.Apply(Ev("SubagentStart", agentId: "a2", agentType: "general-purpose", plusSeconds: 3));
+        Assert.Equal("al lavoro · 2 agenti", tracker.Sessions.Single().PhaseLabel);
+
+        tracker.Apply(Ev("Stop", message: "Workflow lanciato.", plusSeconds: 4));
+        var s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Working, s.Phase);
+        Assert.True(s.AwaitingSubagents);
+        Assert.Equal("al lavoro · 2 agenti", s.PhaseLabel);
+
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 5));
+        Assert.Equal("al lavoro · 1 agente", tracker.Sessions.Single().PhaseLabel);
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase);
+
+        tracker.Apply(Ev("SubagentStop", agentId: "a2", plusSeconds: 6));
+        s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Equal("finito", s.PhaseLabel);
+        Assert.Equal("Workflow lanciato.", s.Message);
+        Assert.False(s.AwaitingSubagents);
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.Equal(2, s.Subagents!.Count);
+        Assert.All(s.Subagents, sub => Assert.Equal(SubagentPhase.Done, sub.Phase));
+        var last = changes.Last();
+        Assert.Equal(SessionPhase.Working, last.PreviousPhase); // the toast "finito" fires here, not at Stop
+    }
+
+    [Fact]
+    public void Subagents_finishing_before_stop_do_not_change_the_phase()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 2));
+        Assert.Equal("al lavoro", tracker.Sessions.Single().PhaseLabel);
+        tracker.Apply(Ev("Stop", plusSeconds: 3));
+        Assert.Equal("finito", tracker.Sessions.Single().PhaseLabel);
+    }
+
+    [Fact]
+    public void SubagentStop_never_goes_below_zero_and_SubagentStart_wakes_an_idle_session()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("Stop"));
+        tracker.Apply(Ev("SubagentStop", agentId: "ghost", plusSeconds: 1));
+        Assert.Equal(0, tracker.Sessions.Single().ActiveSubagents);
+        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 2));
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase);
+    }
+
+    [Fact]
+    public void New_prompt_clears_awaiting_flag_but_keeps_the_counter()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("Stop", plusSeconds: 2));
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 3));
+        var s = tracker.Sessions.Single();
+        Assert.False(s.AwaitingSubagents);
+        Assert.Equal(1, s.ActiveSubagents);
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 4));
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase); // still inside the new turn
+    }
+
+    [Fact]
+    public void Subagent_events_keep_the_state_the_tracker_does_not_own_and_record_the_agent()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", agentType: "Explore", plusSeconds: 1));
+        var s = tracker.Sessions.Single();
+        var sub = Assert.Single(s.Subagents!);
+        Assert.Equal("a1", sub.AgentId);
+        Assert.Equal("Explore", sub.AgentType);
+        Assert.Equal(SubagentPhase.Running, sub.Phase);
+        Assert.Equal(T0.AddSeconds(1), sub.StartedAt);
+        Assert.Null(sub.EndedAt);
+        Assert.Equal(TokenUsage.Zero, sub.Tokens);
+        Assert.Equal(T0.AddSeconds(1), s.LastSubagentEventAt);
+
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 2));
+        sub = Assert.Single(tracker.Sessions.Single().Subagents!);
+        Assert.Equal(SubagentPhase.Done, sub.Phase);
+        Assert.Equal(T0.AddSeconds(2), sub.EndedAt);
+        Assert.Equal("Explore", sub.AgentType);
+    }
+
+    [Fact]
+    public void Only_the_fifty_most_recent_finished_subagents_are_kept()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        for (var i = 0; i < 60; i++)
+        {
+            tracker.Apply(Ev("SubagentStart", agentId: "a" + i, plusSeconds: 1 + i * 2));
+            tracker.Apply(Ev("SubagentStop", agentId: "a" + i, plusSeconds: 2 + i * 2));
+        }
+        var subs = tracker.Sessions.Single().Subagents!;
+        Assert.Equal(50, subs.Count);
+        Assert.Equal("a10", subs[0].AgentId);
+        Assert.Equal("a59", subs[^1].AgentId);
+    }
+
+    [Fact]
+    public void Subagent_timeout_releases_a_stuck_session()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("Stop", message: "done", plusSeconds: 2));
+        clock.Advance(TimeSpan.FromMinutes(31));
+        var changes = tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30));
+        var s = Assert.Single(changes).Session;
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.Equal("done", s.Message);
+        Assert.Equal(SubagentPhase.Done, Assert.Single(s.Subagents!).Phase);
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30)));
+    }
+
+    [Fact]
+    public void Subagent_timeout_sweep_can_run_without_raising_changed()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("Stop", message: "done", plusSeconds: 2));
+        tracker.Changed += changes.Add;
+        clock.Advance(TimeSpan.FromMinutes(31));
+
+        tracker.SweepSubagentTimeoutsSilently(TimeSpan.FromMinutes(30));
+
+        Assert.Empty(changes);
+        var s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.False(s.AwaitingSubagents);
+    }
+
+    [Fact]
+    public void Subagent_timeout_leaves_a_session_that_is_still_working_in_working()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        clock.Advance(TimeSpan.FromMinutes(31));
+        var s = Assert.Single(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30))).Session;
+        Assert.Equal(SessionPhase.Working, s.Phase);
+        Assert.Equal("al lavoro", s.PhaseLabel);
+        Assert.Equal(0, s.ActiveSubagents);
     }
 }

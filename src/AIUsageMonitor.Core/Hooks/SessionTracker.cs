@@ -12,6 +12,9 @@ public sealed class SessionTracker
 {
     public const int MaxMessageLength = 120;
 
+    /// <summary>Finished subagents kept per session; older ones are dropped so a long session cannot grow without bound.</summary>
+    public const int MaxDoneSubagents = 50;
+
     private static readonly HashSet<string> NeedsInputNotifications = new(StringComparer.OrdinalIgnoreCase)
     {
         "permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog"
@@ -62,6 +65,9 @@ public sealed class SessionTracker
             return new SessionChange(SessionChangeKind.Removed, existing, existing.Phase);
         }
 
+        if (e.Event is "SubagentStart" or "SubagentStop")
+            return ApplySubagentEvent(e, key, existing);
+
         SessionPhase? phase = e.Event switch
         {
             "SessionStart" => existing?.Phase ?? SessionPhase.Idle,
@@ -85,6 +91,16 @@ public sealed class SessionTracker
             _ => existing?.Message
         };
 
+        // A Stop that lands while background subagents are still running keeps the session Working and
+        // remembers its message: the Idle transition (and the "finito" toast) waits for the last SubagentStop.
+        var awaiting = existing?.AwaitingSubagents ?? false;
+        if (e.Event == "UserPromptSubmit") awaiting = false;
+        if (e.Event == "Stop" && existing is { ActiveSubagents: > 0 })
+        {
+            phase = SessionPhase.Working;
+            awaiting = true;
+        }
+
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         // A `with` update on the existing record so state this state machine does not own (TranscriptPath,
         // Tokens, Subagents, and anything added later) survives every subsequent event instead of being
@@ -92,17 +108,138 @@ public sealed class SessionTracker
         var updated = existing is null
             ? new SessionState(
                 e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
-                phase.Value, message, e.Ts, e.Ts)
+                phase.Value, message, e.Ts, e.Ts, AwaitingSubagents: awaiting)
             : existing with
             {
                 DisplayName = DisplayNameFor(cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase.Value,
                 Message = message,
-                LastEventAt = e.Ts
+                LastEventAt = e.Ts,
+                AwaitingSubagents = awaiting
             };
         _sessions[key] = updated;
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
+    }
+
+    /// <summary>
+    /// SubagentStart/SubagentStop carry the parent session id plus the agent identity: they keep the per-session
+    /// subagent list up to date and defer the Idle transition of a Stop that arrived while agents were still running.
+    /// </summary>
+    private SessionChange ApplySubagentEvent(HookEvent e, (AgentKind Agent, string SessionId) key, SessionState? existing)
+    {
+        var subagents = UpsertSubagent(existing?.Subagents, e);
+        var running = subagents.Count(s => s.Phase == SubagentPhase.Running);
+        var phase = existing?.Phase ?? SessionPhase.Idle;
+        var awaiting = existing?.AwaitingSubagents ?? false;
+        var message = existing?.Message;
+
+        if (e.Event == "SubagentStart" && phase == SessionPhase.Idle) phase = SessionPhase.Working;
+        if (e.Event == "SubagentStop" && running == 0 && awaiting)
+        {
+            phase = SessionPhase.Idle;
+            awaiting = false;
+            message ??= "Turno completato";
+        }
+
+        var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
+        var updated = existing is null
+            ? new SessionState(
+                e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
+                phase, message, e.Ts, e.Ts,
+                Subagents: subagents, AwaitingSubagents: awaiting, LastSubagentEventAt: e.Ts)
+            : existing with
+            {
+                DisplayName = DisplayNameFor(cwd, e.SessionId),
+                Cwd = cwd,
+                Phase = phase,
+                Message = message,
+                LastEventAt = e.Ts,
+                Subagents = subagents,
+                AwaitingSubagents = awaiting,
+                LastSubagentEventAt = e.Ts
+            };
+        _sessions[key] = updated;
+        return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
+    }
+
+    /// <summary>Adds or updates the subagent with this agent id (a SubagentStop whose Start was never seen lands as Done).</summary>
+    private static IReadOnlyList<SubagentState> UpsertSubagent(IReadOnlyList<SubagentState>? current, HookEvent e)
+    {
+        var id = e.AgentId ?? string.Empty;
+        var started = e.Event == "SubagentStart";
+        var list = current is null ? [] : new List<SubagentState>(current);
+        var index = list.FindIndex(s => s.AgentId == id);
+        if (index >= 0)
+        {
+            var known = list[index];
+            // Task 10 adds HookEvent.AgentTranscriptPath (SubagentStop carries it): set TranscriptPath here when it lands.
+            list[index] = started
+                ? known with { AgentType = e.AgentType ?? known.AgentType, Phase = SubagentPhase.Running, StartedAt = e.Ts, EndedAt = null }
+                : known with { AgentType = e.AgentType ?? known.AgentType, Phase = SubagentPhase.Done, EndedAt = e.Ts };
+        }
+        else
+        {
+            list.Add(new SubagentState(
+                id, e.AgentType, started ? SubagentPhase.Running : SubagentPhase.Done,
+                e.Ts, started ? null : e.Ts, null, TokenUsage.Zero));
+        }
+        return TrimDone(list);
+    }
+
+    /// <summary>Keeps at most MaxDoneSubagents finished subagents, dropping the ones that finished first.</summary>
+    private static List<SubagentState> TrimDone(List<SubagentState> list)
+    {
+        var excess = list.Count(s => s.Phase == SubagentPhase.Done) - MaxDoneSubagents;
+        if (excess <= 0) return list;
+        foreach (var oldest in list.Where(s => s.Phase == SubagentPhase.Done)
+                                   .OrderBy(s => s.EndedAt ?? s.StartedAt)
+                                   .Take(excess)
+                                   .ToList())
+            list.Remove(oldest);
+        return list;
+    }
+
+    /// <summary>
+    /// Marks the subagents of every session that has heard nothing from them for <paramref name="timeout"/> as Done,
+    /// so a subagent that died without a SubagentStop cannot pin its session to "al lavoro" forever.
+    /// </summary>
+    public IReadOnlyList<SessionChange> SweepSubagentTimeouts(TimeSpan timeout)
+    {
+        List<SessionChange> changes;
+        lock (_gate) changes = SweepSubagentTimeoutsCore(timeout);
+        foreach (var change in changes) Raise(change);
+        return changes;
+    }
+
+    /// <summary>Sweeps the subagent timeouts without raising Changed (startup replay).</summary>
+    public void SweepSubagentTimeoutsSilently(TimeSpan timeout)
+    {
+        lock (_gate) SweepSubagentTimeoutsCore(timeout);
+    }
+
+    private List<SessionChange> SweepSubagentTimeoutsCore(TimeSpan timeout)
+    {
+        var changes = new List<SessionChange>();
+        var now = _clock.UtcNow;
+        foreach (var (key, session) in _sessions.ToList())
+        {
+            if (session.ActiveSubagents == 0 || session.LastSubagentEventAt is not { } last || now - last <= timeout) continue;
+
+            var subagents = TrimDone(session.Subagents!
+                .Select(s => s.Phase == SubagentPhase.Running ? s with { Phase = SubagentPhase.Done, EndedAt = now } : s)
+                .ToList());
+            var updated = session with
+            {
+                Phase = session.AwaitingSubagents ? SessionPhase.Idle : session.Phase,
+                Message = session.AwaitingSubagents ? session.Message ?? "Turno completato" : session.Message,
+                Subagents = subagents,
+                AwaitingSubagents = false
+            };
+            _sessions[key] = updated;
+            changes.Add(new SessionChange(SessionChangeKind.Updated, updated, session.Phase));
+        }
+        return changes;
     }
 
     /// <summary>Applies events without raising Changed (startup replay).</summary>
