@@ -152,8 +152,11 @@ Non si registra `PermissionRequest` per non interferire con il flusso dei permes
 
 - `HookInstaller.Install(agent)`: legge il file di configurazione, per ogni evento aggiunge un gruppo `{ "hooks": [ { "type": "command", "command": "node \"<path>\\hook.cjs\" <agent>", "timeout": 5 } ] }` solo se nessun comando esistente contiene la sottostringa `aiusagemonitor/hook.cjs` (confronto con separatori normalizzati). Prima di scrivere crea `~/.aiusagemonitor/backups/<nomefile>.<yyyyMMdd-HHmmss>.bak`. Riscrive il JSON con indentazione a 2 spazi preservando tutte le altre chiavi.
 - `HookInstaller.Remove(agent)`: elimina solo i gruppi il cui unico comando è quello dell'app; se un gruppo contiene anche altri comandi rimuove solo la voce propria. Backup anche qui.
-- `HookInstaller.Status(agent)`: `Installed`, `Partial` (alcuni eventi mancanti), `NotInstalled`, `ConfigMissing`.
+- `HookInstaller.Status(agent)`: `Installed`, `Partial` (alcuni eventi mancanti), `NotInstalled`, `ConfigMissing`, `ConfigInvalid`.
+- File di configurazione non parsabile **o con chiavi duplicate** (JSON valido per `JSON.parse`, che tiene l'ultima): stato `ConfigInvalid`, nessuna scrittura, messaggio con il percorso del file (§11).
 - Per Codex gli hook sono attivi per default; l'installer legge `config.toml` e, se trova `hooks = false`, lo segnala nello stato senza modificarlo.
+- Codex però esegue un gruppo di hook solo dopo l'approvazione dell'utente: `config.toml` tiene una sezione `[hooks.state.'<hooks.json>:<evento>:<gruppo>:<indice>']` con `trusted_hash = "sha256:..."` per ogni gruppo approvato. L'installer aggiunge sempre i propri gruppi **in coda** (così le chiavi posizionali dei gruppi già approvati restano valide), e finché manca il `trusted_hash` aggiunge allo stato e al report di `Install` il suggerimento `da approvare in Codex con /hooks`. Finché l'utente non approva, gli hook non partono e il notch non mostra sessioni Codex.
+- Caveat di `Remove` su Codex: togliere il nostro gruppo sposta l'indice dei gruppi aggiunti dall'utente dopo il nostro e invalida il loro `trusted_hash` (vanno riapprovati con `/hooks`).
 - Codex espone anche `PermissionRequest`, ma non viene registrato nella v1 per non interferire con il flusso di approvazione: resta come estensione futura per rilevare "attende input" su Codex.
 
 ### 7.4 Macchina a stati (per coppia agente + session_id)
