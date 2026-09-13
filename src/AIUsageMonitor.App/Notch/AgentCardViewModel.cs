@@ -58,7 +58,7 @@ public sealed class AgentCardViewModel : ObservableObject
             : snapshot.Status == UsageStatus.Ok ? null
             : snapshot.StatusMessage;
 
-        SyncWindows(snapshot?.Windows ?? Array.Empty<UsageWindow>(), now);
+        SyncWindows(snapshot?.Windows ?? Array.Empty<UsageWindow>(), snapshot?.Status ?? UsageStatus.NoData, now);
         SyncSessions(_services.Sessions.Sessions.Where(s => s.Agent == Agent).ToList(), now);
 
         var phase = _services.Sessions.AggregatePhase(Agent);
@@ -76,12 +76,12 @@ public sealed class AgentCardViewModel : ObservableObject
         foreach (var s in Sessions) s.Tick(now);
     }
 
-    private void SyncWindows(IReadOnlyList<UsageWindow> windows, DateTimeOffset now)
+    private void SyncWindows(IReadOnlyList<UsageWindow> windows, UsageStatus status, DateTimeOffset now)
     {
         for (var i = 0; i < windows.Count; i++)
         {
-            if (i < Windows.Count) Windows[i].Update(windows[i], now);
-            else Windows.Add(new WindowRowViewModel(windows[i], now));
+            if (i < Windows.Count) Windows[i].Update(windows[i], status, now);
+            else Windows.Add(new WindowRowViewModel(windows[i], status, now));
         }
         while (Windows.Count > windows.Count) Windows.RemoveAt(Windows.Count - 1);
     }
