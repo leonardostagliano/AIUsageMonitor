@@ -7,6 +7,9 @@ namespace AIUsageMonitor.Tests;
 
 public class HookEventPumpTests
 {
+    private static string SubagentLine(string evt, string sid, string agentId, DateTimeOffset ts) =>
+        $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"claude","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":null,"message":null,"source":null,"agent_id":"{{agentId}}","agent_type":"general-purpose"}""" + "\n";
+
     private static string Line(string evt, string sid, DateTimeOffset ts, string? notificationType = null) =>
         $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"claude","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":{{(notificationType is null ? "null" : $"\"{notificationType}\"")}},"message":null,"source":null}""" + "\n";
 
@@ -152,5 +155,92 @@ public class HookEventPumpTests
         clock.Explode = false;
         pump.Pump();
         Assert.Single(tracker.Sessions);
+    }
+
+    [Fact]
+    public void Start_releases_replayed_subagents_that_went_silent_without_toasting()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "s1", now.AddMinutes(-40)) +
+            SubagentLine("SubagentStart", "s1", "a1", now.AddMinutes(-40)) +
+            Line("Stop", "s1", now.AddMinutes(-40)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var raised = 0;
+        tracker.Changed += _ => raised++;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock);
+
+        pump.Start();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, session.Phase);
+        Assert.Equal(0, session.ActiveSubagents);
+        Assert.False(session.AwaitingSubagents);
+        Assert.Equal(0, raised);
+    }
+
+    [Fact]
+    public void Pump_releases_a_session_whose_subagents_went_silent()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "s1", now) +
+            SubagentLine("SubagentStart", "s1", "a1", now) +
+            Line("Stop", "s1", now));
+        pump.Pump();
+        Assert.Equal("al lavoro · 1 agente", tracker.Sessions.Single().PhaseLabel);
+
+        clock.Advance(TimeSpan.FromMinutes(31));
+        pump.Pump();
+
+        var last = changes.Last();
+        Assert.Equal(SessionChangeKind.Updated, last.Kind);
+        Assert.Equal(SessionPhase.Idle, last.Session.Phase);
+        Assert.Equal(0, last.Session.ActiveSubagents);
+        Assert.Equal("finito", last.Session.PhaseLabel);
+    }
+
+    [Fact]
+    public void Pump_keeps_the_session_working_before_the_subagent_timeout()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "s1", now) +
+            SubagentLine("SubagentStart", "s1", "a1", now) +
+            Line("Stop", "s1", now));
+        pump.Pump();
+
+        clock.Advance(TimeSpan.FromMinutes(29));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, session.Phase);
+        Assert.Equal(1, session.ActiveSubagents);
     }
 }

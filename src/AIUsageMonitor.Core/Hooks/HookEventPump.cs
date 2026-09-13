@@ -19,6 +19,9 @@ public sealed class HookEventPump : IDisposable
     public TimeSpan StaleSweepEvery { get; init; } = TimeSpan.FromMinutes(5);
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>How long a session waits for a subagent that never sent its SubagentStop before being released.</summary>
+    public TimeSpan SubagentTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
     /// <summary>Where unexpected failures go (the App wires a FileLogger): the pump never lets one escape a thread-pool callback.</summary>
     public Action<Exception>? OnError { get; init; }
 
@@ -42,6 +45,9 @@ public sealed class HookEventPump : IDisposable
                 var replayed = _reader.ReadAll(_clock.UtcNow - ReplayWindow);
                 _tracker.ApplySilently(replayed);
                 _tracker.RemoveStaleSilently(StaleAfter);
+                // A session whose subagents stopped reporting before the app started must not come back as
+                // "al lavoro · N agenti": release them here too, silently, so the replay toasts nothing.
+                _tracker.SweepSubagentTimeoutsSilently(SubagentTimeout);
                 _lastStaleSweep = _clock.UtcNow;
             }
             catch (Exception ex)
@@ -73,6 +79,9 @@ public sealed class HookEventPump : IDisposable
                 {
                     _lastStaleSweep = _clock.UtcNow;
                     _tracker.RemoveStale(StaleAfter);
+                    // Same cadence as the stale removal, on the sessions that survived it: a subagent that died
+                    // without a SubagentStop would otherwise pin its session to "al lavoro" until the 12 h sweep.
+                    _tracker.SweepSubagentTimeouts(SubagentTimeout);
                 }
             }
             catch (Exception ex)
