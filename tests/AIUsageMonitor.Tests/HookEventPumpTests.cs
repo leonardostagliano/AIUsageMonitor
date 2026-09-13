@@ -10,8 +10,21 @@ public class HookEventPumpTests
     private static string SubagentLine(string evt, string sid, string agentId, DateTimeOffset ts) =>
         $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"claude","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":null,"message":null,"source":null,"agent_id":"{{agentId}}","agent_type":"general-purpose"}""" + "\n";
 
-    private static string Line(string evt, string sid, DateTimeOffset ts, string? notificationType = null) =>
-        $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"claude","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":{{(notificationType is null ? "null" : $"\"{notificationType}\"")}},"message":null,"source":null}""" + "\n";
+    private static string Line(string evt, string sid, DateTimeOffset ts, string? notificationType = null, string agent = "claude") =>
+        $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"{{agent}}","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":{{(notificationType is null ? "null" : $"\"{notificationType}\"")}},"message":null,"source":null}""" + "\n";
+
+    /// <summary>Writes the rollout of a Codex child thread under the sessions directory the scanner reads.</summary>
+    private static void CodexChildRollout(AppPaths paths, string threadId, string parentThreadId, bool running, DateTimeOffset lastWrite)
+    {
+        var turn = running
+            ? """{"timestamp":"2026-09-13T11:59:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"""
+            : """{"timestamp":"2026-09-13T11:59:30.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"done"}}""";
+        var meta = $$$"""{"timestamp":"2026-09-13T11:58:00.000Z","type":"session_meta","payload":{"session_id":"{{{threadId}}}","parent_thread_id":"{{{parentThreadId}}}","cwd":"C:\\demo\\proj"}}""";
+        var file = Path.Combine(paths.CodexSessionsDir, $"rollout-{threadId}.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, meta + "\n" + turn + "\n");
+        File.SetLastWriteTimeUtc(file, lastWrite.UtcDateTime);
+    }
 
     [Fact]
     public void Start_replays_recent_events_silently_and_drops_stale_sessions()
@@ -242,5 +255,73 @@ public class HookEventPumpTests
         var session = Assert.Single(tracker.Sessions);
         Assert.Equal(SessionPhase.Working, session.Phase);
         Assert.Equal(1, session.ActiveSubagents);
+    }
+
+    [Fact]
+    public void Pump_synthesises_subagent_events_for_the_live_child_threads_of_a_codex_session()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            StaleSweepEvery = TimeSpan.Zero,
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+        pump.Start();
+
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now, agent: "codex") +
+            Line("Stop", "c1", now, agent: "codex"));
+        pump.Pump();
+
+        var working = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, working.Phase);
+        Assert.Equal("al lavoro · 1 agente", working.PhaseLabel);
+        Assert.Equal("child-1", Assert.Single(working.Subagents!).AgentId);
+        Assert.Equal(CodexSubagentScanner.SyntheticAgentType, working.Subagents!.Single().AgentType);
+
+        clock.Advance(TimeSpan.FromSeconds(30));
+        CodexChildRollout(paths, "child-1", "c1", running: false, clock.UtcNow);
+        pump.Pump();
+
+        var done = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Idle, done.Phase);
+        Assert.Equal(0, done.ActiveSubagents);
+        Assert.Equal("finito", done.PhaseLabel);
+        Assert.Equal(SessionPhase.Working, changes.Last().PreviousPhase);
+    }
+
+    [Fact]
+    public void Start_picks_up_codex_child_threads_without_toasting_the_replay()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now.AddMinutes(-2), agent: "codex") +
+            Line("Stop", "c1", now.AddMinutes(-1), agent: "codex"));
+        CodexChildRollout(paths, "child-1", "c1", running: true, now.AddSeconds(-20));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var raised = 0;
+        tracker.Changed += _ => raised++;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+
+        pump.Start();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.Working, session.Phase);
+        Assert.Equal(1, session.ActiveSubagents);
+        Assert.Equal(0, raised);
     }
 }

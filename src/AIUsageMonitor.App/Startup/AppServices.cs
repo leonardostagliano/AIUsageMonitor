@@ -63,7 +63,13 @@ public sealed class AppServices : IDisposable
         var resolver = new CodexSessionResolver(paths.CodexSessionsDir, Clock);
         Sessions = new SessionTracker(Clock, (agent, id) => agent == AgentKind.Codex ? resolver.ResolveCwd(id) : null) { OnError = ex => Log.Error("SessionTracker", ex) };
         Hooks = new HookInstaller(paths, Clock);
-        Pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), Sessions, paths, Clock) { OnError = ex => Log.Error("HookEventPump", ex) };
+        Pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), Sessions, paths, Clock)
+        {
+            OnError = ex => Log.Error("HookEventPump", ex),
+            // Fallback per i thread figli di Codex, che potrebbero non emettere SubagentStart/SubagentStop:
+            // lo scanner legge i rollout e la pump li trasforma negli stessi eventi del bridge.
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, Clock)
+        };
 
         Usage.UsageUpdated += _ => StateChanged?.Invoke();
         Sessions.Changed += _ => StateChanged?.Invoke();

@@ -1,4 +1,5 @@
 using AIUsageMonitor.Core.Infrastructure;
+using AIUsageMonitor.Core.Models;
 
 namespace AIUsageMonitor.Core.Hooks;
 
@@ -13,6 +14,8 @@ public sealed class HookEventPump : IDisposable
     private FileSystemWatcher? _watcher;
     private Timer? _poll;
     private DateTimeOffset _lastStaleSweep;
+    /// <summary>Child thread ids this pump has announced per Codex session: only these are stopped when they go quiet.</summary>
+    private readonly Dictionary<string, HashSet<string>> _synthesisedChildren = new(StringComparer.Ordinal);
 
     public TimeSpan ReplayWindow { get; init; } = TimeSpan.FromHours(24);
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromHours(12);
@@ -21,6 +24,12 @@ public sealed class HookEventPump : IDisposable
 
     /// <summary>How long a session waits for a subagent that never sent its SubagentStop before being released.</summary>
     public TimeSpan SubagentTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Fallback used when Codex does not fire SubagentStart/SubagentStop for its child threads: the scanner reads the
+    /// rollouts and the pump turns what it finds into the same events the hook bridge would have written. Null disables it.
+    /// </summary>
+    public CodexSubagentScanner? CodexSubagents { get; init; }
 
     /// <summary>Where unexpected failures go (the App wires a FileLogger): the pump never lets one escape a thread-pool callback.</summary>
     public Action<Exception>? OnError { get; init; }
@@ -48,6 +57,9 @@ public sealed class HookEventPump : IDisposable
                 // A session whose subagents stopped reporting before the app started must not come back as
                 // "al lavoro · N agenti": release them here too, silently, so the replay toasts nothing.
                 _tracker.SweepSubagentTimeoutsSilently(SubagentTimeout);
+                // A Codex child thread that is running right now must be picked up before the first Changed is
+                // raised, or the replayed session would flip Idle → Working → Idle and toast a turn it never ran.
+                SyncCodexSubagents(silent: true);
                 _lastStaleSweep = _clock.UtcNow;
             }
             catch (Exception ex)
@@ -82,6 +94,7 @@ public sealed class HookEventPump : IDisposable
                     // Same cadence as the stale removal, on the sessions that survived it: a subagent that died
                     // without a SubagentStop would otherwise pin its session to "al lavoro" until the 12 h sweep.
                     _tracker.SweepSubagentTimeouts(SubagentTimeout);
+                    SyncCodexSubagents(silent: false);
                 }
             }
             catch (Exception ex)
@@ -92,6 +105,46 @@ public sealed class HookEventPump : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Turns the live child threads of every Codex session into SubagentStart/SubagentStop events, so the counter,
+    /// the deferred Idle and the timeout live in the tracker alone. Only the children this pump announced are ever
+    /// stopped here: a child reported by a real Codex hook stays under the hook's control.
+    /// </summary>
+    private void SyncCodexSubagents(bool silent)
+    {
+        if (CodexSubagents is null) return;
+
+        var sessions = _tracker.Sessions.Where(s => s.Agent == AgentKind.Codex).ToList();
+        var live = sessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
+        foreach (var gone in _synthesisedChildren.Keys.Where(id => !live.Contains(id)).ToList())
+            _synthesisedChildren.Remove(gone);
+
+        var now = _clock.UtcNow;
+        foreach (var session in sessions)
+        {
+            if (!_synthesisedChildren.TryGetValue(session.SessionId, out var announced))
+                _synthesisedChildren[session.SessionId] = announced = new HashSet<string>(StringComparer.Ordinal);
+
+            var active = CodexSubagents.ActiveChildren(session.SessionId).ToHashSet(StringComparer.Ordinal);
+            var events = new List<HookEvent>();
+            foreach (var child in active.Where(c => !announced.Contains(c)))
+                events.Add(SyntheticSubagentEvent("SubagentStart", session, child, now));
+            foreach (var child in announced.Where(c => !active.Contains(c)).ToList())
+                events.Add(SyntheticSubagentEvent("SubagentStop", session, child, now));
+
+            announced.Clear();
+            foreach (var child in active) announced.Add(child);
+
+            if (events.Count == 0) continue;
+            if (silent) _tracker.ApplySilently(events);
+            else foreach (var e in events) _tracker.Apply(e);
+        }
+    }
+
+    private static HookEvent SyntheticSubagentEvent(string name, SessionState session, string childThreadId, DateTimeOffset ts) =>
+        new(ts, session.Agent, name, session.SessionId, session.Cwd, null, null, null,
+            childThreadId, CodexSubagentScanner.SyntheticAgentType);
 
     private void Report(Exception ex)
     {
