@@ -13,7 +13,14 @@ public sealed class NotchViewModel : ObservableObject
     private readonly AppServices _services;
     private readonly DispatcherTimer _tick;
 
+    private double _tabIconSize = 18;
+    private double _tabRowHeight = 36;
+
     public ObservableCollection<AgentCardViewModel> Agents { get; } = new();
+
+    public double TabIconSize { get => _tabIconSize; private set => Set(ref _tabIconSize, value); }
+
+    public double TabRowHeight { get => _tabRowHeight; private set => Set(ref _tabRowHeight, value); }
 
     public NotchViewModel(AppServices services)
     {
@@ -29,10 +36,19 @@ public sealed class NotchViewModel : ObservableObject
     private void Rebuild()
     {
         var enabled = _services.EnabledAgents().ToList();
-        if (Agents.Select(a => a.Agent).SequenceEqual(enabled)) { Refresh(); return; }
+        if (Agents.Select(a => a.Agent).SequenceEqual(enabled)) { Refresh(); ApplyCompact(); return; }
         Agents.Clear();
         foreach (var agent in enabled)
             Agents.Add(new AgentCardViewModel(agent, _services, IconFor(agent)));
+        ApplyCompact();
+    }
+
+    /// <summary>La modalita' compatta riduce icona e altezza di riga della linguetta chiusa.</summary>
+    private void ApplyCompact()
+    {
+        var compact = _services.Settings.Current.Compact;
+        TabIconSize = compact ? 14 : 18;
+        TabRowHeight = compact ? 30 : 36;
     }
 
     private void Refresh()

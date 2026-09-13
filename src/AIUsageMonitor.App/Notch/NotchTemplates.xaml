@@ -2,8 +2,11 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <DataTemplate x:Key="TabItemTemplate">
-    <StackPanel Height="36" Width="28">
-      <Path Data="{Binding Icon}" Fill="White" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,2,0,3"/>
+    <StackPanel Height="{Binding DataContext.TabRowHeight, RelativeSource={RelativeSource AncestorType=Window}}" Width="28">
+      <Path Data="{Binding Icon}" Fill="White"
+            Width="{Binding DataContext.TabIconSize, RelativeSource={RelativeSource AncestorType=Window}}"
+            Height="{Binding DataContext.TabIconSize, RelativeSource={RelativeSource AncestorType=Window}}"
+            Stretch="Uniform" HorizontalAlignment="Center" Margin="0,2,0,3"/>
       <Ellipse Width="8" Height="8" Fill="{Binding AggregateBrush}" Stroke="{Binding AggregateStroke}" StrokeThickness="1" HorizontalAlignment="Center"/>
     </StackPanel>
   </DataTemplate>
