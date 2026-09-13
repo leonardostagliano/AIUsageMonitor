@@ -63,16 +63,25 @@ public sealed class AppServices : IDisposable
         var resolver = new CodexSessionResolver(paths.CodexSessionsDir, Clock);
         Sessions = new SessionTracker(Clock, (agent, id) => agent == AgentKind.Codex ? resolver.ResolveCwd(id) : null) { OnError = ex => Log.Error("SessionTracker", ex) };
         Hooks = new HookInstaller(paths, Clock);
+        var tokens = new AppTokenSource(paths, Clock);
         Pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), Sessions, paths, Clock)
         {
             OnError = ex => Log.Error("HookEventPump", ex),
             // Fallback per i thread figli di Codex, che potrebbero non emettere SubagentStart/SubagentStop:
             // lo scanner legge i rollout e la pump li trasforma negli stessi eventi del bridge.
-            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, Clock)
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, Clock),
+            // Totali dei token di sessione e subagenti: tutta la sua IO gira sul thread della pump.
+            TokenSource = tokens
         };
 
         Usage.UsageUpdated += _ => StateChanged?.Invoke();
-        Sessions.Changed += _ => StateChanged?.Invoke();
+        // Removed arriva dallo sweep della pump, cioe' dallo stesso thread che chiama il token source: e' il punto
+        // giusto per liberare l'offset e i requestId del transcript di una sessione che non esiste piu'.
+        Sessions.Changed += change =>
+        {
+            if (change.Kind == SessionChangeKind.Removed) tokens.Forget(change.Session);
+            StateChanged?.Invoke();
+        };
         Settings.Changed += _ => { RefreshAll(); StateChanged?.Invoke(); };
     }
 
