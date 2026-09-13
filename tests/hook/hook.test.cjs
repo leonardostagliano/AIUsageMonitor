@@ -121,6 +121,49 @@ test('truncation never leaves a lone surrogate', () => {
   }
 });
 
+test('SessionStart carries a host object read from the environment and ppid', () => {
+  const saved = { HERDR_PANE_ID: process.env.HERDR_PANE_ID, WT_SESSION: process.env.WT_SESSION, TERM_PROGRAM: process.env.TERM_PROGRAM, VSCODE_PID: process.env.VSCODE_PID };
+  try {
+    process.env.HERDR_PANE_ID = 'w15:p1';
+    process.env.WT_SESSION = '4b2c1234-0000-0000-0000-000000000000';
+    delete process.env.TERM_PROGRAM;
+    delete process.env.VSCODE_PID;
+    const obj = JSON.parse(buildLine('claude', { hook_event_name: 'SessionStart', session_id: 's1', cwd: '/w' }));
+    assert.ok(Number.isInteger(obj.host.ppid) && obj.host.ppid > 0);
+    assert.equal(obj.host.herdr_pane, 'w15:p1');
+    assert.equal(obj.host.wt_session, '4b2c1234-0000-0000-0000-000000000000');
+    assert.equal(obj.host.term_program, null);
+    assert.equal(obj.host.vscode_pid, null);
+
+    const prompt = JSON.parse(buildLine('claude', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/w' }));
+    assert.equal(prompt.host.herdr_pane, 'w15:p1');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test('host is null for events other than SessionStart/UserPromptSubmit', () => {
+  const obj = JSON.parse(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1', cwd: '/w' }));
+  assert.equal(obj.host, null);
+});
+
+test('a non-numeric VSCODE_PID maps to a null vscode_pid, a numeric one is parsed', () => {
+  const saved = process.env.VSCODE_PID;
+  try {
+    process.env.VSCODE_PID = 'not-a-number';
+    const nonNumeric = JSON.parse(buildLine('claude', { hook_event_name: 'SessionStart', session_id: 's1' }));
+    assert.equal(nonNumeric.host.vscode_pid, null);
+
+    process.env.VSCODE_PID = '4242';
+    const numeric = JSON.parse(buildLine('claude', { hook_event_name: 'SessionStart', session_id: 's1' }));
+    assert.equal(numeric.host.vscode_pid, 4242);
+  } finally {
+    if (saved === undefined) delete process.env.VSCODE_PID; else process.env.VSCODE_PID = saved;
+  }
+});
+
 test('truncation keeps a complete surrogate pair that fits', () => {
   const obj = JSON.parse(buildLine('codex', {
     hook_event_name: 'Stop', session_id: 's5',

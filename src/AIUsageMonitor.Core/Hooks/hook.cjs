@@ -33,6 +33,13 @@ function buildLine(agent, payload) {
   const isSubagentEvent = event === 'SubagentStart' || event === 'SubagentStop';
   if (payload.agent_id && !isSubagentEvent) return null; // fired inside a subagent's own context
   const message = payload.message ?? payload.last_assistant_message ?? payload.error ?? null;
+  const host = (event === 'SessionStart' || event === 'UserPromptSubmit') ? {
+    ppid: Number.isInteger(process.ppid) ? process.ppid : null,
+    herdr_pane: str(process.env.HERDR_PANE_ID),
+    wt_session: str(process.env.WT_SESSION),
+    term_program: str(process.env.TERM_PROGRAM),
+    vscode_pid: process.env.VSCODE_PID && /^\d+$/.test(process.env.VSCODE_PID) ? Number(process.env.VSCODE_PID) : null,
+  } : null;
   return JSON.stringify({
     ts: new Date().toISOString(),
     agent,
@@ -46,6 +53,7 @@ function buildLine(agent, payload) {
     agent_type: isSubagentEvent ? str(payload.agent_type) : null,
     transcript_path: str(payload.transcript_path),
     agent_transcript_path: event === 'SubagentStop' ? str(payload.agent_transcript_path) : null,
+    host,
   });
 }
 

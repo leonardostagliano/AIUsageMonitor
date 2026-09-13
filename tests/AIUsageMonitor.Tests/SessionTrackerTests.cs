@@ -10,9 +10,10 @@ public class SessionTrackerTests
 
     private static HookEvent Ev(string evt, string sid = "s1", AgentKind agent = AgentKind.Claude, string? cwd = @"C:\Users\demo\AIUsageMonitor",
         string? notificationType = null, string? message = null, string? source = null, int plusSeconds = 0,
-        string? agentId = null, string? agentType = null, string? transcriptPath = null, string? agentTranscriptPath = null) =>
+        string? agentId = null, string? agentType = null, string? transcriptPath = null, string? agentTranscriptPath = null,
+        HostInfo? host = null) =>
         new(T0.AddSeconds(plusSeconds), agent, evt, sid, cwd, notificationType, message, source, agentId, agentType,
-            transcriptPath, agentTranscriptPath);
+            transcriptPath, agentTranscriptPath, host);
 
     [Fact]
     public void SessionStart_creates_an_idle_session_named_after_cwd()
@@ -25,6 +26,35 @@ public class SessionTrackerTests
         Assert.Equal(SessionPhase.Idle, s.Phase);
         Assert.Equal("pronto", s.PhaseLabel);
         Assert.Equal(T0, s.StartedAt);
+    }
+
+    [Fact]
+    public void Host_is_stored_on_SessionStart_kept_through_Stop_and_replaced_by_a_later_UserPromptSubmit()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var pane1 = new HostInfo(24716, "w15:p1", "wt-guid", null, null);
+        tracker.Apply(Ev("SessionStart", host: pane1));
+        Assert.Equal(pane1, tracker.Sessions.Single().Host);
+
+        // Stop carries no host: the one already stored must survive.
+        tracker.Apply(Ev("Stop", plusSeconds: 1));
+        Assert.Equal(pane1, tracker.Sessions.Single().Host);
+
+        var pane2 = new HostInfo(1234, "w2:p3", null, "vscode", 555);
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 2, host: pane2));
+        Assert.Equal(pane2, tracker.Sessions.Single().Host);
+    }
+
+    [Fact]
+    public void Host_survives_a_SubagentStart_and_SubagentStop_which_carry_none()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var pane = new HostInfo(24716, "w15:p1", "wt-guid", null, null);
+        tracker.Apply(Ev("SessionStart", host: pane));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        Assert.Equal(pane, tracker.Sessions.Single().Host);
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 2));
+        Assert.Equal(pane, tracker.Sessions.Single().Host);
     }
 
     [Fact]

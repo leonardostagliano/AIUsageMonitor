@@ -108,10 +108,11 @@ public sealed class SessionTracker
         // A `with` update on the existing record so state this state machine does not own (Tokens, Subagents,
         // and anything added later) survives every subsequent event instead of being silently reset by a
         // positional rebuild.
+        var host = e.Host ?? existing?.Host;
         var updated = existing is null
             ? new SessionState(
                 e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
-                phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, AwaitingSubagents: awaiting)
+                phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, AwaitingSubagents: awaiting, Host: host)
             : existing with
             {
                 DisplayName = DisplayNameFor(cwd, e.SessionId),
@@ -120,7 +121,8 @@ public sealed class SessionTracker
                 Message = message,
                 LastEventAt = e.Ts,
                 TranscriptPath = transcriptPath,
-                AwaitingSubagents = awaiting
+                AwaitingSubagents = awaiting,
+                Host = host
             };
         _sessions[key] = updated;
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
@@ -164,11 +166,12 @@ public sealed class SessionTracker
         }
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
+        var host = e.Host ?? existing?.Host;
         var updated = existing is null
             ? new SessionState(
                 e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
                 phase, message, e.Ts, e.Ts,
-                Subagents: subagents, AwaitingSubagents: awaiting, LastSubagentEventAt: e.Ts)
+                Subagents: subagents, AwaitingSubagents: awaiting, LastSubagentEventAt: e.Ts, Host: host)
             : existing with
             {
                 DisplayName = DisplayNameFor(cwd, e.SessionId),
@@ -178,7 +181,8 @@ public sealed class SessionTracker
                 LastEventAt = e.Ts,
                 Subagents = subagents,
                 AwaitingSubagents = awaiting,
-                LastSubagentEventAt = e.Ts
+                LastSubagentEventAt = e.Ts,
+                Host = host
             };
         _sessions[key] = updated;
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);

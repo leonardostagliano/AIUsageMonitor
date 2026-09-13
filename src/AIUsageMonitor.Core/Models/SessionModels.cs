@@ -15,6 +15,9 @@ public sealed record TokenUsage(long Input, long Output, long CacheRead, long Ca
         new(a.Input + b.Input, a.Output + b.Output, a.CacheRead + b.CacheRead, a.CacheWrite + b.CacheWrite);
 }
 
+/// <summary>Terminal host of a session, as read by the hook from its own environment and parent pid.</summary>
+public sealed record HostInfo(int? Ppid, string? HerdrPane, string? WtSession, string? TermProgram, int? VscodePid);
+
 public enum SubagentPhase { Running, Done }
 
 /// <summary>One background subagent or workflow agent spawned by a session (Agent tool or workflow).</summary>
@@ -42,7 +45,9 @@ public sealed record SessionState(
     // A Stop that arrived while subagents were still running: the Idle transition waits for them.
     bool AwaitingSubagents = false,
     // Timestamp of the last SubagentStart/SubagentStop, used by the timeout sweep.
-    DateTimeOffset? LastSubagentEventAt = null)
+    DateTimeOffset? LastSubagentEventAt = null,
+    // Terminal host of the session, from the latest SessionStart/UserPromptSubmit that carried one.
+    HostInfo? Host = null)
 {
     /// <summary>Italian label shown in the UI. Idle is "pronto" before the first completed turn, "finito" after.</summary>
     public string PhaseLabel => Phase switch
@@ -78,4 +83,5 @@ public sealed record HookEvent(
     string? AgentId = null,
     string? AgentType = null,
     string? TranscriptPath = null,
-    string? AgentTranscriptPath = null);
+    string? AgentTranscriptPath = null,
+    HostInfo? Host = null);

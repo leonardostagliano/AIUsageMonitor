@@ -25,7 +25,8 @@ public static class HookEventParser
             return new HookEvent(ts, agent, evt, sessionId,
                 GetString(root, "cwd"), GetString(root, "notification_type"), GetString(root, "message"), GetString(root, "source"),
                 GetString(root, "agent_id"), GetString(root, "agent_type"),
-                GetString(root, "transcript_path"), GetString(root, "agent_transcript_path"));
+                GetString(root, "transcript_path"), GetString(root, "agent_transcript_path"),
+                GetHost(root));
         }
         catch (JsonException)
         {
@@ -33,6 +34,17 @@ public static class HookEventParser
         }
     }
 
+    private static HostInfo? GetHost(JsonElement root)
+    {
+        if (!root.TryGetProperty("host", out var host) || host.ValueKind != JsonValueKind.Object) return null;
+        return new HostInfo(
+            GetInt32(host, "ppid"), GetString(host, "herdr_pane"), GetString(host, "wt_session"),
+            GetString(host, "term_program"), GetInt32(host, "vscode_pid"));
+    }
+
     private static string? GetString(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+    private static int? GetInt32(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v) ? v : null;
 }

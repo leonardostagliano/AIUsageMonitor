@@ -54,6 +54,38 @@ public class HookEventReaderTests
     public void Parse_rejects_invalid_lines(string line) => Assert.Null(HookEventParser.Parse(line));
 
     [Fact]
+    public void Parse_reads_the_full_host_object()
+    {
+        var ev = HookEventParser.Parse("""{"ts":"2026-09-13T10:15:02Z","agent":"claude","event":"SessionStart","session_id":"s1","host":{"ppid":24716,"herdr_pane":"w15:p1","wt_session":"4b2c","term_program":null,"vscode_pid":null}}""")!;
+        Assert.NotNull(ev.Host);
+        Assert.Equal(24716, ev.Host!.Ppid);
+        Assert.Equal("w15:p1", ev.Host.HerdrPane);
+        Assert.Equal("4b2c", ev.Host.WtSession);
+        Assert.Null(ev.Host.TermProgram);
+        Assert.Null(ev.Host.VscodePid);
+    }
+
+    [Fact]
+    public void Parse_reads_a_partial_host_object_leaving_missing_keys_null()
+    {
+        var ev = HookEventParser.Parse("""{"ts":"2026-09-13T10:15:02Z","agent":"claude","event":"UserPromptSubmit","session_id":"s1","host":{"term_program":"vscode","vscode_pid":4242}}""")!;
+        Assert.NotNull(ev.Host);
+        Assert.Null(ev.Host!.Ppid);
+        Assert.Null(ev.Host.HerdrPane);
+        Assert.Null(ev.Host.WtSession);
+        Assert.Equal("vscode", ev.Host.TermProgram);
+        Assert.Equal(4242, ev.Host.VscodePid);
+    }
+
+    [Fact]
+    public void Parse_maps_a_null_or_missing_or_non_object_host_to_null()
+    {
+        Assert.Null(HookEventParser.Parse("""{"ts":"2026-09-13T10:15:02Z","agent":"claude","event":"Stop","session_id":"s1","host":null}""")!.Host);
+        Assert.Null(HookEventParser.Parse(Line1)!.Host);
+        Assert.Null(HookEventParser.Parse("""{"ts":"2026-09-13T10:15:02Z","agent":"claude","event":"Stop","session_id":"s1","host":"not-an-object"}""")!.Host);
+    }
+
+    [Fact]
     public void ReadNew_returns_only_complete_lines_appended_since_last_call()
     {
         using var dir = new TempDir();
