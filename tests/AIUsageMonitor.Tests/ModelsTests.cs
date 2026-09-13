@@ -55,6 +55,38 @@ public class ModelsTests
     }
 
     [Fact]
+    public void TokenUsage_total_sums_all_buckets_and_operator_adds_componentwise()
+    {
+        var a = new TokenUsage(1, 2, 3, 4);
+        var b = new TokenUsage(10, 20, 30, 40);
+        Assert.Equal(10, a.Total);
+        Assert.Equal(new TokenUsage(11, 22, 33, 44), a + b);
+        Assert.Equal(TokenUsage.Zero, new TokenUsage(0, 0, 0, 0));
+    }
+
+    [Fact]
+    public void ActiveSubagents_counts_only_running_and_SubagentTokens_sums_all()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var running = new SubagentState("a1", "general-purpose", SubagentPhase.Running, now, null, null, new TokenUsage(1, 1, 0, 0));
+        var done = new SubagentState("a2", "workflow", SubagentPhase.Done, now, now, "path", new TokenUsage(2, 2, 0, 0));
+        var session = new SessionState(AgentKind.Claude, "s", "demo", null, SessionPhase.Working, null, now, now,
+            Subagents: [running, done]);
+
+        Assert.Equal(1, session.ActiveSubagents);
+        Assert.Equal(new TokenUsage(3, 3, 0, 0), session.SubagentTokens);
+    }
+
+    [Fact]
+    public void ActiveSubagents_and_SubagentTokens_are_zero_when_no_subagents()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var session = new SessionState(AgentKind.Claude, "s", "demo", null, SessionPhase.Idle, null, now, now);
+        Assert.Equal(0, session.ActiveSubagents);
+        Assert.Equal(TokenUsage.Zero, session.SubagentTokens);
+    }
+
+    [Fact]
     public void AppPaths_are_rooted_on_the_given_dirs()
     {
         var p = new AppPaths(@"C:\home", @"C:\lad");
