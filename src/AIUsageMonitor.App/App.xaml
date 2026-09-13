@@ -7,6 +7,8 @@
       <ResourceDictionary.MergedDictionaries>
         <ResourceDictionary Source="Assets/Icons.xaml"/>
         <ResourceDictionary Source="Assets/Theme.xaml"/>
+        <!-- Dopo Theme.xaml: Controls.xaml risolve i pennelli della palette con StaticResource. -->
+        <ResourceDictionary Source="Assets/Controls.xaml"/>
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Application.Resources>

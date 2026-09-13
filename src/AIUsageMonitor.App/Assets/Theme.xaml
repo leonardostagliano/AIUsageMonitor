@@ -11,6 +11,16 @@
   <SolidColorBrush x:Key="Grey" Color="#FF8B8B93"/>
   <SolidColorBrush x:Key="Badge" Color="#22FFFFFF"/>
 
+  <!-- Superfici e accenti dei controlli scuri (Controls.xaml). I rapporti di contrasto sono fissati da ColorContrastTests. -->
+  <SolidColorBrush x:Key="Surface" Color="#FF2A2A30"/>
+  <SolidColorBrush x:Key="SurfaceHover" Color="#FF3A3A42"/>
+  <SolidColorBrush x:Key="SurfacePressed" Color="#FF45454E"/>
+  <SolidColorBrush x:Key="WindowBackground" Color="#FF1B1B1F"/>
+  <SolidColorBrush x:Key="Accent" Color="#FF3FB950"/>
+  <SolidColorBrush x:Key="AccentText" Color="#FF0B1A10"/>
+  <SolidColorBrush x:Key="TextDisabled" Color="#FF7A7A82"/>
+  <SolidColorBrush x:Key="Focus" Color="#FF7AA2F7"/>
+
   <Style TargetType="TextBlock">
     <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
     <Setter Property="FontSize" Value="12"/>

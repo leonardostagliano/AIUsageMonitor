@@ -51,6 +51,9 @@ public partial class App : Application
             _services.Start();
             // Dopo Start(): il replay silenzioso della pump e' gia' finito, quindi la cronologia non genera toast.
             _toasts = new ToastService(_services, (title, text, icon) => UiDispatcher.Post(() => _tray?.ShowBalloon(title, text, icon)));
+
+            // Argomento di debug: apre subito le impostazioni, utile per verificare l'aspetto senza passare dal tray.
+            if (e.Args.Contains("--settings")) SettingsWindow.ShowSingleton(_services);
         }
         catch (Exception ex)
         {
