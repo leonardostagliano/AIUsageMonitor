@@ -331,6 +331,36 @@ public class SessionTrackerTests
         var s = tracker.Sessions.Single();
         Assert.Equal(SessionPhase.Error, s.Phase);
         Assert.Equal("Errore API", s.Message);
+        // The phase survives, but the deferred Stop is spent: keeping the flag with no running agent left
+        // would latch it forever (the timeout sweep only looks at sessions with running subagents).
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.False(s.AwaitingSubagents);
+    }
+
+    [Fact]
+    public void A_deferred_stop_spent_on_an_error_does_not_fake_a_later_finito()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("Stop", message: "Workflow lanciato.", plusSeconds: 2));
+        tracker.Apply(Ev("StopFailure", message: "Errore API", plusSeconds: 3));
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 4));
+        Assert.False(tracker.Sessions.Single().AwaitingSubagents);
+
+        // With the counter back to zero the sweep never visits this session, so a stale flag could not be
+        // cleared by anything: the next agent of the same turn would end on a "finito" no Stop announced.
+        clock.Advance(TimeSpan.FromMinutes(31));
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30)));
+
+        tracker.Apply(Ev("PostToolUse", plusSeconds: 5));
+        tracker.Apply(Ev("SubagentStart", agentId: "a2", plusSeconds: 6));
+        tracker.Apply(Ev("SubagentStop", agentId: "a2", plusSeconds: 7));
+        var after = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Working, after.Phase);
+        Assert.Equal("al lavoro", after.PhaseLabel);
+        Assert.False(after.AwaitingSubagents);
     }
 
     [Fact]

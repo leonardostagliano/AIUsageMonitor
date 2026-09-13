@@ -142,13 +142,19 @@ public sealed class SessionTracker
             phase = SessionPhase.Working;
             awaiting = true;
         }
-        // Only a Working session goes Idle here: an error or a pending input that arrived while the agents
-        // were still running must survive the last SubagentStop.
-        if (e.Event == "SubagentStop" && running == 0 && awaiting && phase == SessionPhase.Working)
+        if (e.Event == "SubagentStop" && running == 0 && awaiting)
         {
-            phase = SessionPhase.Idle;
+            // The deferred Stop is spent as soon as the last agent finishes, exactly like the timeout sweep:
+            // keeping the flag with no running agent left would latch it forever (the sweep only visits
+            // sessions whose counter is above zero) and fake a "finito" at the end of a later agent.
             awaiting = false;
-            message ??= "Turno completato";
+            // Only a Working session goes Idle here: an error or a pending input that arrived while the agents
+            // were still running must survive the last SubagentStop.
+            if (phase == SessionPhase.Working)
+            {
+                phase = SessionPhase.Idle;
+                message ??= "Turno completato";
+            }
         }
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
