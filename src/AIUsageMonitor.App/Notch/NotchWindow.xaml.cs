@@ -18,6 +18,11 @@ public partial class NotchWindow : Window, INotchHost
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+    private const int MDT_EFFECTIVE_DPI = 0;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
     private static readonly Duration AnimationDuration = new(TimeSpan.FromMilliseconds(150));
 
     private readonly AppServices _services;
@@ -147,21 +152,58 @@ public partial class NotchWindow : Window, INotchHost
         Reposition();
     }
 
-    /// <summary>Ancora la finestra al bordo destro del monitor configurato, centrata verticalmente piu' l'offset configurato.</summary>
+    /// <summary>
+    /// Ancora la finestra al bordo destro del monitor configurato, centrata verticalmente piu' l'offset configurato.
+    /// La scala DPI e' quella del monitor di destinazione, non di quello su cui la finestra si trova ora: sono diverse
+    /// appena <c>MonitorIndex</c> punta a uno schermo con un fattore di scala differente. Per lo stesso motivo la
+    /// posizione viene applicata in pixel fisici con <c>SetWindowPos</c> invece che via <c>Left</c>/<c>Top</c>, che WPF
+    /// convertirebbe in pixel usando la scala del monitor corrente, spedendo la finestra fuori da ogni schermo.
+    /// Lo spostamento genera un WM_DPICHANGED: l'handler <c>DpiChanged</c> richiama questo metodo come seconda passata
+    /// quando la finestra e' ormai ridimensionata con la scala di destinazione.
+    /// </summary>
     public void Reposition()
     {
         var settings = _services.Settings.Current;
         var screens = WinForms.Screen.AllScreens;
         if (screens.Length == 0) return;
         var screen = settings.MonitorIndex < screens.Length ? screens[settings.MonitorIndex] : WinForms.Screen.PrimaryScreen ?? screens[0];
-        var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
         var area = screen.WorkingArea;
+        var scale = GetScaleFor(area);
 
         PanelScroll.MaxHeight = Math.Max(120, area.Height / scale * 0.8 - 60);
         var height = ActualHeight > 0 ? ActualHeight : MinHeight;
-        var (left, top) = NotchPlacement.Compute(area.Left, area.Top, area.Width, area.Height, scale, Width, height, settings.VerticalOffset);
-        Left = left;
-        Top = top;
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            // Prima di OnSourceInitialized non c'e' un HWND: si ripiega su Left/Top, tanto Loaded richiama Reposition.
+            var (leftDip, topDip) = NotchPlacement.Compute(area.Left, area.Top, area.Width, area.Height, scale, Width, height, settings.VerticalOffset);
+            Left = leftDip;
+            Top = topDip;
+            return;
+        }
+
+        // Compute in pixel fisici: scala 1 sull'area (gia' in pixel) e misure della finestra convertite con la scala di destinazione.
+        var (left, top) = NotchPlacement.Compute(
+            area.Left, area.Top, area.Width, area.Height,
+            1.0, Width * scale, height * scale, settings.VerticalOffset * scale);
+        SetWindowPos(handle, IntPtr.Zero, (int)Math.Round(left), (int)Math.Round(top), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    /// <summary>Scala DPI effettiva del monitor che contiene l'area indicata; ripiega sulla scala della finestra corrente.</summary>
+    private double GetScaleFor(System.Drawing.Rectangle area)
+    {
+        var centre = new POINT { X = area.Left + area.Width / 2, Y = area.Top + area.Height / 2 };
+        var monitor = MonitorFromPoint(centre, MONITOR_DEFAULTTONEAREST);
+        if (monitor != IntPtr.Zero && GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out var dpiX, out _) == 0 && dpiX > 0)
+            return dpiX / 96.0;
+        return VisualTreeHelper.GetDpi(this).DpiScaleX;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
     }
 
     [DllImport("user32.dll")]
@@ -169,4 +211,14 @@ public partial class NotchWindow : Window, INotchHost
 
     [DllImport("user32.dll")]
     private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    [DllImport("Shcore.dll")]
+    private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 }
