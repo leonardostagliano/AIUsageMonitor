@@ -261,12 +261,16 @@ public sealed class HookInstaller
             for (var g = 0; g < groups.Count; g++)
             {
                 if (groups[g] is not JsonObject group || group["hooks"] is not JsonArray commands || !commands.Any(IsOurs)) continue;
-                var prefix = $"{file}:{registration.Event}:{g}:";
+                var prefix = $"{file}:{CodexStateEventName(registration.Event)}:{g}:";
                 if (!trusted.Any(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) return false;
             }
         }
         return true;
     }
+
+    /// <summary>Codex writes its trust-state keys with snake_case event names ("SessionStart" → "session_start").</summary>
+    public static string CodexStateEventName(string hookEvent) =>
+        Regex.Replace(hookEvent, "(?<!^)([A-Z])", "_$1").ToLowerInvariant();
 
     /// <summary>Keys of the <c>[hooks.state.'&lt;file&gt;:&lt;event&gt;:&lt;group&gt;:&lt;index&gt;']</c> sections of config.toml that have a trusted_hash.</summary>
     private HashSet<string> CodexTrustedStateKeys()

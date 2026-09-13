@@ -230,9 +230,56 @@ public class HookInstallerTests
         using var dir = new TempDir();
         var (installer, paths) = Build(dir);
         installer.Install(AgentKind.Codex);
+        // Real format written by Codex: snake_case event names, positional group/command indices.
+        var state = string.Concat(HookInstaller.Registrations[AgentKind.Codex]
+            .Select(r => $"[hooks.state.'{paths.CodexHooksFile}:{HookInstaller.CodexStateEventName(r.Event)}:0:0']\ntrusted_hash = \"sha256:abc\"\n"));
+        dir.File(@".codex\config.toml", "model = \"gpt-6\"\n[hooks.state]\n" + state);
+
+        var detail = installer.GetStatus(AgentKind.Codex).Detail;
+
+        Assert.DoesNotContain(HookInstaller.CodexTrustHint, detail);
+        Assert.Contains("4/4", detail);
+    }
+
+    [Fact]
+    public void Codex_trust_keys_use_snake_case_event_names()
+    {
+        Assert.Equal("session_start", HookInstaller.CodexStateEventName("SessionStart"));
+        Assert.Equal("user_prompt_submit", HookInstaller.CodexStateEventName("UserPromptSubmit"));
+        Assert.Equal("stop", HookInstaller.CodexStateEventName("Stop"));
+        Assert.Equal("session_end", HookInstaller.CodexStateEventName("SessionEnd"));
+    }
+
+    [Fact]
+    public void Codex_status_ignores_pascal_case_trust_keys_that_codex_never_writes()
+    {
+        using var dir = new TempDir();
+        var (installer, paths) = Build(dir);
+        installer.Install(AgentKind.Codex);
         var state = string.Concat(HookInstaller.Registrations[AgentKind.Codex]
             .Select(r => $"[hooks.state.'{paths.CodexHooksFile}:{r.Event}:0:0']\ntrusted_hash = \"sha256:abc\"\n"));
         dir.File(@".codex\config.toml", "model = \"gpt-6\"\n" + state);
+
+        Assert.Contains(HookInstaller.CodexTrustHint, installer.GetStatus(AgentKind.Codex).Detail);
+    }
+
+    [Fact]
+    public void Codex_status_matches_real_config_toml_layout_with_second_group_and_command()
+    {
+        using var dir = new TempDir();
+        var (installer, paths) = Build(dir);
+        // A user group already approved (two commands) comes first; ours is appended as group 1 by Install.
+        dir.File(@".codex\hooks.json", """{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node a.cjs"},{"type":"command","command":"node b.cjs"}]}]}}""");
+        installer.Install(AgentKind.Codex);
+        var file = paths.CodexHooksFile;
+        var toml = "model = \"gpt-6\"\n[hooks.state]\n" +
+            $"[hooks.state.'{file}:session_start:0:0']\ntrusted_hash = \"sha256:aaa\"\n" +
+            $"[hooks.state.'{file}:session_start:0:1']\ntrusted_hash = \"sha256:bbb\"\n" +
+            $"[hooks.state.'{file}:session_start:1:0']\ntrusted_hash = \"sha256:ccc\"\n" +
+            $"[hooks.state.'{file}:user_prompt_submit:0:0']\ntrusted_hash = \"sha256:ddd\"\n" +
+            $"[hooks.state.'{file}:stop:0:0']\ntrusted_hash = \"sha256:eee\"\n" +
+            $"[hooks.state.'{file}:session_end:0:0']\ntrusted_hash = \"sha256:fff\"\n";
+        dir.File(@".codex\config.toml", toml);
 
         var detail = installer.GetStatus(AgentKind.Codex).Detail;
 
