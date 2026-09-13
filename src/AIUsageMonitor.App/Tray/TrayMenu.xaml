@@ -1,0 +1,118 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Menu del tray nello stile del notch. Gli stili sono a chiave (non impliciti) e vengono assegnati a mano in
+       TrayIconController: il menu contestuale di default della TextBox (taglia/copia/incolla) resterebbe altrimenti
+       coinvolto, con template scuri applicati a voci che non controlliamo. I pennelli arrivano da Theme.xaml, unito
+       PRIMA di questo dizionario in App.xaml. -->
+
+  <!-- Voce semplice: colonna fissa per il segno di spunta, cosi' le etichette restano allineate anche quando
+       "Avvio automatico" e' attivo. -->
+  <ControlTemplate x:Key="TrayMenuItemTemplate" TargetType="MenuItem">
+    <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}" Margin="0,1">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="18"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Path x:Name="Check" Width="18" Height="18" Data="M3,9 L7,13 L15,5" Stroke="{StaticResource Accent}" StrokeThickness="2"
+              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" VerticalAlignment="Center"
+              Visibility="Hidden"/>
+        <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center"
+                          Margin="8,0,0,0"/>
+      </Grid>
+    </Border>
+    <ControlTemplate.Triggers>
+      <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
+      <Trigger Property="IsChecked" Value="True"><Setter TargetName="Check" Property="Visibility" Value="Visible"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+        <Setter Property="Cursor" Value="Arrow"/>
+      </Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <!-- Voce con sottomenu ("Installa hook"): il Popup deve chiamarsi PART_Popup, MenuItem lo cerca per nome per
+       aprire e chiudere il sottomenu. AllowsTransparency serve agli angoli arrotondati. -->
+  <ControlTemplate x:Key="TrayMenuHeaderTemplate" TargetType="MenuItem">
+    <Grid>
+      <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}" Margin="0,1">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="18"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center"
+                            Margin="8,0,0,0"/>
+          <Path Grid.Column="2" Data="M0,0 L4,4 L0,8" Stroke="{StaticResource TextMuted}" StrokeThickness="1.5"
+                StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                VerticalAlignment="Center" Margin="12,0,2,0"/>
+        </Grid>
+      </Border>
+      <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="2" VerticalOffset="-7"
+             IsOpen="{TemplateBinding IsSubmenuOpen}" AllowsTransparency="True" PopupAnimation="Fade" Focusable="False">
+        <Border Background="{StaticResource WindowBackground}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1"
+                CornerRadius="10" Padding="6" MinWidth="180">
+          <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+        </Border>
+      </Popup>
+    </Grid>
+    <ControlTemplate.Triggers>
+      <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
+      <Trigger Property="IsSubmenuOpen" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+        <Setter Property="Cursor" Value="Arrow"/>
+      </Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <Style x:Key="TrayMenuItem" TargetType="MenuItem">
+    <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="Padding" Value="10,0"/>
+    <Setter Property="MinHeight" Value="32"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template" Value="{StaticResource TrayMenuItemTemplate}"/>
+    <Style.Triggers>
+      <!-- Role e' SubmenuHeader solo per le voci con figli: stesso meccanismo dello stile di default di WPF. -->
+      <Trigger Property="Role" Value="SubmenuHeader">
+        <Setter Property="Template" Value="{StaticResource TrayMenuHeaderTemplate}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+
+  <Style x:Key="TrayMenuSeparator" TargetType="Separator">
+    <Setter Property="Background" Value="{StaticResource NotchBorder}"/>
+    <Setter Property="Margin" Value="8,5"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Separator">
+          <Border Height="1" Background="{TemplateBinding Background}"/>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="TrayContextMenu" TargetType="ContextMenu">
+    <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="SnapsToDevicePixels" Value="True"/>
+    <!-- HasDropShadow governa AllowsTransparency del Popup che ospita il menu: senza finestra a livelli gli angoli
+         arrotondati verrebbero riempiti di nero. L'ombra vera e propria la disegnerebbe il template di default, che
+         qui e' sostituito, quindi resta solo il bordo del notch. -->
+    <Setter Property="HasDropShadow" Value="True"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ContextMenu">
+          <Border Background="{StaticResource WindowBackground}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1"
+                  CornerRadius="10" Padding="6" MinWidth="200">
+            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+</ResourceDictionary>

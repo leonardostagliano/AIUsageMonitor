@@ -54,6 +54,11 @@ public partial class App : Application
 
             // Argomento di debug: apre subito le impostazioni, utile per verificare l'aspetto senza passare dal tray.
             if (e.Args.Contains("--settings")) SettingsWindow.ShowSingleton(_services);
+            // Argomento di debug: apre il menu del tray al centro dello schermo, per fotografarlo senza dover
+            // pilotare il click destro sull'area di notifica. Va rimandato a fine avvio, quando la finestra
+            // nascosta di TrayMenuHost ha gia' un HWND da portare in primo piano.
+            if (e.Args.Contains("--tray-menu"))
+                Dispatcher.BeginInvoke(() => _tray?.ShowMenuAtScreenCentre(), DispatcherPriority.Background);
         }
         catch (Exception ex)
         {

@@ -1,3 +1,5 @@
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Threading;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
@@ -12,11 +14,12 @@ public sealed class TrayIconController : IDisposable
     private readonly AppServices _services;
     private readonly INotchHost _notch;
     private readonly WinForms.NotifyIcon _icon;
-    private readonly WinForms.ContextMenuStrip _menu;
-    private readonly WinForms.ToolStripMenuItem _toggleNotch;
-    private readonly WinForms.ToolStripMenuItem _autoStart;
-    private readonly WinForms.ToolStripMenuItem _hooksClaude;
-    private readonly WinForms.ToolStripMenuItem _hooksCodex;
+    private readonly TrayMenuHost _menuHost;
+    private readonly ContextMenu _menu;
+    private readonly MenuItem _toggleNotch;
+    private readonly MenuItem _autoStart;
+    private readonly MenuItem _hooksClaude;
+    private readonly MenuItem _hooksCodex;
     private readonly Action<string, string, NoticeKind> _notice;
     private readonly DispatcherTimer _singleClickTimer;
     private TrayIconRenderer.RenderedIcon? _rendered;
@@ -29,24 +32,27 @@ public sealed class TrayIconController : IDisposable
         _services = services;
         _notch = notch;
 
-        _menu = new WinForms.ContextMenuStrip();
-        _menu.Items.Add("Aggiorna ora", null, (_, _) => services.RefreshAll());
-        _toggleNotch = new WinForms.ToolStripMenuItem("Nascondi notch", null, (_, _) => notch.ToggleVisible());
+        // Il menu e' un ContextMenu WPF (Tray/TrayMenu.xaml) e non piu' una ContextMenuStrip: la striscia WinForms non
+        // prende l'aspetto del notch (cromatura chiara, angoli vivi, font suoi). La NotifyIcon resta solo per icona,
+        // tooltip e balloon, quindi non le si assegna piu' nessuna ContextMenuStrip.
+        _menuHost = new TrayMenuHost();
+        _menu = new ContextMenu { Style = Resource<Style>("TrayContextMenu") };
+        _menu.Items.Add(Item("Aggiorna ora", services.RefreshAll));
+        _toggleNotch = Item("Nascondi notch", notch.ToggleVisible);
         _menu.Items.Add(_toggleNotch);
 
-        var hooks = new WinForms.ToolStripMenuItem("Installa hook");
-        _hooksClaude = new WinForms.ToolStripMenuItem("Claude Code", null, (_, _) => services.InstallHooks(AgentKind.Claude));
-        _hooksCodex = new WinForms.ToolStripMenuItem("Codex", null, (_, _) => services.InstallHooks(AgentKind.Codex));
-        hooks.DropDownItems.Add(_hooksClaude);
-        hooks.DropDownItems.Add(_hooksCodex);
+        var hooks = Item("Installa hook", null);
+        _hooksClaude = Item("Claude Code", () => services.InstallHooks(AgentKind.Claude));
+        _hooksCodex = Item("Codex", () => services.InstallHooks(AgentKind.Codex));
+        hooks.Items.Add(_hooksClaude);
+        hooks.Items.Add(_hooksCodex);
         _menu.Items.Add(hooks);
 
-        _autoStart = new WinForms.ToolStripMenuItem("Avvio automatico", null, (_, _) => ToggleAutoStart());
+        _autoStart = Item("Avvio automatico", ToggleAutoStart);
         _menu.Items.Add(_autoStart);
-        _menu.Items.Add("Impostazioni…", null, (_, _) => OpenSettings?.Invoke());
-        _menu.Items.Add(new WinForms.ToolStripSeparator());
-        _menu.Items.Add("Esci", null, (_, _) => System.Windows.Application.Current.Shutdown());
-        _menu.Opening += (_, _) => RefreshMenuState();
+        _menu.Items.Add(Item("Impostazioni…", () => OpenSettings?.Invoke()));
+        _menu.Items.Add(new Separator { Style = Resource<Style>("TrayMenuSeparator") });
+        _menu.Items.Add(Item("Esci", () => System.Windows.Application.Current.Shutdown()));
 
         // Spec 8.1 assegna due azioni distinte a click e doppio click, ma NotifyIcon alza MouseClick gia' sul primo
         // click di un doppio click (sopprime solo il secondo WM_LBUTTONUP): senza attesa ogni doppio click aprirebbe
@@ -59,12 +65,21 @@ public sealed class TrayIconController : IDisposable
             notch.TogglePin();
         };
 
-        _icon = new WinForms.NotifyIcon { Visible = true, Text = "AIUsageMonitor", ContextMenuStrip = _menu };
+        _icon = new WinForms.NotifyIcon { Visible = true, Text = "AIUsageMonitor" };
         _icon.MouseClick += (_, e) =>
         {
             if (e.Button != WinForms.MouseButtons.Left) return;
             _singleClickTimer.Stop();
             _singleClickTimer.Start();
+        };
+        // Il menu ora lo apriamo noi: la NotifyIcon lo faceva da sola solo finche' aveva una ContextMenuStrip. Il
+        // try/catch e' obbligatorio come per le altre voci, qui siamo dentro NativeWindow.Callback di WinForms e
+        // un'eccezione finirebbe nella finestra "Unhandled exception" della libreria.
+        _icon.MouseUp += (_, e) =>
+        {
+            if (e.Button != WinForms.MouseButtons.Right) return;
+            try { ShowMenu(); }
+            catch (Exception ex) { _services.Log.Error("Tray menu open failed", ex); }
         };
         _icon.DoubleClick += (_, _) =>
         {
@@ -84,6 +99,29 @@ public sealed class TrayIconController : IDisposable
     public void ShowBalloon(string title, string text, WinForms.ToolTipIcon kind) =>
         _icon.ShowBalloonTip(5000, title, text, kind);
 
+    /// <summary>Apre il menu del tray sul puntatore, con le etichette dinamiche appena rilette.</summary>
+    public void ShowMenu()
+    {
+        RefreshMenuState();
+        _menuHost.Open(_menu);
+    }
+
+    /// <summary>Apre il menu al centro dello schermo primario: serve all'argomento di debug --tray-menu.</summary>
+    public void ShowMenuAtScreenCentre()
+    {
+        RefreshMenuState();
+        _menuHost.OpenAt(_menu, SystemParameters.PrimaryScreenWidth / 2, SystemParameters.PrimaryScreenHeight / 2);
+    }
+
+    private static MenuItem Item(string header, Action? click)
+    {
+        var item = new MenuItem { Header = header, Style = Resource<Style>("TrayMenuItem") };
+        if (click is not null) item.Click += (_, _) => click();
+        return item;
+    }
+
+    private static T Resource<T>(string key) => (T)System.Windows.Application.Current.FindResource(key);
+
     private static WinForms.ToolTipIcon BalloonIcon(NoticeKind kind) => kind switch
     {
         NoticeKind.Error => WinForms.ToolTipIcon.Error,
@@ -95,13 +133,15 @@ public sealed class TrayIconController : IDisposable
     /// Ogni voce è protetta singolarmente: il menu deve aprirsi anche se leggere lo stato hook o il registro fallisce
     /// (es. sharing violation mentre Claude Code riscrive settings.json). Un'eccezione qui finirebbe in
     /// WinForms.Application.ThreadException, non in DispatcherUnhandledException.
+    /// Va chiamata PRIMA di aprire il menu e non sull'evento Opened: le etichette cambiano larghezza e quando Opened
+    /// scatta il popup e' gia' posizionato.
     /// </summary>
     private void RefreshMenuState()
     {
-        _toggleNotch.Text = _notch.IsNotchVisible ? "Nascondi notch" : "Mostra notch";
-        _autoStart.Checked = Safe(AutoStart.IsEnabled, false, "AutoStart.IsEnabled");
-        _hooksClaude.Text = $"Claude Code — {StatusLabel(AgentKind.Claude)}";
-        _hooksCodex.Text = $"Codex — {StatusLabel(AgentKind.Codex)}";
+        _toggleNotch.Header = _notch.IsNotchVisible ? "Nascondi notch" : "Mostra notch";
+        _autoStart.IsChecked = Safe(AutoStart.IsEnabled, false, "AutoStart.IsEnabled");
+        _hooksClaude.Header = $"Claude Code — {StatusLabel(AgentKind.Claude)}";
+        _hooksCodex.Header = $"Codex — {StatusLabel(AgentKind.Codex)}";
     }
 
     private T Safe<T>(Func<T> read, T fallback, string what)
@@ -142,7 +182,8 @@ public sealed class TrayIconController : IDisposable
         _singleClickTimer.Stop();
         _icon.Visible = false;
         _icon.Dispose();
-        _menu.Dispose();
+        _menu.IsOpen = false;
+        _menuHost.Dispose();
         _rendered?.Dispose();
     }
 }

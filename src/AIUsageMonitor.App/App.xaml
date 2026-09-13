@@ -9,6 +9,8 @@
         <ResourceDictionary Source="Assets/Theme.xaml"/>
         <!-- Dopo Theme.xaml: Controls.xaml risolve i pennelli della palette con StaticResource. -->
         <ResourceDictionary Source="Assets/Controls.xaml"/>
+        <!-- Stili a chiave del menu del tray: anche questi risolvono i pennelli della palette con StaticResource. -->
+        <ResourceDictionary Source="Tray/TrayMenu.xaml"/>
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Application.Resources>
