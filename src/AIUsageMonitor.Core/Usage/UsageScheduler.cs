@@ -12,6 +12,9 @@ public sealed class UsageScheduler : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Dictionary<AgentKind, SemaphoreSlim> _wakeups = new();
 
+    /// <summary>Where loop failures are reported (the App wires a FileLogger): a loop is never allowed to die silently.</summary>
+    public Action<Exception>? OnError { get; init; }
+
     public UsageScheduler(UsageService service, Func<AgentKind, TimeSpan?> intervalFor)
     {
         _service = service;
@@ -45,17 +48,26 @@ public sealed class UsageScheduler : IDisposable
         var wakeup = Wakeup(agent);
         while (!_cts.IsCancellationRequested)
         {
-            var interval = _intervalFor(agent);
+            TimeSpan? interval;
+            try { interval = _intervalFor(agent); }
+            catch (Exception ex) { Report(ex); interval = null; } // treat a broken settings read as "disabled, retry soon"
+
             if (interval is not null)
             {
                 try { await _service.RefreshAsync(agent, _cts.Token).ConfigureAwait(false); }
-                catch (Exception) { /* RefreshAsync already converts failures; never let the loop die */ }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex) { Report(ex); } // RefreshAsync already converts failures; never let the loop die
             }
 
             try { await wakeup.WaitAsync(interval ?? DisabledPoll, _cts.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
             catch (ObjectDisposedException) { return; }
         }
+    }
+
+    private void Report(Exception ex)
+    {
+        try { OnError?.Invoke(ex); } catch { /* a broken logger must not take the loop down */ }
     }
 
     public void Dispose()

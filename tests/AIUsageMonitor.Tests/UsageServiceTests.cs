@@ -125,4 +125,44 @@ public class UsageServiceTests
         await Task.Delay(150);
         Assert.Equal(0, claude.Calls);
     }
+
+    [Fact]
+    public async Task A_throwing_usage_subscriber_is_reported_and_the_snapshot_survives()
+    {
+        using var dir = new TempDir();
+        var claude = new StubProvider(AgentKind.Claude) { Next = () => Ok(AgentKind.Claude, 7, Now) };
+        var errors = new List<Exception>();
+        var service = new UsageService([claude], new UsageCache(Path.Combine(dir.Path, "c.json")), new FakeClock(Now)) { OnError = errors.Add };
+        service.UsageUpdated += _ => throw new InvalidOperationException("cross-thread WPF access");
+
+        await service.RefreshAsync(AgentKind.Claude);
+
+        Assert.Equal(7, service.Current[AgentKind.Claude].Windows.Single().Percent);
+        Assert.IsType<InvalidOperationException>(Assert.Single(errors));
+    }
+
+    [Fact]
+    public async Task Scheduler_survives_a_throwing_interval_selector_and_reports_it()
+    {
+        using var dir = new TempDir();
+        var claude = new StubProvider(AgentKind.Claude) { Next = () => Ok(AgentKind.Claude, 1, Now) };
+        var service = new UsageService([claude], new UsageCache(Path.Combine(dir.Path, "c.json")), new FakeClock(Now));
+        var errors = new List<Exception>();
+        var calls = 0;
+        using var scheduler = new UsageScheduler(service, _ =>
+            Interlocked.Increment(ref calls) == 2 ? throw new InvalidOperationException("settings not loaded") : TimeSpan.FromMilliseconds(30))
+        {
+            OnError = errors.Add
+        };
+
+        scheduler.Start([AgentKind.Claude]);
+        for (var i = 0; i < 100 && errors.Count == 0; i++) await Task.Delay(20);
+        Assert.IsType<InvalidOperationException>(Assert.Single(errors));
+
+        // The loop is still alive after the failure.
+        var before = claude.Calls;
+        scheduler.RefreshNow(AgentKind.Claude);
+        for (var i = 0; i < 100 && claude.Calls == before; i++) await Task.Delay(20);
+        Assert.True(claude.Calls > before);
+    }
 }

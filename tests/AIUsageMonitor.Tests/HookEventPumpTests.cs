@@ -69,4 +69,88 @@ public class HookEventPumpTests
         for (var i = 0; i < 50 && tracker.Sessions.Count == 0; i++) await Task.Delay(100);
         Assert.Single(tracker.Sessions);
     }
+
+    private sealed class FlakyClock : IClock
+    {
+        public FlakyClock(DateTimeOffset now) => Now = now;
+        public DateTimeOffset Now { get; set; }
+        public bool Explode { get; set; }
+        public DateTimeOffset UtcNow => Explode ? throw new InvalidOperationException("clock exploded") : Now;
+    }
+
+    [Fact]
+    public void Pump_keeps_delivering_events_when_a_changed_subscriber_throws()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var trackerErrors = new List<Exception>();
+        var tracker = new SessionTracker(new FakeClock(now)) { OnError = trackerErrors.Add };
+        var seen = new List<string>();
+        tracker.Changed += c => { seen.Add(c.Session.SessionId); throw new InvalidOperationException("subscriber on the UI thread"); };
+        var pumpErrors = new List<Exception>();
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, new FakeClock(now))
+        {
+            OnError = pumpErrors.Add
+        };
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now) + Line("UserPromptSubmit", "s2", now.AddSeconds(1)));
+        pump.Pump();
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s3", now.AddSeconds(2)));
+        pump.Pump();
+
+        Assert.Equal(new[] { "s1", "s2", "s3" }, seen);
+        Assert.Equal(3, tracker.Sessions.Count);
+        Assert.Equal(3, trackerErrors.Count);
+        Assert.Empty(pumpErrors);
+    }
+
+    [Fact]
+    public void Pump_does_not_propagate_unexpected_errors_and_reports_them()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FlakyClock(now);
+        var errors = new List<Exception>();
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), new SessionTracker(new FakeClock(now)), paths, clock)
+        {
+            OnError = errors.Add
+        };
+        pump.Start();
+
+        clock.Explode = true;
+        pump.Pump();
+
+        Assert.IsType<InvalidOperationException>(Assert.Single(errors));
+    }
+
+    [Fact]
+    public void Start_survives_a_failing_replay()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", now));
+        var clock = new FlakyClock(now) { Explode = true };
+        var errors = new List<Exception>();
+        var tracker = new SessionTracker(new FakeClock(now));
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            OnError = errors.Add,
+            PollInterval = TimeSpan.FromMinutes(10)
+        };
+
+        pump.Start();
+
+        Assert.Single(errors);
+        Assert.Empty(tracker.Sessions);
+
+        // The pump stays usable: the next cycle picks the file up again.
+        clock.Explode = false;
+        pump.Pump();
+        Assert.Single(tracker.Sessions);
+    }
 }

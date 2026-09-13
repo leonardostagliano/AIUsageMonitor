@@ -19,6 +19,9 @@ public sealed class HookEventPump : IDisposable
     public TimeSpan StaleSweepEvery { get; init; } = TimeSpan.FromMinutes(5);
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>Where unexpected failures go (the App wires a FileLogger): the pump never lets one escape a thread-pool callback.</summary>
+    public Action<Exception>? OnError { get; init; }
+
     public HookEventPump(HookEventReader reader, SessionTracker tracker, AppPaths paths, IClock clock)
     {
         _reader = reader;
@@ -33,11 +36,19 @@ public sealed class HookEventPump : IDisposable
 
         lock (_gate)
         {
-            // Silent replay: no Changed events, so the UI does not toast history.
-            var replayed = _reader.ReadAll(_clock.UtcNow - ReplayWindow);
-            _tracker.ApplySilently(replayed);
-            _tracker.RemoveStaleSilently(StaleAfter);
-            _lastStaleSweep = _clock.UtcNow;
+            try
+            {
+                // Silent replay: no Changed events, so the UI does not toast history.
+                var replayed = _reader.ReadAll(_clock.UtcNow - ReplayWindow);
+                _tracker.ApplySilently(replayed);
+                _tracker.RemoveStaleSilently(StaleAfter);
+                _lastStaleSweep = _clock.UtcNow;
+            }
+            catch (Exception ex)
+            {
+                // A locked or unreadable events file must never abort startup: log it and start with an empty state.
+                Report(ex);
+            }
         }
 
         _watcher = new FileSystemWatcher(_paths.MonitorDir, Path.GetFileName(_paths.EventsFile))
@@ -64,11 +75,18 @@ public sealed class HookEventPump : IDisposable
                     _tracker.RemoveStale(StaleAfter);
                 }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex)
             {
-                // the hook may be mid-append; the next poll retries
+                // Pump runs on FileSystemWatcher and Timer callbacks: an escaping exception would kill the process.
+                // The hook may be mid-append, a resolver may misbehave: report and let the next poll retry.
+                Report(ex);
             }
         }
+    }
+
+    private void Report(Exception ex)
+    {
+        try { OnError?.Invoke(ex); } catch { /* a broken logger must not take the pump down */ }
     }
 
     public void Dispose()

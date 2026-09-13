@@ -156,9 +156,56 @@ public class SessionTrackerTests
     }
 
     [Theory]
-    [InlineData(@"C:\Users\demo\Progetti\Vivisol Azure\", "abcdefghijkl", "Vivisol Azure")]
+    [InlineData(@"C:\Users\demo\Progetti\Demo Azure\", "abcdefghijkl", "Demo Azure")]
     [InlineData("/home/demo/repo", "abcdefghijkl", "repo")]
     [InlineData(null, "abcdefghijkl", "abcdefgh")]
     [InlineData("", "short", "short")]
     public void DisplayNameFor(string? cwd, string id, string expected) => Assert.Equal(expected, SessionTracker.DisplayNameFor(cwd, id));
+
+    [Fact]
+    public void A_throwing_changed_subscriber_is_reported_and_does_not_break_apply()
+    {
+        var errors = new List<Exception>();
+        var tracker = new SessionTracker(new FakeClock(T0)) { OnError = errors.Add };
+        tracker.Changed += _ => throw new InvalidOperationException("cross-thread WPF access");
+
+        var change = tracker.Apply(Ev("UserPromptSubmit"));
+
+        Assert.NotNull(change);
+        Assert.Single(tracker.Sessions);
+        Assert.IsType<InvalidOperationException>(Assert.Single(errors));
+
+        tracker.Apply(Ev("Stop", plusSeconds: 1));
+        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
+    }
+
+    [Fact]
+    public void A_throwing_cwd_resolver_degrades_to_the_session_id()
+    {
+        var errors = new List<Exception>();
+        var tracker = new SessionTracker(new FakeClock(T0), (_, _) => throw new ArgumentException("NUL in the session id")) { OnError = errors.Add };
+
+        tracker.Apply(Ev("UserPromptSubmit", sid: "abcdefghijkl", cwd: null));
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Null(session.Cwd);
+        Assert.Equal("abcdefgh", session.DisplayName);
+        Assert.IsType<ArgumentException>(Assert.Single(errors));
+    }
+
+    [Fact]
+    public void A_throwing_changed_subscriber_does_not_break_the_stale_sweep()
+    {
+        var clock = new FakeClock(T0);
+        var errors = new List<Exception>();
+        var tracker = new SessionTracker(clock) { OnError = errors.Add };
+        tracker.Apply(Ev("UserPromptSubmit", sid: "a"));
+        tracker.Apply(Ev("UserPromptSubmit", sid: "b"));
+        tracker.Changed += _ => throw new InvalidOperationException("boom");
+        clock.Advance(TimeSpan.FromHours(13));
+
+        Assert.Equal(2, tracker.RemoveStale(TimeSpan.FromHours(12)).Count);
+        Assert.Empty(tracker.Sessions);
+        Assert.Equal(2, errors.Count);
+    }
 }

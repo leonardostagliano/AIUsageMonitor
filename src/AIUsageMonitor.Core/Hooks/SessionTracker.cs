@@ -24,6 +24,9 @@ public sealed class SessionTracker
 
     public event Action<SessionChange>? Changed;
 
+    /// <summary>Where a throwing Changed subscriber or cwd resolver is reported (the App wires a FileLogger); never rethrown.</summary>
+    public Action<Exception>? OnError { get; init; }
+
     public SessionTracker(IClock clock, Func<AgentKind, string, string?>? cwdResolver = null)
     {
         _clock = clock;
@@ -43,7 +46,7 @@ public sealed class SessionTracker
     {
         SessionChange? change;
         lock (_gate) change = ApplyCore(e);
-        if (change is not null) Changed?.Invoke(change);
+        if (change is not null) Raise(change);
         return change;
     }
 
@@ -82,7 +85,7 @@ public sealed class SessionTracker
             _ => existing?.Message
         };
 
-        var cwd = e.Cwd ?? existing?.Cwd ?? _cwdResolver(e.Agent, e.SessionId);
+        var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         var updated = new SessionState(
             e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
             phase.Value, message, e.Ts, existing?.StartedAt ?? e.Ts);
@@ -122,7 +125,7 @@ public sealed class SessionTracker
                 removed.Add(new SessionChange(SessionChangeKind.Removed, session, session.Phase));
             }
         }
-        foreach (var change in removed) Changed?.Invoke(change);
+        foreach (var change in removed) Raise(change);
         return removed;
     }
 
@@ -148,6 +151,28 @@ public sealed class SessionTracker
             if (!string.IsNullOrWhiteSpace(last)) return last;
         }
         return sessionId.Length > 8 ? sessionId[..8] : sessionId;
+    }
+
+    private string? ResolveCwd(AgentKind agent, string sessionId)
+    {
+        // The resolver is supplied by the App and reads the disk: it must never take down the pump thread.
+        try { return _cwdResolver(agent, sessionId); }
+        catch (Exception ex) { Report(ex); return null; }
+    }
+
+    /// <summary>Raises Changed; one throwing subscriber is reported and never stops the other subscribers or the caller.</summary>
+    private void Raise(SessionChange change)
+    {
+        foreach (var handler in Changed?.GetInvocationList() ?? [])
+        {
+            try { ((Action<SessionChange>)handler)(change); }
+            catch (Exception ex) { Report(ex); }
+        }
+    }
+
+    private void Report(Exception ex)
+    {
+        try { OnError?.Invoke(ex); } catch { /* a broken logger must not take the tracker down */ }
     }
 
     private static string Truncate(string s) => s.Length <= MaxMessageLength ? s : s[..MaxMessageLength];
