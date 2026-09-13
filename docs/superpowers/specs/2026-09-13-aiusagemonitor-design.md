@@ -191,6 +191,14 @@ Regole aggiuntive:
 
 Usato dalla linguetta del notch e dalla tray. Priorità: `Error` > `NeedsInput` > `Working` > `Idle` > nessuna sessione.
 
+### 7.6 Token per sessione
+
+Ogni riga mostra il **totale** dei token della sessione: per Claude Code `Input + Output + CacheRead + CacheWrite` letti dal transcript (`transcript_path` dei payload hook), contando **una sola `usage` per `requestId`** — lo stesso `requestId` compare su più righe (blocco di testo, `tool_use`…) con usage identica, quindi le righe duplicate dello stesso request non si sommano (sommarle gonfia il totale di circa 2,7 volte); le righe senza `requestId` contano una volta ciascuna. Per Codex il totale è il `total_tokens` dell'ultimo `event_msg/token_count` del rollout (`info.total_token_usage`, cumulativo per thread).
+
+Forma compatta (`TokenFormatter.Compact`, virgola decimale italiana): `950`, `12,3k`, `1,4M`, `80,0M`. Il tooltip mostra il dettaglio (`TokenFormatter.Breakdown`): `in 11k · out 435k · cache 26,4M letti / 2,7M scritti`.
+
+La riga della sessione mostra anche il numero dei subagenti e la somma dei loro totali; ogni riga di subagente mostra il proprio totale.
+
 ## 8. Interfaccia
 
 ### 8.1 Tray
