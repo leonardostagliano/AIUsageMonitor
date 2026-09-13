@@ -178,4 +178,74 @@ public class HookInstallerTests
         Assert.Equal(foreign, File.ReadAllText(paths.ClaudeSettingsFile));
         Assert.True(!Directory.Exists(paths.BackupsDir) || Directory.GetFiles(paths.BackupsDir).Length == 0);
     }
+
+    [Fact]
+    public void Duplicate_json_keys_are_reported_as_invalid_and_never_overwritten()
+    {
+        using var dir = new TempDir();
+        var (installer, paths) = Build(dir);
+        // Hand-edited settings.json: JSON.parse (and Claude Code) keeps the last key, JsonNode throws on materialization.
+        const string duplicated = """{"hooks":{"Stop":[]},"hooks":{"SessionStart":[]}}""";
+        dir.File(@".claude\settings.json", duplicated);
+
+        var status = installer.GetStatus(AgentKind.Claude);
+        Assert.Equal(HookStatus.ConfigInvalid, status.Status);
+        Assert.Contains(paths.ClaudeSettingsFile, status.Detail);
+        Assert.Equal(HookStatus.ConfigInvalid, installer.Install(AgentKind.Claude).Status);
+        Assert.Equal(HookStatus.ConfigInvalid, installer.Remove(AgentKind.Claude).Status);
+        Assert.Equal(duplicated, File.ReadAllText(paths.ClaudeSettingsFile));
+        Assert.True(!Directory.Exists(paths.BackupsDir) || Directory.GetFiles(paths.BackupsDir).Length == 0);
+    }
+
+    [Fact]
+    public void Nested_duplicate_json_keys_are_reported_as_invalid()
+    {
+        using var dir = new TempDir();
+        var (installer, paths) = Build(dir);
+        const string duplicated = """{"hooks":{"Stop":[{"hooks":[],"hooks":[]}]}}""";
+        dir.File(@".codex\hooks.json", duplicated);
+
+        Assert.Equal(HookStatus.ConfigInvalid, installer.GetStatus(AgentKind.Codex).Status);
+        Assert.Equal(HookStatus.ConfigInvalid, installer.Install(AgentKind.Codex).Status);
+        Assert.Equal(HookStatus.ConfigInvalid, installer.Remove(AgentKind.Codex).Status);
+        Assert.Equal(duplicated, File.ReadAllText(paths.CodexHooksFile));
+    }
+
+    [Fact]
+    public void Codex_status_asks_to_approve_the_hooks_when_no_trusted_hash_exists()
+    {
+        using var dir = new TempDir();
+        var (installer, _) = Build(dir);
+
+        var report = installer.Install(AgentKind.Codex);
+
+        Assert.Equal(HookStatus.Installed, report.Status);
+        Assert.Contains(HookInstaller.CodexTrustHint, report.Detail);
+        Assert.Contains(HookInstaller.CodexTrustHint, installer.GetStatus(AgentKind.Codex).Detail);
+    }
+
+    [Fact]
+    public void Codex_status_is_clean_when_every_group_of_ours_has_a_trusted_hash()
+    {
+        using var dir = new TempDir();
+        var (installer, paths) = Build(dir);
+        installer.Install(AgentKind.Codex);
+        var state = string.Concat(HookInstaller.Registrations[AgentKind.Codex]
+            .Select(r => $"[hooks.state.'{paths.CodexHooksFile}:{r.Event}:0:0']\ntrusted_hash = \"sha256:abc\"\n"));
+        dir.File(@".codex\config.toml", "model = \"gpt-6\"\n" + state);
+
+        var detail = installer.GetStatus(AgentKind.Codex).Detail;
+
+        Assert.DoesNotContain(HookInstaller.CodexTrustHint, detail);
+        Assert.Contains("4/4", detail);
+    }
+
+    [Fact]
+    public void Claude_status_never_mentions_the_codex_trust_hint()
+    {
+        using var dir = new TempDir();
+        var (installer, _) = Build(dir);
+        dir.File(@".claude\settings.json", ClaudeSettings);
+        Assert.DoesNotContain(HookInstaller.CodexTrustHint, installer.Install(AgentKind.Claude).Detail);
+    }
 }

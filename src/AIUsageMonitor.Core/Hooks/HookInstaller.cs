@@ -19,6 +19,9 @@ public sealed class HookInstaller
     public const string Marker = "aiusagemonitor/hook.cjs";
     public const int HookTimeoutSeconds = 5;
 
+    /// <summary>Codex runs a hook group only after the user approves it (trusted_hash in config.toml), so the report says so.</summary>
+    public const string CodexTrustHint = "da approvare in Codex con /hooks";
+
     public static readonly IReadOnlyDictionary<AgentKind, IReadOnlyList<HookRegistration>> Registrations =
         new Dictionary<AgentKind, IReadOnlyList<HookRegistration>>
         {
@@ -76,7 +79,7 @@ public sealed class HookInstaller
 
         JsonObject root;
         try { root = ParseRoot(file); }
-        catch (JsonException ex) { return new(HookStatus.ConfigInvalid, $"JSON non valido in {file}: {ex.Message}"); }
+        catch (Exception ex) when (IsBadJson(ex)) { return new(HookStatus.ConfigInvalid, $"JSON non valido in {file}: {ex.Message}"); }
 
         var hooks = root["hooks"] as JsonObject;
         var expected = Registrations[agent];
@@ -84,6 +87,8 @@ public sealed class HookInstaller
         var detail = $"{present}/{expected.Count} eventi";
         if (agent == AgentKind.Codex && CodexHooksDisabled())
             detail += " (config.toml ha hooks = false: gli hook Codex sono disattivati)";
+        if (agent == AgentKind.Codex && present > 0 && !CodexGroupsTrusted(hooks))
+            detail += $" ({CodexTrustHint})";
 
         var status = present == 0 ? HookStatus.NotInstalled : present == expected.Count ? HookStatus.Installed : HookStatus.Partial;
         return new(status, detail);
@@ -98,7 +103,7 @@ public sealed class HookInstaller
         if (File.Exists(file))
         {
             try { root = ParseRoot(file); }
-            catch (JsonException ex) { return new(HookStatus.ConfigInvalid, $"Nessuna modifica: JSON non valido in {file} ({ex.Message})"); }
+            catch (Exception ex) when (IsBadJson(ex)) { return new(HookStatus.ConfigInvalid, $"Nessuna modifica: JSON non valido in {file} ({ex.Message})"); }
         }
         else
         {
@@ -135,9 +140,17 @@ public sealed class HookInstaller
         }
 
         if (changed) WriteWithBackup(file, root);
-        return GetStatus(agent);
+
+        var report = GetStatus(agent);
+        // Codex ignores a hook group until the user approves it in the native /hooks UI, so the installer always says it.
+        if (agent == AgentKind.Codex && !report.Detail.Contains(CodexTrustHint, StringComparison.OrdinalIgnoreCase))
+            report = report with { Detail = $"{report.Detail} ({CodexTrustHint})" };
+        return report;
     }
 
+    /// <summary>Removes only our own entries. Caveat (Codex): its trust keys are positional
+    /// (<c>hooks.json:&lt;event&gt;:&lt;group&gt;:&lt;index&gt;</c>), so removing our group shifts the index of any group the user added
+    /// after ours and invalidates that group's trusted_hash; Install always appends ours last to keep existing keys valid.</summary>
     public HookStatusReport Remove(AgentKind agent)
     {
         var file = ConfigFileFor(agent);
@@ -145,7 +158,7 @@ public sealed class HookInstaller
 
         JsonObject root;
         try { root = ParseRoot(file); }
-        catch (JsonException ex) { return new(HookStatus.ConfigInvalid, $"Nessuna modifica: JSON non valido in {file} ({ex.Message})"); }
+        catch (Exception ex) when (IsBadJson(ex)) { return new(HookStatus.ConfigInvalid, $"Nessuna modifica: JSON non valido in {file} ({ex.Message})"); }
 
         if (root["hooks"] is not JsonObject hooks) return GetStatus(agent);
 
@@ -185,9 +198,31 @@ public sealed class HookInstaller
         return GetStatus(agent);
     }
 
-    private static JsonObject ParseRoot(string file) =>
-        JsonNode.Parse(File.ReadAllText(file), documentOptions: ReadOptions) as JsonObject
-        ?? throw new JsonException("root is not an object");
+    private static JsonObject ParseRoot(string file)
+    {
+        var root = JsonNode.Parse(File.ReadAllText(file), documentOptions: ReadOptions) as JsonObject
+            ?? throw new JsonException("root is not an object");
+        // JsonNode materializes objects lazily: a duplicated key only throws at the first indexer access, which may be
+        // half way through an Install. Force it here so a hand-edited file is rejected before anything is written.
+        Materialize(root);
+        return root;
+    }
+
+    private static void Materialize(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (_, value) in obj) Materialize(value);
+                break;
+            case JsonArray array:
+                foreach (var item in array) Materialize(item);
+                break;
+        }
+    }
+
+    /// <summary>A duplicated key surfaces as ArgumentException, a wrong node shape as InvalidOperationException.</summary>
+    private static bool IsBadJson(Exception ex) => ex is JsonException or ArgumentException or InvalidOperationException;
 
     private static bool HasOurHook(JsonArray? groups) =>
         groups is not null && groups.OfType<JsonObject>().Any(g => g["hooks"] is JsonArray commands && commands.Any(IsOurs));
@@ -214,6 +249,53 @@ public sealed class HookInstaller
         File.WriteAllText(tmp, root.ToJsonString(WriteOptions) + Environment.NewLine);
         File.Move(tmp, file, overwrite: true);
     }
+
+    /// <summary>True when every group of ours already carries a trusted_hash in config.toml (Codex only runs approved hooks).</summary>
+    private bool CodexGroupsTrusted(JsonObject? hooks)
+    {
+        var trusted = CodexTrustedStateKeys();
+        var file = NormalizeSeparators(_paths.CodexHooksFile);
+        foreach (var registration in Registrations[AgentKind.Codex])
+        {
+            if (hooks?[registration.Event] is not JsonArray groups) continue;
+            for (var g = 0; g < groups.Count; g++)
+            {
+                if (groups[g] is not JsonObject group || group["hooks"] is not JsonArray commands || !commands.Any(IsOurs)) continue;
+                var prefix = $"{file}:{registration.Event}:{g}:";
+                if (!trusted.Any(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>Keys of the <c>[hooks.state.'&lt;file&gt;:&lt;event&gt;:&lt;group&gt;:&lt;index&gt;']</c> sections of config.toml that have a trusted_hash.</summary>
+    private HashSet<string> CodexTrustedStateKeys()
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            if (!File.Exists(_paths.CodexConfigFile)) return keys;
+            string? current = null;
+            foreach (var raw in File.ReadLines(_paths.CodexConfigFile))
+            {
+                var line = raw.Trim();
+                if (line.StartsWith('['))
+                {
+                    var match = Regex.Match(line, @"^\[\s*hooks\s*\.\s*state\s*\.\s*(?<q>['""])(?<key>.*)\k<q>\s*\]$");
+                    current = match.Success ? NormalizeSeparators(match.Groups["key"].Value) : null;
+                    continue;
+                }
+                if (current is not null && Regex.IsMatch(line, @"^trusted_hash\s*=")) keys.Add(current);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // unreadable config.toml: treat the hooks as not yet approved
+        }
+        return keys;
+    }
+
+    private static string NormalizeSeparators(string value) => value.Replace('\\', '/');
 
     private bool CodexHooksDisabled()
     {
