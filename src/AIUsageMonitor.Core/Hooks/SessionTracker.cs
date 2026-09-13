@@ -134,8 +134,17 @@ public sealed class SessionTracker
         var awaiting = existing?.AwaitingSubagents ?? false;
         var message = existing?.Message;
 
-        if (e.Event == "SubagentStart" && phase == SessionPhase.Idle) phase = SessionPhase.Working;
-        if (e.Event == "SubagentStop" && running == 0 && awaiting)
+        if (e.Event == "SubagentStart" && phase == SessionPhase.Idle)
+        {
+            // The session is Idle because the turn's Stop was already seen: an agent that starts afterwards
+            // (a workflow step, a background task) re-arms the deferred Idle, so its SubagentStop takes the
+            // session back to Idle instead of pinning it to "al lavoro" until the 12 h stale removal.
+            phase = SessionPhase.Working;
+            awaiting = true;
+        }
+        // Only a Working session goes Idle here: an error or a pending input that arrived while the agents
+        // were still running must survive the last SubagentStop.
+        if (e.Event == "SubagentStop" && running == 0 && awaiting && phase == SessionPhase.Working)
         {
             phase = SessionPhase.Idle;
             awaiting = false;
@@ -163,13 +172,23 @@ public sealed class SessionTracker
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
     }
 
-    /// <summary>Adds or updates the subagent with this agent id (a SubagentStop whose Start was never seen lands as Done).</summary>
+    /// <summary>Prefix of the synthetic id given to a subagent event that carries no agent_id.</summary>
+    private const string AnonymousIdPrefix = "anon:";
+
+    /// <summary>
+    /// Adds or updates the subagent with this agent id (a SubagentStop whose Start was never seen lands as Done).
+    /// Events without an agent_id (hook.cjs forwards them with agent_id null, and Codex is unprobed) get one
+    /// synthetic id each instead of sharing a single entry: otherwise two concurrent anonymous agents would be
+    /// counted as one and the first SubagentStop would declare the turn finished while the other was still running.
+    /// An anonymous SubagentStop closes the oldest anonymous agent still running.
+    /// </summary>
     private static IReadOnlyList<SubagentState> UpsertSubagent(IReadOnlyList<SubagentState>? current, HookEvent e)
     {
-        var id = e.AgentId ?? string.Empty;
         var started = e.Event == "SubagentStart";
         var list = current is null ? [] : new List<SubagentState>(current);
-        var index = list.FindIndex(s => s.AgentId == id);
+        var index = e.AgentId is { } id
+            ? list.FindIndex(s => s.AgentId == id)
+            : started ? -1 : IndexOfOldestRunningAnonymous(list);
         if (index >= 0)
         {
             var known = list[index];
@@ -181,10 +200,31 @@ public sealed class SessionTracker
         else
         {
             list.Add(new SubagentState(
-                id, e.AgentType, started ? SubagentPhase.Running : SubagentPhase.Done,
+                e.AgentId ?? NextAnonymousId(list, e.Ts), e.AgentType, started ? SubagentPhase.Running : SubagentPhase.Done,
                 e.Ts, started ? null : e.Ts, null, TokenUsage.Zero));
         }
         return TrimDone(list);
+    }
+
+    /// <summary>Index of the anonymous subagent that has been running longest, or -1 when there is none.</summary>
+    private static int IndexOfOldestRunningAnonymous(List<SubagentState> list)
+    {
+        var index = -1;
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (list[i].Phase != SubagentPhase.Running || !list[i].AgentId.StartsWith(AnonymousIdPrefix, StringComparison.Ordinal)) continue;
+            if (index < 0 || list[i].StartedAt < list[index].StartedAt) index = i;
+        }
+        return index;
+    }
+
+    /// <summary>A synthetic id for an agent_id-less subagent, unique within the session's list.</summary>
+    private static string NextAnonymousId(List<SubagentState> list, DateTimeOffset ts)
+    {
+        var baseId = AnonymousIdPrefix + ts.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var id = baseId;
+        for (var n = 1; list.Any(s => s.AgentId == id); n++) id = $"{baseId}#{n}";
+        return id;
     }
 
     /// <summary>Keeps at most MaxDoneSubagents finished subagents, dropping the ones that finished first.</summary>
@@ -229,10 +269,13 @@ public sealed class SessionTracker
             var subagents = TrimDone(session.Subagents!
                 .Select(s => s.Phase == SubagentPhase.Running ? s with { Phase = SubagentPhase.Done, EndedAt = now } : s)
                 .ToList());
+            // Same rule as the last SubagentStop: only a Working session goes Idle, so an error or a pending
+            // input that arrived while the agents were running survives the timeout.
+            var release = session.AwaitingSubagents && session.Phase == SessionPhase.Working;
             var updated = session with
             {
-                Phase = session.AwaitingSubagents ? SessionPhase.Idle : session.Phase,
-                Message = session.AwaitingSubagents ? session.Message ?? "Turno completato" : session.Message,
+                Phase = release ? SessionPhase.Idle : session.Phase,
+                Message = release ? session.Message ?? "Turno completato" : session.Message,
                 Subagents = subagents,
                 AwaitingSubagents = false
             };
