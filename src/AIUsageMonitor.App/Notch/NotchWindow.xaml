@@ -12,7 +12,9 @@
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Window.Resources>
-  <Grid>
+  <!-- Default tipografici della notch sulla radice: si ereditano da pannello, linguetta e template (anche dentro i
+       ContentPresenter), dove Theme.xaml non li impone piu' con lo stile implicito di TextBlock. -->
+  <Grid TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontSize="12">
     <!-- Pannello espanso. Hidden (non Collapsed) da chiuso, cosi' la finestra conserva l'altezza del pannello e la linguetta non salta sotto il mouse. -->
     <Border x:Name="Panel" HorizontalAlignment="Right" Width="320" Visibility="Hidden" Opacity="0"
             CornerRadius="12,0,0,12" Background="{StaticResource NotchBackground}"

@@ -21,9 +21,13 @@
   <SolidColorBrush x:Key="TextDisabled" Color="#FF7A7A82"/>
   <SolidColorBrush x:Key="Focus" Color="#FF7AA2F7"/>
 
+  <!-- Solo FontFamily. Foreground/FontSize NON vanno qui: il testo-stringa di Button, CheckBox, Label e header di
+       GroupBox passa da un ContentPresenter che genera un TextBlock, e un setter di stile batte l'ereditarieta' nella
+       precedenza WPF; con quei due setter ogni Foreground/FontSize dei controlli (AccentText del PrimaryButton,
+       TextMuted di Label e header, TextDisabled dei trigger IsEnabled=False) resterebbe invisibile.
+       I default di corpo stanno sulle radici che li possiedono: la Grid di NotchWindow e la Window delle
+       impostazioni (TextElement.Foreground / TextElement.FontSize), da cui si ereditano fin dentro i template. -->
   <Style TargetType="TextBlock">
     <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
-    <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
   </Style>
 </ResourceDictionary>
