@@ -58,6 +58,12 @@ public sealed class TrayMenuHost : IDisposable
     /// <summary>Apre il menu sul puntatore (click destro sull'icona del tray).</summary>
     public void Open(ContextMenu menu)
     {
+        // Gli offset vanno azzerati, non solo la Placement: il ContextMenu e' uno solo per tutta la vita del processo
+        // (lo costruisce TrayIconController) e WPF somma HorizontalOffset/VerticalOffset in ogni modalita', MousePoint
+        // compresa. Senza questo, dopo un avvio con --tray-menu (che usa OpenAt) ogni click destro successivo aprirebbe
+        // il menu a puntatore + meta' schermo, cioe' incollato a un bordo, fino al riavvio dell'app.
+        menu.HorizontalOffset = 0;
+        menu.VerticalOffset = 0;
         menu.Placement = PlacementMode.MousePoint;
         Show(menu);
     }
