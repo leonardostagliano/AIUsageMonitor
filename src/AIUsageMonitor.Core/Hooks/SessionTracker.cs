@@ -284,6 +284,16 @@ public sealed class SessionTracker
         return change;
     }
 
+    /// <summary>
+    /// Stores the totals without raising Changed: the pump's one-shot fill after the startup replay goes through
+    /// here, so the restored rows get their token column without the App toasting "Errore API" or "Input richiesto"
+    /// for a session whose event history was replayed rather than lived through.
+    /// </summary>
+    public void UpdateTokensSilently(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens)
+    {
+        lock (_gate) UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens);
+    }
+
     private SessionChange? UpdateTokensCore(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens)
     {
         var key = (agent, sessionId);

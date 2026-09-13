@@ -17,6 +17,11 @@ public sealed class HookEventPump : IDisposable
     private DateTimeOffset _lastCodexScan;
     private DateTimeOffset _lastTokenRefresh;
     /// <summary>
+    /// Set by <see cref="Start"/> and spent by the first <see cref="Pump"/>: the sessions restored by the silent
+    /// replay must get their token totals once, on the pump thread and without raising Changed.
+    /// </summary>
+    private bool _fillTokensOnFirstPump;
+    /// <summary>
     /// Child thread ids this pump has announced per Codex session, with the instant of the announcement: only these
     /// are ever stopped here, and the instant says when a still-running child must be announced again so the
     /// subagent timeout cannot release a child the scanner can plainly see is alive.
@@ -89,6 +94,11 @@ public sealed class HookEventPump : IDisposable
                 _lastStaleSweep = _clock.UtcNow;
                 _lastCodexScan = _clock.UtcNow;
                 _lastTokenRefresh = _clock.UtcNow;
+                // The replayed sessions have no totals yet and most of them are Idle, so neither the periodic pass
+                // (Working/NeedsInput only) nor an event-driven refresh would ever visit them: the first Pump fills
+                // them all once. Not here: Start() runs on the UI thread and the first read of a large transcript
+                // parses it whole, which would freeze the notch at launch.
+                _fillTokensOnFirstPump = TokenSource is not null;
             }
             catch (Exception ex)
             {
@@ -113,6 +123,13 @@ public sealed class HookEventPump : IDisposable
         {
             try
             {
+                if (_fillTokensOnFirstPump)
+                {
+                    // Cleared before the loop, not after: the fill must stay one-shot even if something in it
+                    // escapes, or every pump would re-read every transcript for the life of the process.
+                    _fillTokensOnFirstPump = false;
+                    foreach (var session in _tracker.Sessions) RefreshTokens(session, silent: true);
+                }
                 ApplyBatch(_reader.ReadNew().ToList());
                 _reader.RotateIfNeeded();
                 if (_clock.UtcNow - _lastCodexScan >= CodexScanEvery)
@@ -189,13 +206,19 @@ public sealed class HookEventPump : IDisposable
     /// <summary>
     /// Reads the totals for one session and hands them to the tracker, which raises Changed only if something moved.
     /// The source reads files: a locked transcript is reported and the other sessions keep their refresh.
+    /// <paramref name="silent"/> is the startup fill: the totals land on the rows without a Changed, because the
+    /// App's toasts gate only the Idle transition on the previous phase and would announce "Errore API" or
+    /// "Input richiesto" for every session the replay restored in those phases.
     /// </summary>
-    private void RefreshTokens(SessionState session)
+    private void RefreshTokens(SessionState session, bool silent = false)
     {
         if (TokenSource is null) return;
         try
         {
-            _tracker.UpdateTokens(session.Agent, session.SessionId, TokenSource.SessionTokens(session), TokenSource.SubagentTokens(session));
+            var sessionTokens = TokenSource.SessionTokens(session);
+            var subagentTokens = TokenSource.SubagentTokens(session);
+            if (silent) _tracker.UpdateTokensSilently(session.Agent, session.SessionId, sessionTokens, subagentTokens);
+            else _tracker.UpdateTokens(session.Agent, session.SessionId, sessionTokens, subagentTokens);
         }
         catch (Exception ex)
         {

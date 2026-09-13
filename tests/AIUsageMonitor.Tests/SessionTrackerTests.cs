@@ -632,4 +632,24 @@ public class SessionTrackerTests
         Assert.Empty(changes);
         Assert.Empty(tracker.Sessions);
     }
+
+    [Fact]
+    public void UpdateTokensSilently_stores_the_totals_without_raising_changed()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("Stop", message: "done", plusSeconds: 2));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        tracker.UpdateTokensSilently(AgentKind.Claude, "s1", new TokenUsage(10, 20, 30, 40),
+            new Dictionary<string, TokenUsage> { ["a1"] = new(1, 2, 3, 4) });
+
+        Assert.Empty(changes);
+        var s = Assert.Single(tracker.Sessions);
+        Assert.Equal(new TokenUsage(10, 20, 30, 40), s.Tokens);
+        Assert.Equal(new TokenUsage(1, 2, 3, 4), s.SubagentTokens);
+        Assert.Equal(T0.AddSeconds(2), s.LastEventAt);
+    }
 }

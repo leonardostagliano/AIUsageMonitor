@@ -825,4 +825,88 @@ public class HookEventPumpTests
         Assert.Equal(new TokenUsage(100, 200, 300, 400), session.Tokens);
         Assert.Equal(new TokenUsage(1, 2, 3, 4), session.SubagentTokens);
     }
+
+    /// <summary>
+    /// The silent replay restores sessions whose turn ended before the app started: nothing will ever apply a Stop
+    /// for them and the periodic pass skips them (they are Idle), so without the one-shot fill their token column
+    /// would stay empty until the user typed a new prompt — most rows, after every restart.
+    /// </summary>
+    [Fact]
+    public void Pump_fills_the_tokens_of_every_replayed_session_once_and_silently()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "idle", now.AddMinutes(-20)) +
+            SubagentLine("SubagentStart", "idle", "a1", now.AddMinutes(-19)) +
+            SubagentLine("SubagentStop", "idle", "a1", now.AddMinutes(-18)) +
+            Line("Stop", "idle", now.AddMinutes(-17)) +
+            Line("StopFailure", "error", now.AddMinutes(-15)) +
+            Line("Notification", "needsinput", now.AddMinutes(-10), "permission_prompt") +
+            Line("UserPromptSubmit", "working", now.AddMinutes(-5)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        var source = new FakeTokenSource();
+        source.Session["idle"] = new TokenUsage(1, 0, 0, 0);
+        source.Session["error"] = new TokenUsage(2, 0, 0, 0);
+        source.Session["needsinput"] = new TokenUsage(3, 0, 0, 0);
+        source.Session["working"] = new TokenUsage(4, 0, 0, 0);
+        source.Subagents["idle"] = new Dictionary<string, TokenUsage>(StringComparer.Ordinal) { ["a1"] = new(9, 0, 0, 0) };
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            // No background poll: the one-shot fill must be observed on the explicit Pump() calls of this test.
+            PollInterval = TimeSpan.FromHours(1),
+            TokenRefreshEvery = TimeSpan.FromSeconds(30),
+            TokenSource = source
+        };
+
+        pump.Start();
+
+        // Start() runs on the UI thread: reading a large transcript there would freeze the notch at launch.
+        Assert.Empty(source.Reads);
+        Assert.All(tracker.Sessions, s => Assert.Null(s.Tokens));
+
+        pump.Pump();
+
+        Assert.Equal(["error", "idle", "needsinput", "working"], source.Reads.OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Equal(new TokenUsage(1, 0, 0, 0), tracker.Sessions.Single(s => s.SessionId == "idle").Tokens);
+        Assert.Equal(new TokenUsage(9, 0, 0, 0), tracker.Sessions.Single(s => s.SessionId == "idle").SubagentTokens);
+        Assert.Equal(new TokenUsage(2, 0, 0, 0), tracker.Sessions.Single(s => s.SessionId == "error").Tokens);
+        Assert.Equal(new TokenUsage(3, 0, 0, 0), tracker.Sessions.Single(s => s.SessionId == "needsinput").Tokens);
+        Assert.Equal(new TokenUsage(4, 0, 0, 0), tracker.Sessions.Single(s => s.SessionId == "working").Tokens);
+        // Silent: a non-silent fill would toast "Errore API" and "Input richiesto" for sessions replayed from history.
+        Assert.Empty(changes);
+
+        // One shot only: from here on the cadence rules again, so the Idle and Error rows are left alone.
+        source.Reads.Clear();
+        clock.Advance(TimeSpan.FromSeconds(31));
+        pump.Pump();
+
+        Assert.Equal(["needsinput", "working"], source.Reads.OrderBy(id => id, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void Pump_does_not_fill_the_tokens_when_there_is_no_token_source()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 13, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile, Line("Stop", "idle", now.AddMinutes(-5)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+
+        pump.Start();
+        pump.Pump();
+
+        Assert.Null(Assert.Single(tracker.Sessions).Tokens);
+    }
 }
