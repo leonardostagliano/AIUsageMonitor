@@ -95,7 +95,7 @@ public class HookInstallerTests
         dir.File(@".codex\hooks.json", CodexHooks);
 
         Assert.Equal(HookStatus.Installed, installer.Install(AgentKind.Codex).Status);
-        Assert.Equal(4, HookInstaller.Registrations[AgentKind.Codex].Count);
+        Assert.Equal(6, HookInstaller.Registrations[AgentKind.Codex].Count);
         Assert.Equal(1, CountOurs(paths.CodexHooksFile, "UserPromptSubmit"));
 
         var removed = installer.Remove(AgentKind.Codex);
@@ -140,7 +140,7 @@ public class HookInstallerTests
         dir.File(@".claude\settings.json", $$$"""{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"{{{cmd}}}"}]}]}}""");
         var status = installer.GetStatus(AgentKind.Claude);
         Assert.Equal(HookStatus.Partial, status.Status);
-        Assert.Contains("1/7", status.Detail);
+        Assert.Contains("1/9", status.Detail);
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class HookInstallerTests
         var detail = installer.GetStatus(AgentKind.Codex).Detail;
 
         Assert.DoesNotContain(HookInstaller.CodexTrustHint, detail);
-        Assert.Contains("4/4", detail);
+        Assert.Contains("6/6", detail);
     }
 
     [Fact]
@@ -278,13 +278,15 @@ public class HookInstallerTests
             $"[hooks.state.'{file}:session_start:1:0']\ntrusted_hash = \"sha256:ccc\"\n" +
             $"[hooks.state.'{file}:user_prompt_submit:0:0']\ntrusted_hash = \"sha256:ddd\"\n" +
             $"[hooks.state.'{file}:stop:0:0']\ntrusted_hash = \"sha256:eee\"\n" +
-            $"[hooks.state.'{file}:session_end:0:0']\ntrusted_hash = \"sha256:fff\"\n";
+            $"[hooks.state.'{file}:session_end:0:0']\ntrusted_hash = \"sha256:fff\"\n" +
+            $"[hooks.state.'{file}:subagent_start:0:0']\ntrusted_hash = \"sha256:ggg\"\n" +
+            $"[hooks.state.'{file}:subagent_stop:0:0']\ntrusted_hash = \"sha256:hhh\"\n";
         dir.File(@".codex\config.toml", toml);
 
         var detail = installer.GetStatus(AgentKind.Codex).Detail;
 
         Assert.DoesNotContain(HookInstaller.CodexTrustHint, detail);
-        Assert.Contains("4/4", detail);
+        Assert.Contains("6/6", detail);
     }
 
     [Fact]

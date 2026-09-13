@@ -28,11 +28,13 @@ public sealed class HookInstaller
             [AgentKind.Claude] =
             [
                 new("SessionStart", null), new("UserPromptSubmit", null), new("Notification", null),
-                new("PostToolUse", "AskUserQuestion"), new("Stop", null), new("StopFailure", null), new("SessionEnd", null)
+                new("PostToolUse", "AskUserQuestion"), new("Stop", null), new("StopFailure", null), new("SessionEnd", null),
+                new("SubagentStart", null), new("SubagentStop", null)
             ],
             [AgentKind.Codex] =
             [
-                new("SessionStart", null), new("UserPromptSubmit", null), new("Stop", null), new("SessionEnd", null)
+                new("SessionStart", null), new("UserPromptSubmit", null), new("Stop", null), new("SessionEnd", null),
+                new("SubagentStart", null), new("SubagentStop", null)
             ]
         };
 
