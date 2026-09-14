@@ -88,6 +88,41 @@ indici dei gruppi aggiunti dopo, che vanno riapprovati con `/hooks`.
 Se in `config.toml` gli hook sono disabilitati (`hooks = false`) l'app lo segnala senza modificare
 il file.
 
+## Vai al terminale
+
+Nel notch, cliccando il nome di una sessione (il cursore diventa una manina) l'app porta in primo
+piano il terminale che ospita quella sessione di Claude Code o Codex, senza scollegare il pin del
+notch.
+
+1. L'hook (`hook.cjs`) registra, solo sugli eventi `SessionStart` e `UserPromptSubmit`, un oggetto
+   `host` con l'ambiente del processo che lo ha eseguito: `HERDR_PANE_ID`, `WT_SESSION`,
+   `TERM_PROGRAM`, `VSCODE_PID` e il ppid. Le sessioni avviate prima di installare questa versione
+   non hanno `host` finché non emettono il prompt successivo: fino ad allora il nome non è
+   cliccabile.
+2. Quando l'evento arriva, l'app risale l'albero dei processi a partire da quel ppid — il processo
+   che ha eseguito l'hook vive pochi secondi, la finestra del terminale resta — e tiene per ogni
+   sessione il pid dell'agente e il pid del primo antenato con una finestra top-level.
+3. Al click la catena di strategie è: prima **Herdr** (`herdr agent focus <pane>`, con
+   `herdr tab focus` come ripiego se il pane non risponde più), poi la finestra risolta al passo
+   precedente, infine gli indizi residui (`VSCODE_PID`, `WT_SESSION`). Se nessuna strategia
+   funziona compare il toast "Terminale non trovato".
+
+**Herdr** è supportato in modo completo: porta in primo piano il pane esatto anche se si trova in
+un'altra tab o in un altro workspace. **Windows Terminal, VS Code e le console semplici** sono
+supportati "a comportamento migliore": funzionano bene con una sola finestra, ma con più finestre
+di Windows Terminal (o più finestre VS Code) senza Herdr l'app non può sapere quale ospita la
+sessione e rinuncia. Nessuna chiamata a `herdr` né risalita dei processi blocca mai l'interfaccia:
+girano su thread separati con un timeout di 3 s, e il click non ruba mai il fuoco allo schermo se
+non come conseguenza diretta del click stesso.
+
+Per verificare senza passare dal notch, `AIUsageMonitor.exe --focus-session <sessionId>` aspetta il
+replay iniziale della coda eventi e prova a portare in primo piano il terminale di quella sessione,
+scrivendo l'esito nel log.
+
+Chi ha già installato gli hook non deve reinstallarli per usare questa funzione: se risultano già
+installati per almeno un agente, a ogni avvio l'app riallinea `hook.cjs` alla versione imbarcata
+nell'eseguibile (lo riscrive solo quando il contenuto è cambiato).
+
 ## Dove finiscono i file
 
 | Percorso | Contenuto |

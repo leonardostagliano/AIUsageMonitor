@@ -107,6 +107,18 @@ public sealed class AppServices : IDisposable
 
     public void Start()
     {
+        // "Vai al terminale" ha bisogno del campo host che l'hook scrive in SessionStart/UserPromptSubmit: se gli hook
+        // sono gia' installati per almeno un agente, riallinea lo script imbarcato a ogni avvio (EnsureHookScript
+        // riscrive hook.cjs solo quando il contenuto e' cambiato), cosi' un aggiornamento dell'app arriva anche a chi
+        // aveva gia' installato gli hook con una versione precedente, senza far comparire hook.cjs dal nulla a chi non
+        // li ha mai installati.
+        if (new[] { AgentKind.Claude, AgentKind.Codex }.Any(a => HookStatus(a).Status is Core.Hooks.HookStatus.Installed or Core.Hooks.HookStatus.Partial))
+        {
+            var before = File.Exists(Paths.HookScriptFile) ? File.ReadAllText(Paths.HookScriptFile) : null;
+            Hooks.EnsureHookScript();
+            if (before != HookScript.Content) Log.Info("hook.cjs aggiornato all'avvio (nuova versione dell'app)");
+        }
+
         Pump.Start(); // silent replay first, so listeners attached later never see history
         // Il replay ricostruisce le sessioni con ApplySilently, che per definizione non alza Changed: senza questo
         // giro il registro resterebbe vuoto a ogni avvio (autostart compreso) per tutte le sessioni gia' esistenti,
