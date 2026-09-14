@@ -1,4 +1,5 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+<ResourceDictionary x:Class="AIUsageMonitor.App.Notch.NotchTemplates"
+                    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <DataTemplate x:Key="TabItemTemplate">
@@ -116,7 +117,12 @@
             </Style>
           </Ellipse.Style>
         </Ellipse>
-        <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Tooltip}" VerticalAlignment="Center"/>
+        <!-- Il nome e' il collegamento al terminale della sessione: mano e click solo quando CanFocus e' vero (riga
+             senza host), e i due handler marcano l'evento Handled cosi' il click non arriva al pannello e non
+             fissa/sblocca la notch, esattamente come fa FlatRowButton per la riga dei subagenti. -->
+        <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Tooltip}" VerticalAlignment="Center"
+                   Background="Transparent" Cursor="{Binding NameCursor}"
+                   MouseLeftButtonDown="SessionName_MouseLeftButtonDown" MouseLeftButtonUp="SessionName_MouseLeftButtonUp"/>
         <TextBlock Grid.Column="2" Text="{Binding PhaseLabel}" Foreground="{Binding DotBrush}" FontSize="11" Margin="6,0" VerticalAlignment="Center"/>
         <TextBlock Grid.Column="3" Text="{Binding TokensText}" ToolTip="{Binding TokensTooltip}" Foreground="{StaticResource TextMuted}" FontSize="11" TextAlignment="Right" VerticalAlignment="Center"/>
         <TextBlock Grid.Column="4" Text="{Binding ElapsedText}" Foreground="{StaticResource TextMuted}" FontSize="11" TextAlignment="Right" VerticalAlignment="Center"/>

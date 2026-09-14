@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using AIUsageMonitor.App.Common;
+using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
 
@@ -17,13 +18,20 @@ public sealed class SessionRowViewModel : ObservableObject
     /// </summary>
     private static readonly HashSet<string> ExpandedSessionIds = new(StringComparer.Ordinal);
 
+    /// <summary>Prima riga del tooltip quando la riga porta al terminale; il resto e' il testo cwd/messaggio di sempre.</summary>
+    private const string FocusHint = "Porta in primo piano il terminale";
+
+    private readonly AppServices _services;
+    private readonly RelayCommand _focusTerminal;
     private SessionState _session;
     private string _elapsedText = "";
 
-    public SessionRowViewModel(SessionState session, DateTimeOffset now)
+    public SessionRowViewModel(SessionState session, AppServices services, DateTimeOffset now)
     {
         _session = session;
+        _services = services;
         ToggleCommand = new RelayCommand(Toggle);
+        _focusTerminal = new RelayCommand(FocusTerminal, () => CanFocus);
         SyncSubagents(now);
         Tick(now);
     }
@@ -33,8 +41,29 @@ public sealed class SessionRowViewModel : ObservableObject
     public string PhaseLabel => _session.PhaseLabel;
     public Brush DotBrush => PhaseVisuals.Brush(_session.Phase);
     public bool IsPulsing => _session.Phase == SessionPhase.Working;
-    public string Tooltip => string.Join("\n", new[] { _session.Cwd, _session.Message }.Where(s => !string.IsNullOrEmpty(s)));
+
+    public string Tooltip
+    {
+        get
+        {
+            var detail = string.Join("\n", new[] { _session.Cwd, _session.Message }.Where(s => !string.IsNullOrEmpty(s)));
+            if (!CanFocus) return detail;
+            return detail.Length == 0 ? FocusHint : FocusHint + "\n" + detail;
+        }
+    }
+
     public string ElapsedText { get => _elapsedText; private set => Set(ref _elapsedText, value); }
+
+    /// <summary>
+    /// Porta in primo piano il terminale della sessione (click sul nome). Vero solo quando l'evento della sessione ha
+    /// portato un host: senza di esso non c'e' nulla da risolvere e la riga resta una semplice etichetta.
+    /// </summary>
+    public bool CanFocus => _session.Host is not null;
+
+    /// <summary>Mano solo quando il click fa qualcosa; il template la lega al <c>TextBlock</c> del nome.</summary>
+    public Cursor NameCursor => CanFocus ? Cursors.Hand : Cursors.Arrow;
+
+    public ICommand FocusTerminalCommand => _focusTerminal;
 
     /// <summary>Compact total of the session itself, empty until something has been counted.</summary>
     public string TokensText => _session.Tokens is { Total: > 0 } tokens ? TokenFormatter.Compact(tokens.Total) : "";
@@ -74,6 +103,9 @@ public sealed class SessionRowViewModel : ObservableObject
         _session = session;
         Raise(nameof(Name)); Raise(nameof(PhaseLabel)); Raise(nameof(DotBrush)); Raise(nameof(IsPulsing)); Raise(nameof(Tooltip));
         Raise(nameof(TokensText)); Raise(nameof(TokensTooltip));
+        // L'host arriva col primo SessionStart/UserPromptSubmit: una riga nata senza puo' diventare cliccabile dopo.
+        Raise(nameof(CanFocus)); Raise(nameof(NameCursor));
+        _focusTerminal.RaiseCanExecuteChanged();
         RaiseSubagentState();
         SyncSubagents(now);
         Tick(now);
@@ -83,6 +115,35 @@ public sealed class SessionRowViewModel : ObservableObject
     {
         ElapsedText = CountdownFormatter.Since(_session.LastEventAt, now);
         foreach (var subagent in Subagents) subagent.Tick(now);
+    }
+
+    /// <summary>
+    /// Click sul nome della riga. <c>FocusTerminalAsync</c> gira gia' tutto su un thread di background (CLI di Herdr e
+    /// risalita dei processi, 3 s di timeout) e non solleva, quindi qui basta non aspettarlo: il thread della UI torna
+    /// subito e il notch resta reattivo. Il toast di fallimento torna sul thread della UI perche' lo mostra la tray.
+    /// La sessione viene catturata adesso: la riga puo' essere aggiornata mentre la catena delle strategie e' in corso.
+    /// </summary>
+    private void FocusTerminal()
+    {
+        if (!CanFocus) return;
+        var session = _session;
+        _ = FocusAsync(session);
+    }
+
+    private async Task FocusAsync(SessionState session)
+    {
+        bool focused;
+        try
+        {
+            focused = await _services.FocusTerminalAsync(session).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _services.Log.Error($"Focus {session.Agent} {session.SessionId}", ex);
+            focused = false;
+        }
+        if (focused) return;
+        UiDispatcher.Post(() => _services.Notify($"{session.Agent.DisplayName()} · {session.DisplayName}", "Terminale non trovato", NoticeKind.Warning));
     }
 
     private void Toggle()

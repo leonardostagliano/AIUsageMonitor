@@ -99,7 +99,7 @@ public sealed class AgentCardViewModel : ObservableObject
             }
             else
             {
-                Sessions.Insert(i, new SessionRowViewModel(sessions[i], now));
+                Sessions.Insert(i, new SessionRowViewModel(sessions[i], _services, now));
             }
         }
         while (Sessions.Count > sessions.Count) Sessions.RemoveAt(Sessions.Count - 1);

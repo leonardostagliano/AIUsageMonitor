@@ -189,6 +189,12 @@ public sealed class AppServices : IDisposable
     /// </summary>
     public Task<bool> FocusTerminalAsync(SessionState session) => _focuser.FocusAsync(session);
 
+    /// <summary>
+    /// Alza un <see cref="Notice"/> per conto di chi non possiede l'icona della tray (i ViewModel del notch): il
+    /// renderer resta uno solo, <c>TrayIconController</c>, che lo mostra come balloon con l'icona della severita'.
+    /// </summary>
+    public void Notify(string title, string text, NoticeKind kind) => Notice?.Invoke(title, text, kind);
+
     public void InvalidateHookStatus()
     {
         lock (_gate) _hookStatus.Clear();
