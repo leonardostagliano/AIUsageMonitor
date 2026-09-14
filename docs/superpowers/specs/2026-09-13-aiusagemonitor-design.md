@@ -89,11 +89,16 @@ enum SessionPhase { Working, NeedsInput, Idle, Error }
 // Idle = sessione aperta senza turno in corso. Etichetta UI: "finito" se ha già completato
 // almeno un turno (Message valorizzato), altrimenti "pronto".
 
+record HostInfo(int? Ppid, string? HerdrPane, string? WtSession, string? TermProgram, int? VscodePid);
+// Terminale che ospita la sessione, letto dall'hook dal proprio ambiente e dal proprio ppid.
+
 record SessionState(AgentKind Agent, string SessionId, string DisplayName, string? Cwd,
-                    SessionPhase Phase, string? Message, DateTimeOffset LastEventAt, DateTimeOffset StartedAt);
+                    SessionPhase Phase, string? Message, DateTimeOffset LastEventAt, DateTimeOffset StartedAt,
+                    HostInfo? Host);   // dall'ultimo SessionStart/UserPromptSubmit che ne portava uno
 
 record HookEvent(DateTimeOffset Ts, AgentKind Agent, string Event, string SessionId,
-                 string? Cwd, string? NotificationType, string? Message, string? Source);
+                 string? Cwd, string? NotificationType, string? Message, string? Source,
+                 HostInfo? Host);
 ```
 
 ## 6. Provider quota
@@ -134,8 +139,10 @@ record HookEvent(DateTimeOffset Ts, AgentKind Agent, string Event, string Sessio
 Riga evento:
 
 ```json
-{"ts":"2026-09-13T10:15:02.123Z","agent":"claude","event":"Notification","session_id":"abc","cwd":"C:\\Users\\...\\AIUsageMonitor","notification_type":"permission_prompt","message":"Bash needs approval","source":null}
+{"ts":"2026-09-13T10:15:02.123Z","agent":"claude","event":"Notification","session_id":"abc","cwd":"C:\\Users\\...\\AIUsageMonitor","notification_type":"permission_prompt","message":"Bash needs approval","source":null,"host":{"ppid":1234,"herdr_pane":"pane-1","wt_session":"<guid>","term_program":"vscode","vscode_pid":5678}}
 ```
+
+`host` è presente solo su `SessionStart` e `UserPromptSubmit` (su ogni altro evento è `null`): sono i soli momenti in cui l'hook gira con l'ambiente del terminale e con un ppid ancora risalibile. I singoli campi sono `null` quando la variabile d'ambiente corrispondente non c'è. Servono al click "vai al terminale" (§ 8.2) e restano sulla macchina.
 
 `message` è troncato a 200 caratteri. Rotazione: se il file supera 5 MB l'app lo rinomina in `events.1.jsonl` (una sola generazione) dopo averlo letto.
 
@@ -217,6 +224,7 @@ La riga della sessione mostra anche il numero dei subagenti e la somma dei loro 
 - Collassato: larghezza 28 px, altezza 12 + 36 × numero agenti abilitati. Per agente: icona bianca 18 px e, sotto, un pallino 8 px dello stato aggregato. Angoli sinistri arrotondati 10 px, sfondo `#1B1B1F` al 92 % di opacità, bordo 1 px bianco al 12 %.
 - Espanso: larghezza 320 px, altezza in base al contenuto (massimo 80 % dello schermo, poi scroll). Animazione della larghezza 150 ms ease-out. Si espande all'ingresso del mouse nella linguetta, si richiude 400 ms dopo l'uscita dal bordo della finestra. Click sulla linguetta o click sinistro sulla tray lo fissa aperto (icona puntina); un secondo click sulla linguetta o sulla tray lo sblocca (la finestra non prende mai il focus, quindi nessuna scorciatoia da tastiera).
 - Card agente: intestazione con icona, nome ("Claude Code", "Codex"), badge piano; una riga per finestra con etichetta, barra a colori (verde < 50 %, ambra 50–80 %, rosso > 80 %, oppure `severity` dell'API), percentuale e countdown al reset ("2h 10m", "3g 4h"); riga extra usage se presente; riga di stato se `Stale`, `TokenExpired`, `NoData` o hook non installati (link "Installa"); elenco sessioni con pallino, nome, fase, tempo dall'ultimo evento.
+- Il nome della sessione è un link (cursore a manina): il click porta in primo piano il terminale che la ospita — prima Herdr (`herdr agent focus <pane>`, l'unica strategia che raggiunge il pane esatto, anche in un'altra tab o in un altro workspace), poi la finestra risolta risalendo i processi all'arrivo dell'evento, infine gli indizi `VSCODE_PID` e `WT_SESSION`. Se nessuna strategia riesce compare il toast "Terminale non trovato". Il pin del notch non cambia in nessun caso.
 - Colori dei pallini: `Working` verde `#3FB950` con pulsazione lenta; `NeedsInput` ambra `#D29922`; `Idle` grigio pieno `#8B8B93`; `Error` rosso `#F85149`; nessuna sessione grigio contorno.
 - Il notch non ruba il focus (`WS_EX_NOACTIVATE`) e non è click-through: i click servono per fissare e per i link.
 
