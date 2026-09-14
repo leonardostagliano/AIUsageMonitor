@@ -108,6 +108,12 @@ public sealed class AppServices : IDisposable
     public void Start()
     {
         Pump.Start(); // silent replay first, so listeners attached later never see history
+        // Il replay ricostruisce le sessioni con ApplySilently, che per definizione non alza Changed: senza questo
+        // giro il registro resterebbe vuoto a ogni avvio (autostart compreso) per tutte le sessioni gia' esistenti,
+        // e il click su quelle righe perderebbe pane, WT_SESSION e VSCODE_PID finche' la sessione non emette un nuovo
+        // evento. Observe torna subito quando Host e' null e fa la risalita su Task.Run, quindi non rallenta Start().
+        // ppidIsFresh: false perche' quegli host arrivano dallo storico, non da un evento appena letto.
+        foreach (var session in Sessions.Sessions) Terminals.Observe(session, ppidIsFresh: false);
         Scheduler.Start([AgentKind.Claude, AgentKind.Codex]);
         if (Directory.Exists(Paths.CodexSessionsDir))
         {

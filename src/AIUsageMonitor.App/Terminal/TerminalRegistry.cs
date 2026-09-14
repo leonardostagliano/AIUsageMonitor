@@ -41,8 +41,11 @@ public sealed class TerminalRegistry
     /// <summary>
     /// Da chiamare a ogni cambiamento di sessione. Non fa nulla se la sessione non porta un host o se quell'host e'
     /// gia' stato risolto: la risalita parte solo quando l'informazione cambia davvero (nuova sessione, nuovo pane).
+    /// <paramref name="ppidIsFresh"/> va messo a false quando l'host non arriva da un evento appena ricevuto ma dal
+    /// replay dello storico (seed all'avvio): in quel caso il ppid puo' essere stato riciclato da Windows e la catena
+    /// dei processi viene accettata solo se contiene davvero un processo agente (vedi <see cref="Resolve"/>).
     /// </summary>
-    public void Observe(SessionState session)
+    public void Observe(SessionState session, bool ppidIsFresh = true)
     {
         if (session.Host is not { } host) return;
         var key = (session.Agent, session.SessionId);
@@ -53,7 +56,7 @@ public sealed class TerminalRegistry
             _resolved[key] = host;
         }
         // Fire-and-forget: la risalita non deve rallentare la pump degli eventi ne' il thread della UI.
-        _ = Task.Run(() => Resolve(key, host));
+        _ = Task.Run(() => Resolve(key, host, ppidIsFresh));
     }
 
     public void Forget(AgentKind agent, string sessionId)
@@ -65,7 +68,7 @@ public sealed class TerminalRegistry
         }
     }
 
-    private void Resolve((AgentKind Agent, string SessionId) key, HostInfo host)
+    private void Resolve((AgentKind Agent, string SessionId) key, HostInfo host, bool ppidIsFresh)
     {
         try
         {
@@ -84,6 +87,16 @@ public sealed class TerminalRegistry
                     if (agentPid is null && IsAgentProcess(node.Name)) (agentPid, agentPidName) = (node.Pid, node.Name);
                     if (windowPid is null && WindowActivator.FindTopLevelWindow(node.Pid) != IntPtr.Zero) (windowPid, windowPidName) = (node.Pid, node.Name);
                     if (agentPid is not null && windowPid is not null) break;
+                }
+                // Seed dopo il replay: quel ppid e' stato registrato fino a 24 ore fa. Se il processo non c'e' piu'
+                // la catena e' vuota e non si perde nulla; se invece Windows ha riciclato il pid la catena e' quella
+                // di un processo estraneo e attiveremmo la finestra sbagliata. Sopra un vero ppid dell'hook c'e'
+                // sempre l'agente: senza claude/codex/node la risalita non e' attendibile e si tengono solo gli
+                // indizi d'ambiente (pane di Herdr, WT_SESSION, VSCODE_PID), che non dipendono da un pid vivo.
+                if (!ppidIsFresh && agentPid is null && windowPid is not null)
+                {
+                    OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: ppid {ppid} non porta a un agente (pid riciclato dopo il replay), finestra {windowPid} ({windowPidName}) ignorata");
+                    (windowPid, windowPidName) = (null, null);
                 }
                 OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: ppid {ppid} → {chain.Count} antenati, agent {agentPid?.ToString() ?? "-"}, finestra {windowPid?.ToString() ?? "-"} ({windowPidName ?? "-"}), pane {host.HerdrPane ?? "-"}");
             }
