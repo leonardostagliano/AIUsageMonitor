@@ -121,7 +121,9 @@ scrivendo l'esito nel log.
 
 Chi ha già installato gli hook non deve reinstallarli per usare questa funzione: se risultano già
 installati per almeno un agente, a ogni avvio l'app riallinea `hook.cjs` alla versione imbarcata
-nell'eseguibile (lo riscrive solo quando il contenuto è cambiato).
+nell'eseguibile (lo riscrive solo quando il contenuto è cambiato). Se il file è bloccato o non
+scrivibile l'app parte lo stesso: annota l'errore nel log, tiene la versione precedente dello script
+e riprova al riavvio successivo.
 
 ## Dove finiscono i file
 

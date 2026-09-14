@@ -297,4 +297,19 @@ public class HookInstallerTests
         dir.File(@".claude\settings.json", ClaudeSettings);
         Assert.DoesNotContain(HookInstaller.CodexTrustHint, installer.Install(AgentKind.Claude).Detail);
     }
+
+    [Fact]
+    public void EnsureHookScript_reports_whether_it_wrote_so_startup_can_log_only_real_updates()
+    {
+        using var dir = new TempDir();
+        var (installer, paths) = Build(dir);
+
+        Assert.True(installer.EnsureHookScript());                        // primo avvio: lo script non esiste
+        Assert.Equal(HookScript.Content, File.ReadAllText(paths.HookScriptFile));
+        Assert.False(installer.EnsureHookScript());                       // gia' allineato: nessuna riscrittura
+
+        File.WriteAllText(paths.HookScriptFile, "// versione vecchia" + Environment.NewLine);
+        Assert.True(installer.EnsureHookScript());                        // versione precedente: riallineata
+        Assert.Equal(HookScript.Content, File.ReadAllText(paths.HookScriptFile));
+    }
 }

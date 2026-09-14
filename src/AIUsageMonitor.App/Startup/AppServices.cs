@@ -112,11 +112,18 @@ public sealed class AppServices : IDisposable
         // riscrive hook.cjs solo quando il contenuto e' cambiato), cosi' un aggiornamento dell'app arriva anche a chi
         // aveva gia' installato gli hook con una versione precedente, senza far comparire hook.cjs dal nulla a chi non
         // li ha mai installati.
-        if (new[] { AgentKind.Claude, AgentKind.Codex }.Any(a => HookStatus(a).Status is Core.Hooks.HookStatus.Installed or Core.Hooks.HookStatus.Partial))
+        // Come per il replay della pump qui sotto, un file bloccato o non scrivibile non deve mai abortire l'avvio:
+        // il riallineamento e' manutenzione opzionale, quindi un IOException (antivirus, profilo in sync, attributo
+        // di sola lettura) degrada a "hook.cjs resta alla versione precedente" e viene ritentato al prossimo avvio.
+        try
         {
-            var before = File.Exists(Paths.HookScriptFile) ? File.ReadAllText(Paths.HookScriptFile) : null;
-            Hooks.EnsureHookScript();
-            if (before != HookScript.Content) Log.Info("hook.cjs aggiornato all'avvio (nuova versione dell'app)");
+            if (new[] { AgentKind.Claude, AgentKind.Codex }.Any(a => HookStatus(a).Status is Core.Hooks.HookStatus.Installed or Core.Hooks.HookStatus.Partial)
+                && Hooks.EnsureHookScript())
+                Log.Info("hook.cjs aggiornato all'avvio (nuova versione dell'app)");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Error("hook.cjs non aggiornabile all'avvio", ex);
         }
 
         Pump.Start(); // silent replay first, so listeners attached later never see history

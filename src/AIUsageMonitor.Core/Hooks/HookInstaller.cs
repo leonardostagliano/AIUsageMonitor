@@ -66,12 +66,14 @@ public sealed class HookInstaller
     public string HookCommandFor(AgentKind agent) => $"{_nodeCommand} \"{_paths.HookScriptFile}\" {agent.Key()}";
 
     /// <summary>Writes the embedded hook.cjs next to the events file (only when missing or different).</summary>
-    public void EnsureHookScript()
+    /// <returns>true quando lo script e' stato effettivamente scritto, false quando era gia' aggiornato.</returns>
+    public bool EnsureHookScript()
     {
         Directory.CreateDirectory(_paths.MonitorDir);
         var path = _paths.HookScriptFile;
-        if (!File.Exists(path) || File.ReadAllText(path) != HookScript.Content)
-            File.WriteAllText(path, HookScript.Content);
+        if (File.Exists(path) && File.ReadAllText(path) == HookScript.Content) return false;
+        File.WriteAllText(path, HookScript.Content);
+        return true;
     }
 
     public HookStatusReport GetStatus(AgentKind agent)
