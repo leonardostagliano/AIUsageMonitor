@@ -107,13 +107,21 @@ notch.
    precedente, infine gli indizi residui (`VSCODE_PID`, `WT_SESSION`). Se nessuna strategia
    funziona compare il toast "Terminale non trovato".
 
-**Herdr** è supportato in modo completo: porta in primo piano il pane esatto anche se si trova in
-un'altra tab o in un altro workspace. **Windows Terminal, VS Code e le console semplici** sono
-supportati "a comportamento migliore": funzionano bene con una sola finestra, ma con più finestre
-di Windows Terminal (o più finestre VS Code) senza Herdr l'app non può sapere quale ospita la
-sessione e rinuncia. Nessuna chiamata a `herdr` né risalita dei processi blocca mai l'interfaccia:
-girano su thread separati con un timeout di 3 s, e il click non ruba mai il fuoco allo schermo se
-non come conseguenza diretta del click stesso.
+**Herdr** è l'unica strategia che arriva al pane: porta in primo piano il pane esatto anche se si
+trova in un'altra tab o in un altro workspace. **Senza Herdr** l'app attiva la finestra risolta
+risalendo i processi quando l'evento è arrivato: è quella giusta anche con più finestre di Windows
+Terminal aperte, perché non dipende da quante sono ma dall'antenato del processo che ha eseguito
+l'hook. Quello che non può fare è scegliere la tab — l'attivazione agisce sulla finestra top-level —
+quindi con più tab in una stessa finestra il click porta in primo piano la finestra giusta con la
+tab che era attiva. In **VS Code**, se la risalita non arriva a una finestra, resta l'indizio
+`VSCODE_PID` e l'app attiva la finestra di quel processo: le finestre di VS Code appartengono tutte
+allo stesso processo, quindi con più finestre aperte può venire in primo piano una finestra diversa
+da quella della sessione, senza alcun avviso. L'unico caso in cui l'app rinuncia davvero è il
+ripiego su `WT_SESSION`: quando la risalita non è disponibile (sessione ricostruita dal replay senza
+`host`, o pid già riciclato) e sono aperte più finestre di Windows Terminal, `WT_SESSION` non dice
+quale sia e compare il toast "Terminale non trovato". Nessuna chiamata a `herdr` né risalita dei
+processi blocca mai l'interfaccia: girano su thread separati con un timeout di 3 s, e il click non
+ruba mai il fuoco allo schermo se non come conseguenza diretta del click stesso.
 
 Per verificare senza passare dal notch, `AIUsageMonitor.exe --focus-session <sessionId>` aspetta il
 replay iniziale della coda eventi e prova a portare in primo piano il terminale di quella sessione,
@@ -174,8 +182,11 @@ dell'istanza già in esecuzione invece di aprirne un'altra.
 L'app **legge soltanto file locali** (credenziali Claude, sessioni Codex, configurazioni hook,
 eventi) e fa **una sola chiamata di rete**: l'endpoint usage di Anthropic, con il token OAuth già
 presente sulla macchina. Nessun prompt, nessun contenuto di conversazione e nessun token viene
-inviato, registrato o mostrato da nessuna parte: gli eventi tracciati sono solo nomi di evento,
-identificativo di sessione, cartella di lavoro e un messaggio breve dell'agente. Non c'è telemetria.
+inviato, registrato o mostrato da nessuna parte: gli eventi tracciati sono nomi di evento,
+identificativo di sessione, cartella di lavoro, un messaggio breve dell'agente e, sugli eventi di
+avvio e di prompt, qualche indizio sul terminale che ospita la sessione (ppid, pane di Herdr,
+`WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID`), che serve solo al click "vai al terminale" e non lascia
+mai la macchina. Non c'è telemetria.
 
 ## Licenza
 
