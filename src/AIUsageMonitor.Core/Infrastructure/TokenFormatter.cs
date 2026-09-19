@@ -15,7 +15,12 @@ public static class TokenFormatter
         return string.Create(Italian, $"{tokens / 1_000_000.0:0.0}M");
     }
 
-    /// <summary>Breakdown tooltip: "in 11,0k · out 434,9k · cache 26,4M letti / 2,7M scritti".</summary>
+    /// <summary>Input includes cache, matching the total processed by the provider.</summary>
+    public static string InputOutput(TokenUsage u) => $"↑ {Compact(u.TotalInput)} · ↓ {Compact(u.Output)}";
+
+    /// <summary>Distinguishes processed input from the cache buckets that make long sessions grow quickly.</summary>
     public static string Breakdown(TokenUsage u) =>
-        $"in {Compact(u.Input)} · out {Compact(u.Output)} · cache {Compact(u.CacheRead)} letti / {Compact(u.CacheWrite)} scritti";
+        $"Token cumulativi della conversazione\n↑ Input {Compact(u.TotalInput)} · ↓ Output {Compact(u.Output)}\n" +
+        $"Input senza cache {Compact(u.Input)}\nCache inclusa nell'input: {Compact(u.CacheRead)} letti / {Compact(u.CacheWrite)} scritti\n" +
+        "Il contesto riletto a ogni richiesta viene contato di nuovo.";
 }

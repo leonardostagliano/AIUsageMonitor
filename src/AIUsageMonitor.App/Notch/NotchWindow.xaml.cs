@@ -28,6 +28,8 @@ public partial class NotchWindow : Window, INotchHost
 
     private readonly AppServices _services;
     private readonly DispatcherTimer _collapseTimer;
+    private readonly DispatcherTimer _startupRepositionTimer;
+    private int _startupRepositions;
     private bool _expanded;
     private bool _pinned;
 
@@ -43,13 +45,32 @@ public partial class NotchWindow : Window, INotchHost
             _collapseTimer.Stop();
             if (!_pinned && !IsMouseOver) Collapse();
         };
+        _startupRepositionTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(3)
+        };
+        _startupRepositionTimer.Tick += (_, _) =>
+        {
+            if (++_startupRepositions >= 5) _startupRepositionTimer.Stop();
+            if (IsVisible) Reposition();
+        };
 
         MouseEnter += (_, _) => _collapseTimer.Stop();
         MouseLeave += (_, _) => ScheduleCollapse();
         SizeChanged += (_, _) => Reposition();
         DpiChanged += (_, _) => Reposition();
-        Loaded += (_, _) => Reposition();
+        Loaded += (_, _) =>
+        {
+            Reposition();
+            // Explorer may finish publishing the work area/DPI shortly after a Run-at-logon process is created.
+            // Recompute at idle and during the first 15 seconds while monitors and the shell settle.
+            // This never activates the window or re-shows a notch the user has hidden.
+            Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, Reposition);
+            _startupRepositions = 0;
+            _startupRepositionTimer.Start();
+        };
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         services.Settings.Changed += _ => UiDispatcher.Post(ApplySettings);
     }
 
@@ -65,10 +86,15 @@ public partial class NotchWindow : Window, INotchHost
     protected override void OnClosed(EventArgs e)
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+        _startupRepositionTimer.Stop();
         base.OnClosed(e);
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) => UiDispatcher.Post(Reposition);
+
+    // Taskbar/work-area changes do not necessarily change the display resolution.
+    private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e) => UiDispatcher.Post(Reposition);
 
     private void Tab_MouseEnter(object sender, MouseEventArgs e) => Expand();
 

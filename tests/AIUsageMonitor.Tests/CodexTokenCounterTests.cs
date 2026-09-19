@@ -67,6 +67,19 @@ public class CodexTokenCounterTests
     }
 
     [Fact]
+    public void ReadModel_uses_the_newest_turn_context_and_ignores_unrelated_model_fields()
+    {
+        using var dir = new TempDir();
+        var file = Rollout(dir, FileNameFor(Parent), Parent, null, []);
+        File.AppendAllText(file, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"old-model\"}}\n");
+        File.AppendAllText(file, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n");
+        File.AppendAllText(file, "{\"type\":\"turn_context\",\"payload\":{\"model\":\"\"}}\n");
+        File.AppendAllText(file, "{\"type\":\"response_item\",\"payload\":{\"model\":\"fake\"}}\n{\"type\":\"turn_context\",\"payload\":");
+
+        Assert.Equal("gpt-5", Build(dir).ReadModel(Parent));
+    }
+
+    [Fact]
     public void ReadThread_skips_a_token_count_without_info()
     {
         using var dir = new TempDir();

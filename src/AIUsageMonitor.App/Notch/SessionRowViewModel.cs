@@ -65,26 +65,26 @@ public sealed class SessionRowViewModel : ObservableObject
 
     public ICommand FocusTerminalCommand => _focusTerminal;
 
-    /// <summary>Compact total of the session itself, empty until something has been counted.</summary>
-    public string TokensText => _session.Tokens is { Total: > 0 } tokens ? TokenFormatter.Compact(tokens.Total) : "";
+    /// <summary>Processed input and output of the conversation, including input served from cache.</summary>
+    public string TokensText => _session.Tokens is { } tokens ? TokenFormatter.InputOutput(tokens) : "Token in attesa";
 
     /// <summary>Breakdown for the tooltip of the token column; null (no tooltip) when there is no total yet.</summary>
     public string? TokensTooltip => _session.Tokens is { Total: > 0 } tokens ? TokenFormatter.Breakdown(tokens) : null;
 
-    /// <summary>Subagents of this session, running ones first, then the most recently started.</summary>
+    /// <summary>Running subagents, most recently started first.</summary>
     public ObservableCollection<SubagentRowViewModel> Subagents { get; } = new();
 
-    public bool HasSubagents => _session.Subagents is { Count: > 0 };
+    public bool HasSubagents => _session.ActiveSubagents > 0;
 
-    /// <summary>"3 agenti · 4,1M tok" — the agents known for this session and the sum of their totals.</summary>
+    /// <summary>Counts and totals describe only the active workflow rows.</summary>
     public string SubagentSummary
     {
         get
         {
-            var count = _session.Subagents?.Count ?? 0;
+            var count = _session.ActiveSubagents;
             if (count == 0) return "";
-            var label = count == 1 ? "1 agente" : $"{count} agenti";
-            return $"{label} · {TokenFormatter.Compact(_session.SubagentTokens.Total)} tok";
+            var label = count == 1 ? "1 agente attivo" : $"{count} agenti attivi";
+            return $"{label} · {TokenFormatter.Compact(_session.ActiveSubagentTokens.Total)} tok";
         }
     }
 
@@ -164,9 +164,8 @@ public sealed class SessionRowViewModel : ObservableObject
     /// </summary>
     private void SyncSubagents(DateTimeOffset now)
     {
-        var ordered = (_session.Subagents ?? [])
-            .OrderBy(s => s.Phase == SubagentPhase.Running ? 0 : 1)
-            .ThenByDescending(s => s.StartedAt)
+        var ordered = _session.RunningSubagents
+            .OrderByDescending(s => s.StartedAt)
             .ToList();
 
         var byId = new Dictionary<string, SubagentRowViewModel>(StringComparer.Ordinal);

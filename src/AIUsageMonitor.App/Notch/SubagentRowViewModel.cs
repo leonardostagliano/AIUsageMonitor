@@ -7,8 +7,7 @@ namespace AIUsageMonitor.App.Notch;
 
 /// <summary>
 /// One background subagent under a session row (Agent tool, workflow agent, or — for Codex — a child thread).
-/// Deliberately icon-less: the row is already indented under its session, so a dot, a name, a phase, its own token
-/// total and how long it has been running are all the panel can afford at 320 px.
+/// Indented under its session, with a name/status row, the actual model and separate input/output counts.
 /// </summary>
 public sealed class SubagentRowViewModel : ObservableObject
 {
@@ -34,8 +33,10 @@ public sealed class SubagentRowViewModel : ObservableObject
 
     public bool IsPulsing => _state.Phase == SubagentPhase.Running;
 
-    /// <summary>Compact total, empty while nothing has been counted yet (a transcript that has not been read).</summary>
-    public string TokensText => _state.Tokens.Total > 0 ? TokenFormatter.Compact(_state.Tokens.Total) : "";
+    /// <summary>Separate input and output, or an explicit pending state before the first usage report.</summary>
+    public string TokensText => _state.Tokens.Total > 0 ? TokenFormatter.InputOutput(_state.Tokens) : "Token in attesa";
+
+    public string ModelText => string.IsNullOrWhiteSpace(_state.Model) ? "Modello in attesa" : _state.Model;
 
     /// <summary>Null — not "" — when there is no total: WPF shows no tooltip at all for null.</summary>
     public string? TokensTooltip => _state.Tokens.Total > 0 ? TokenFormatter.Breakdown(_state.Tokens) : null;
@@ -47,7 +48,7 @@ public sealed class SubagentRowViewModel : ObservableObject
     {
         _state = state;
         Raise(nameof(Name)); Raise(nameof(PhaseLabel)); Raise(nameof(DotBrush)); Raise(nameof(IsPulsing));
-        Raise(nameof(TokensText)); Raise(nameof(TokensTooltip));
+        Raise(nameof(TokensText)); Raise(nameof(TokensTooltip)); Raise(nameof(ModelText));
         Tick(now);
     }
 

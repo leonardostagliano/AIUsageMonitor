@@ -16,4 +16,7 @@ public interface ITokenSource
 
     /// <summary>Usage per subagent id (only the ids it knows about), or null when there is nothing to report.</summary>
     IReadOnlyDictionary<string, TokenUsage>? SubagentTokens(SessionState session);
+
+    /// <summary>Model name per subagent id, when the source can determine it.</summary>
+    IReadOnlyDictionary<string, string>? SubagentModels(SessionState session) => null;
 }

@@ -73,7 +73,21 @@ Gli agenti non espongono il loro stato: lo ricaviamo dai loro hook.
    `permission_prompt`/`idle_prompt`/… → attende input, `Stop` → finito, `StopFailure` → errore,
    `SessionEnd` → sessione rimossa. All'avvio rilegge le ultime 24 ore (in silenzio, senza toast).
 
-### Codex: gli hook vanno approvati con `/hooks`
+### Token e workflow attivi
+
+Ogni sessione mostra separatamente **↑ input** (inclusa la cache) e **↓ output**.
+Sono i token cumulativi della conversazione: il contesto inviato di nuovo a ogni richiesta viene
+conteggiato di nuovo, quindi possono superare di molto la lunghezza del testo visibile. Il tooltip
+separa input senza cache, cache letta e cache scritta. Le risposte Claude in streaming vengono
+deduplicate per identificativo del messaggio, con ripiego sull'identificativo della richiesta;
+per Codex si usa l'ultimo totale cumulativo riportato dal thread.
+
+La lista espandibile dei workflow mostra solo gli agenti **in corso**, con modello effettivo letto
+dal transcript e token ↑ input/↓ output. Gli agenti conclusi escono dalla lista e dal riepilogo attivo.
+Se modello o token non sono ancora disponibili viene mostrato "in attesa"; i totali della sessione
+e quelli dei singoli workflow rimangono distinti.
+
+### Codex: approvazione degli hook
 
 Codex esegue un gruppo di hook **solo dopo che l'utente lo ha approvato**: in `~/.codex/config.toml`
 tiene una sezione `[hooks.state.'<file>:<evento>:<gruppo>:<indice>']` con un `trusted_hash` per ogni

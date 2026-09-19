@@ -68,6 +68,7 @@ public class ModelsTests
         var a = new TokenUsage(1, 2, 3, 4);
         var b = new TokenUsage(10, 20, 30, 40);
         Assert.Equal(10, a.Total);
+        Assert.Equal(8, a.TotalInput);
         Assert.Equal(new TokenUsage(11, 22, 33, 44), a + b);
         Assert.Equal(TokenUsage.Zero, new TokenUsage(0, 0, 0, 0));
     }
@@ -83,6 +84,11 @@ public class ModelsTests
 
         Assert.Equal(1, session.ActiveSubagents);
         Assert.Equal(new TokenUsage(3, 3, 0, 0), session.SubagentTokens);
+        Assert.Equal([running], session.RunningSubagents);
+        Assert.Equal(running.Tokens, session.ActiveSubagentTokens);
+        var completed = session with { Subagents = [running with { Phase = SubagentPhase.Done }, done] };
+        Assert.Empty(completed.RunningSubagents);
+        Assert.Equal(TokenUsage.Zero, completed.ActiveSubagentTokens);
     }
 
     [Fact]

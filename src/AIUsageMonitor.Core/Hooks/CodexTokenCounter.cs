@@ -81,6 +81,27 @@ public sealed class CodexTokenCounter
         return tokens;
     }
 
+    /// <summary>Returns the newest model name recorded in a thread rollout, or null when unavailable.</summary>
+    /// <remarks>Best-effort metadata lookup; it does not change token totals or the cumulative-read cache.</remarks>
+    public string? ReadModel(string threadId)
+    {
+        if (string.IsNullOrWhiteSpace(threadId) || !TryResolvePath(threadId, out var path) || path is null) return null;
+        try
+        {
+            foreach (var line in ReverseLineReader.ReadLinesFromEnd(path).Take(MaxLinesPerFile))
+            {
+                if (!line.Contains("\"model\"", StringComparison.Ordinal)) continue;
+                if (ModelOf(line) is { } model) return model;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+                                      or NotSupportedException or System.Security.SecurityException)
+        {
+            // Metadata is optional and must not turn a healthy token read into an error.
+        }
+        return null;
+    }
+
     /// <summary>
     /// Cumulative token usage of <paramref name="threadId"/>. Returns false when the totals could not be read at all
     /// (the rollout is locked, vanished mid-read, or the sessions directory could not be enumerated):
@@ -350,6 +371,38 @@ public sealed class CodexTokenCounter
         {
             return null;
         }
+    }
+
+    private static string? ModelOf(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!root.TryGetProperty("type", out var recordType) || recordType.ValueKind != JsonValueKind.String) return null;
+            var type = recordType.GetString();
+            var accepted = string.Equals(type, "session_meta", StringComparison.Ordinal)
+                || string.Equals(type, "turn_context", StringComparison.Ordinal);
+            JsonElement payload = default;
+            if (root.TryGetProperty("payload", out var candidate) && candidate.ValueKind == JsonValueKind.Object)
+            {
+                payload = candidate;
+                // Older rollouts wrapped turn_context in event_msg; retain support for that shape.
+                if (string.Equals(type, "event_msg", StringComparison.Ordinal)
+                    && payload.TryGetProperty("type", out var payloadType)
+                    && payloadType.ValueKind == JsonValueKind.String
+                    && string.Equals(payloadType.GetString(), "turn_context", StringComparison.Ordinal)) accepted = true;
+            }
+            if (!accepted) return null;
+            if (payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("model", out var model)
+                && model.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(model.GetString())) return model.GetString();
+            // A few rollout versions put model directly on the metadata record.
+            if (root.TryGetProperty("model", out model) && model.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(model.GetString())) return model.GetString();
+        }
+        catch (JsonException) { }
+        return null;
     }
 
     private static long Long(JsonElement element, string property) =>

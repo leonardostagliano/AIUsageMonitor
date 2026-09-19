@@ -60,6 +60,32 @@ public class ClaudeTranscriptTokenCounterTests
     }
 
     [Fact]
+    public void Deduplicates_streamed_lines_by_message_id_across_request_id_variants()
+    {
+        using var dir = new TempDir();
+        var line = (long output) =>
+            $"{{\"type\":\"assistant\",\"message\":{{\"id\":\"msg_1\",\"model\":\"claude-sonnet\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":{output},\"cache_read_input_tokens\":2,\"cache_creation_input_tokens\":1}}}}}}";
+        var mixed = line(9).Replace("\"message\"", "\"requestId\":\"req-x\",\"message\"");
+        var file = dir.File("session.jsonl", Join(line(3), mixed));
+
+        Assert.Equal(new TokenUsage(10, 9, 2, 1), new ClaudeTranscriptTokenCounter().Read(file));
+    }
+
+    [Fact]
+    public void ReadModel_returns_the_newest_assistant_model()
+    {
+        using var dir = new TempDir();
+        var first = Assistant("a", 1, 1, 0, 0).Replace("\"usage\":", "\"model\":\"claude-opus\",\"usage\":");
+        var second = Assistant("b", 1, 1, 0, 0).Replace("\"usage\":", "\"model\":\"claude-sonnet\",\"usage\":");
+        var file = dir.File("session.jsonl", Join(first, second,
+            """{"type":"assistant","message":{"model":"<synthetic>"}}""",
+            """["assistant"]""", """{"type":42,"model":"assistant"}""",
+            """{"type":"assistant","message": """));
+
+        Assert.Equal("claude-sonnet", new ClaudeTranscriptTokenCounter().ReadModel(file));
+    }
+
+    [Fact]
     public void Second_call_reads_only_the_appended_bytes()
     {
         using var dir = new TempDir();

@@ -65,6 +65,25 @@ public sealed class AppTokenSource : ITokenSource
         return totals.Count == 0 ? null : totals;
     }
 
+    public IReadOnlyDictionary<string, string>? SubagentModels(SessionState session)
+    {
+        var models = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var subagent in session.RunningSubagents)
+        {
+            string? model;
+            if (session.Agent == AgentKind.Codex)
+                model = _codex.ReadModel(subagent.AgentId);
+            else
+            {
+                var path = subagent.TranscriptPath
+                           ?? _claudeAgents.Locate(session.TranscriptPath, session.SessionId, subagent.AgentId);
+                model = path is null ? null : _claude.ReadModel(path);
+            }
+            if (!string.IsNullOrWhiteSpace(model)) models[subagent.AgentId] = model;
+        }
+        return models.Count == 0 ? null : models;
+    }
+
     /// <summary>Drops the per-transcript state of a session that is gone, with that of its subagents.</summary>
     public void Forget(SessionState session)
     {

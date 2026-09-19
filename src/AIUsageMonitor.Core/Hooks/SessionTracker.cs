@@ -280,10 +280,11 @@ public sealed class SessionTracker
     /// seconds and an unconditional event would repaint the notch (and re-evaluate the toasts) for nothing.
     /// Returns null when nothing changed or the session is unknown.
     /// </summary>
-    public SessionChange? UpdateTokens(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens)
+    public SessionChange? UpdateTokens(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens,
+        IReadOnlyDictionary<string, string>? subagentModels = null)
     {
         SessionChange? change;
-        lock (_gate) change = UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens);
+        lock (_gate) change = UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens, subagentModels);
         if (change is not null) Raise(change);
         return change;
     }
@@ -293,12 +294,14 @@ public sealed class SessionTracker
     /// here, so the restored rows get their token column without the App toasting "Errore API" or "Input richiesto"
     /// for a session whose event history was replayed rather than lived through.
     /// </summary>
-    public void UpdateTokensSilently(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens)
+    public void UpdateTokensSilently(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens,
+        IReadOnlyDictionary<string, string>? subagentModels = null)
     {
-        lock (_gate) UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens);
+        lock (_gate) UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens, subagentModels);
     }
 
-    private SessionChange? UpdateTokensCore(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens)
+    private SessionChange? UpdateTokensCore(AgentKind agent, string sessionId, TokenUsage? sessionTokens,
+        IReadOnlyDictionary<string, TokenUsage>? subagentTokens, IReadOnlyDictionary<string, string>? subagentModels)
     {
         var key = (agent, sessionId);
         if (!_sessions.TryGetValue(key, out var session)) return null;
@@ -322,6 +325,22 @@ public sealed class SessionTracker
                 if (!subagentTokens.TryGetValue(known[i].AgentId, out var usage) || usage == known[i].Tokens) continue;
                 updatedList ??= [.. known];
                 updatedList[i] = known[i] with { Tokens = usage };
+            }
+            if (updatedList is not null)
+            {
+                subagents = updatedList;
+                changed = true;
+            }
+        }
+
+        if (subagentModels is { Count: > 0 } && session.Subagents is { Count: > 0 } modelKnown)
+        {
+            List<SubagentState>? updatedList = null;
+            for (var i = 0; i < modelKnown.Count; i++)
+            {
+                if (!subagentModels.TryGetValue(modelKnown[i].AgentId, out var model) || string.IsNullOrWhiteSpace(model) || model == modelKnown[i].Model) continue;
+                updatedList ??= [.. subagents!];
+                updatedList[i] = updatedList[i] with { Model = model };
             }
             if (updatedList is not null)
             {

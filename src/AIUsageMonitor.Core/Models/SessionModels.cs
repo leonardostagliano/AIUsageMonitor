@@ -7,7 +7,10 @@ public enum SessionPhase { Working, NeedsInput, Idle, Error }
 /// <summary>Token usage for a session or a subagent (Claude Code fields; Codex maps its totals onto Input/Output/CacheRead/CacheWrite).</summary>
 public sealed record TokenUsage(long Input, long Output, long CacheRead, long CacheWrite)
 {
-    public long Total => Input + Output + CacheRead + CacheWrite;
+    /// <summary>All input processed, including cache reads and writes; Input itself is the uncached bucket.</summary>
+    public long TotalInput => Input + CacheRead + CacheWrite;
+
+    public long Total => TotalInput + Output;
 
     public static readonly TokenUsage Zero = new(0, 0, 0, 0);
 
@@ -28,7 +31,8 @@ public sealed record SubagentState(
     DateTimeOffset StartedAt,
     DateTimeOffset? EndedAt,
     string? TranscriptPath,
-    TokenUsage Tokens);
+    TokenUsage Tokens,
+    string? Model = null);
 
 public sealed record SessionState(
     AgentKind Agent,
@@ -63,6 +67,12 @@ public sealed record SessionState(
 
     /// <summary>Number of subagents still running (Agent tool or workflow agents).</summary>
     public int ActiveSubagents => Subagents?.Count(s => s.Phase == SubagentPhase.Running) ?? 0;
+
+    /// <summary>The live workflow rows; completed agents remain in history but are no longer displayed.</summary>
+    public IEnumerable<SubagentState> RunningSubagents =>
+        Subagents?.Where(s => s.Phase == SubagentPhase.Running) ?? [];
+
+    public TokenUsage ActiveSubagentTokens => RunningSubagents.Aggregate(TokenUsage.Zero, (acc, s) => acc + s.Tokens);
 
     /// <summary>Sum of token usage across every known subagent (running and done).</summary>
     public TokenUsage SubagentTokens => Subagents is null

@@ -31,6 +31,10 @@ public partial class App : Application
         }
 
         _services = AppServices.Create();
+        // Existing installations predate the explicit startup marker. Migrate only an already-enabled Run entry;
+        // registry failures must not prevent the tray/notch from starting.
+        try { AutoStart.EnsureStartupArgument(); }
+        catch (Exception ex) { _services.Log.Error("AutoStart migration failed", ex); }
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += (_, args) => _services.Log.Error("Unhandled exception", args.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, args) => { _services.Log.Error("Unobserved task exception", args.Exception); args.SetObserved(); };
@@ -43,7 +47,11 @@ public partial class App : Application
         {
             var notch = new NotchWindow(_services, new NotchViewModel(_services));
             _notch = notch;
-            if (_services.Settings.Current.NotchVisible) notch.Show();
+            // Explorer starts Run entries after the interactive desktop is ready, but a persisted hidden state can
+            // otherwise make an auto-started instance look like a tray-only process. The explicit startup marker
+            // restores the primary surface for login launches; normal manual launches still honor the user's choice.
+            if (_services.Settings.Current.NotchVisible || e.Args.Contains(AutoStart.StartupArgument, StringComparer.OrdinalIgnoreCase))
+                notch.Show();
             _tray = new TrayIconController(_services, notch);
             _tray.OpenSettings = () => SettingsWindow.ShowSingleton(_services);
             _single.ShowNotchRequested += () => Dispatcher.BeginInvoke(notch.Pin);

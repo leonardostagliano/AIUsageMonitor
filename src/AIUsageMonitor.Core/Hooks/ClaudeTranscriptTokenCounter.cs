@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
 
 namespace AIUsageMonitor.Core.Hooks;
@@ -89,6 +90,37 @@ public sealed class ClaudeTranscriptTokenCounter
         return state.Total;
     }
 
+    /// <summary>Returns the model on the newest assistant message in a transcript, or null when unavailable.</summary>
+    /// <remarks>This is a deliberately independent, backwards-compatible metadata read; it does not affect token state.</remarks>
+    public string? ReadModel(string transcriptPath)
+    {
+        if (string.IsNullOrWhiteSpace(transcriptPath) || !File.Exists(transcriptPath)) return null;
+        try
+        {
+            foreach (var line in ReverseLineReader.ReadLinesFromEnd(transcriptPath).Take(2_000))
+            {
+                if (!line.Contains("\"assistant\"", StringComparison.Ordinal)) continue;
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object) continue;
+                    if (!root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String
+                        || type.GetString() != "assistant") continue;
+                    if (!root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object) continue;
+                    if (message.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(model.GetString()) && model.GetString() != "<synthetic>") return model.GetString();
+                }
+                catch (JsonException) { /* keep looking past a partial/corrupt line */ }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        {
+            // Metadata is best effort, just like token reads.
+        }
+        return null;
+    }
+
     /// <summary>Byte offset of the first line of <paramref name="transcriptPath"/> not yet consumed (0 when unknown).</summary>
     public long OffsetOf(string transcriptPath) =>
         _states.TryGetValue(transcriptPath, out var state) ? state.Offset : 0;
@@ -112,9 +144,16 @@ public sealed class ClaudeTranscriptTokenCounter
             if (!root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object) return;
             if (!message.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object) return;
 
-            var requestId = root.TryGetProperty("requestId", out var id) && id.ValueKind == JsonValueKind.String
+            // Prefer message.id: it remains stable when a stream mixes lines with and without requestId.
+            // Prefix the fallback to avoid collisions between the two identifier namespaces.
+            var messageKey = message.TryGetProperty("id", out var messageId) && messageId.ValueKind == JsonValueKind.String
+                ? messageId.GetString()
+                : null;
+            var requestKey = root.TryGetProperty("requestId", out var id) && id.ValueKind == JsonValueKind.String
                 ? id.GetString()
                 : null;
+            var requestId = !string.IsNullOrWhiteSpace(messageKey) ? $"message:{messageKey}" :
+                !string.IsNullOrWhiteSpace(requestKey) ? $"request:{requestKey}" : null;
             var counted = new TokenUsage(
                 Long(usage, "input_tokens"),
                 Long(usage, "output_tokens"),

@@ -600,6 +600,40 @@ public class SessionTrackerTests
     }
 
     [Fact]
+    public void UpdateTokens_updates_model_metadata_without_changing_phase_or_activity_time()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit", sid: "s1", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStart", sid: "s1", agentId: "a1", plusSeconds: 2));
+        var before = tracker.Sessions.Single();
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        var change = tracker.UpdateTokens(AgentKind.Claude, "s1", null, null,
+            new Dictionary<string, string> { ["a1"] = "claude-sonnet-4" });
+
+        Assert.NotNull(change);
+        var after = change!.Session;
+        Assert.Equal(before.Phase, after.Phase);
+        Assert.Equal(before.LastEventAt, after.LastEventAt);
+        Assert.Equal("claude-sonnet-4", Assert.Single(after.Subagents!).Model);
+        Assert.Equal(before.Tokens, after.Tokens);
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void UpdateTokens_ignores_null_or_blank_model_metadata()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit", sid: "s1", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStart", sid: "s1", agentId: "a1", plusSeconds: 2));
+        Assert.Null(tracker.UpdateTokens(AgentKind.Claude, "s1", null, null,
+            new Dictionary<string, string> { ["a1"] = " " }));
+        Assert.Null(Assert.Single(tracker.Sessions).Subagents!.Single().Model);
+    }
+
+    [Fact]
     public void UpdateTokens_raises_nothing_when_the_totals_did_not_change()
     {
         var tracker = new SessionTracker(new FakeClock(T0));

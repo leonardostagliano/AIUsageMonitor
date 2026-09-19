@@ -65,7 +65,9 @@ public sealed class TrayIconController : IDisposable
             notch.TogglePin();
         };
 
-        _icon = new WinForms.NotifyIcon { Visible = true, Text = "AIUsageMonitor" };
+        // Assign the icon before registering the NotifyIcon with Explorer, so the first shell registration already
+        // carries the application's glyph instead of the default/empty icon.
+        _icon = new WinForms.NotifyIcon { Visible = false, Text = "AIUsageMonitor" };
         _icon.MouseClick += (_, e) =>
         {
             if (e.Button != WinForms.MouseButtons.Left) return;
@@ -94,10 +96,20 @@ public sealed class TrayIconController : IDisposable
         _notice = (title, text, kind) => UiDispatcher.Post(() => ShowBalloon(title, text, BalloonIcon(kind)));
         services.Notice += _notice;
         UpdateIcon();
+        _icon.Visible = true;
     }
 
-    public void ShowBalloon(string title, string text, WinForms.ToolTipIcon kind) =>
-        _icon.ShowBalloonTip(5000, title, text, kind);
+    public void ShowBalloon(string title, string text, WinForms.ToolTipIcon kind)
+    {
+        // On Windows 10/11, leave the app's notification identity visible instead of selecting a stock glyph.
+        var displayTitle = kind switch
+        {
+            WinForms.ToolTipIcon.Warning => $"Attenzione · {title}",
+            WinForms.ToolTipIcon.Error => $"Errore · {title}",
+            _ => title
+        };
+        _icon.ShowBalloonTip(5000, displayTitle, text, WinForms.ToolTipIcon.None);
+    }
 
     /// <summary>Apre il menu del tray sul puntatore, con le etichette dinamiche appena rilette.</summary>
     public void ShowMenu()
@@ -169,11 +181,20 @@ public sealed class TrayIconController : IDisposable
         var color = PhaseVisuals.DrawingColor(_services.WorstPhase());
         var size = Math.Max(16, WinForms.SystemInformation.SmallIconSize.Width);
         var next = TrayIconRenderer.Render(color, size);
-        _icon.Icon = next.Icon;
-        _rendered?.Dispose();
-        _rendered = next;
-        var text = _services.TooltipSummary();
-        _icon.Text = text.Length > 63 ? text[..63] : text;
+        try
+        {
+            _icon.Icon = next.Icon;
+            var text = _services.TooltipSummary();
+            _icon.Text = text.Length > 63 ? text[..63] : text;
+            var previous = _rendered;
+            _rendered = next;
+            previous?.Dispose();
+        }
+        catch
+        {
+            next.Dispose();
+            throw;
+        }
     }
 
     public void Dispose()
