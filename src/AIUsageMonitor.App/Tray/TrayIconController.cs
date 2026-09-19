@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
+using AIUsageMonitor.App.Notifications;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Models;
 using WinForms = System.Windows.Forms;
@@ -14,6 +15,7 @@ public sealed class TrayIconController : IDisposable
     private readonly AppServices _services;
     private readonly INotchHost _notch;
     private readonly WinForms.NotifyIcon _icon;
+    private readonly AppNotificationSender _notifications;
     private readonly TrayMenuHost _menuHost;
     private readonly ContextMenu _menu;
     private readonly MenuItem _toggleNotch;
@@ -27,14 +29,15 @@ public sealed class TrayIconController : IDisposable
     /// <summary>Set by App.xaml.cs once the settings window exists (Task 7). Null-safe.</summary>
     public Action? OpenSettings { get; set; }
 
-    public TrayIconController(AppServices services, INotchHost notch)
+    public TrayIconController(AppServices services, INotchHost notch, AppNotificationSender notifications)
     {
         _services = services;
         _notch = notch;
+        _notifications = notifications;
 
         // Il menu e' un ContextMenu WPF (Tray/TrayMenu.xaml) e non piu' una ContextMenuStrip: la striscia WinForms non
         // prende l'aspetto del notch (cromatura chiara, angoli vivi, font suoi). La NotifyIcon resta solo per icona,
-        // tooltip e balloon, quindi non le si assegna piu' nessuna ContextMenuStrip.
+        // e tooltip, quindi non le si assegna piu' nessuna ContextMenuStrip.
         _menuHost = new TrayMenuHost();
         _menu = new ContextMenu { Style = Resource<Style>("TrayContextMenu") };
         _menu.Items.Add(Item("Aggiorna ora", services.RefreshAll));
@@ -88,27 +91,25 @@ public sealed class TrayIconController : IDisposable
             _singleClickTimer.Stop();
             OpenSettings?.Invoke();
         };
-        _icon.BalloonTipClicked += (_, _) => notch.Pin();
-
         services.StateChanged += () => UiDispatcher.Post(UpdateIcon);
         // Unico renderer dei messaggi utente: AppServices.InstallHooks alza il Notice da entrambi i punti di ingresso
         // (menu tray e link "installa hook" nella card del notch), cosi' lo stesso click dice sempre la stessa cosa.
-        _notice = (title, text, kind) => UiDispatcher.Post(() => ShowBalloon(title, text, BalloonIcon(kind)));
+        _notice = (title, text, kind) => UiDispatcher.Post(() => ShowNotification(title, text, BalloonIcon(kind)));
         services.Notice += _notice;
         UpdateIcon();
         _icon.Visible = true;
     }
 
-    public void ShowBalloon(string title, string text, WinForms.ToolTipIcon kind)
+    public void ShowNotification(string title, string text, WinForms.ToolTipIcon kind)
     {
-        // On Windows 10/11, leave the app's notification identity visible instead of selecting a stock glyph.
+        // Severity remains explicit in the title; the toast always supplies the current app logo.
         var displayTitle = kind switch
         {
             WinForms.ToolTipIcon.Warning => $"Attenzione · {title}",
             WinForms.ToolTipIcon.Error => $"Errore · {title}",
             _ => title
         };
-        _icon.ShowBalloonTip(5000, displayTitle, text, WinForms.ToolTipIcon.None);
+        _notifications.Show(displayTitle, text);
     }
 
     /// <summary>Apre il menu del tray sul puntatore, con le etichette dinamiche appena rilette.</summary>

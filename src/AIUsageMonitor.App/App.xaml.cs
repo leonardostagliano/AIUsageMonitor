@@ -17,6 +17,7 @@ public partial class App : Application
     private TrayIconController? _tray;
     private NotchWindow? _notch;
     private ToastService? _toasts;
+    private AppNotificationSender? _notifications;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -45,6 +46,7 @@ public partial class App : Application
 
         try
         {
+            _notifications = new AppNotificationSender(_services.Paths.LocalAppDataDir, _services.Log, () => _notch?.Pin());
             var notch = new NotchWindow(_services, new NotchViewModel(_services));
             _notch = notch;
             // Explorer starts Run entries after the interactive desktop is ready, but a persisted hidden state can
@@ -52,13 +54,17 @@ public partial class App : Application
             // restores the primary surface for login launches; normal manual launches still honor the user's choice.
             if (_services.Settings.Current.NotchVisible || e.Args.Contains(AutoStart.StartupArgument, StringComparer.OrdinalIgnoreCase))
                 notch.Show();
-            _tray = new TrayIconController(_services, notch);
+            _tray = new TrayIconController(_services, notch, _notifications);
             _tray.OpenSettings = () => SettingsWindow.ShowSingleton(_services);
             _single.ShowNotchRequested += () => Dispatcher.BeginInvoke(notch.Pin);
 
             _services.Start();
             // Dopo Start(): il replay silenzioso della pump e' gia' finito, quindi la cronologia non genera toast.
-            _toasts = new ToastService(_services, (title, text, icon) => UiDispatcher.Post(() => _tray?.ShowBalloon(title, text, icon)));
+            _toasts = new ToastService(_services, (title, text, icon) => UiDispatcher.Post(() => _tray?.ShowNotification(title, text, icon)));
+
+            if (e.Args.Contains("--test-notification", StringComparer.OrdinalIgnoreCase))
+                Dispatcher.BeginInvoke(() => _tray?.ShowNotification("AIUsageMonitor · verifica icona",
+                    "Questa notifica usa il logo aggiornato. Clicca per aprire il notch.", WinForms.ToolTipIcon.Info), DispatcherPriority.Background);
 
             // Argomento di debug: apre subito le impostazioni, utile per verificare l'aspetto senza passare dal tray.
             if (e.Args.Contains("--settings")) SettingsWindow.ShowSingleton(_services);
@@ -124,6 +130,7 @@ public partial class App : Application
     {
         _notch?.Close();
         _tray?.Dispose();
+        _notifications?.Dispose();
         _services?.Dispose();
         _single?.Dispose();
         base.OnExit(e);

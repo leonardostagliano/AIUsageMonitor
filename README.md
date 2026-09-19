@@ -27,9 +27,15 @@ Per controllare l'aspetto senza passare dal tray, l'eseguibile accetta due argom
 `AIUsageMonitor.exe --settings` apre subito la finestra Impostazioni, `AIUsageMonitor.exe
 --tray-menu` apre il menu della tray al centro dello schermo primario.
 
+Le notifiche Windows usano il logo app esplicito e vengono testate con
+`AIUsageMonitor.exe --test-notification` dopo aver chiuso l'app: il click apre il notch. Il PNG viene
+generato in `%LOCALAPPDATA%\AIUsageMonitor\notifications\app-logo-<hash>.png` e conservato per
+non invalidare i toast già inviati; le notifiche già presenti nel Centro notifiche non vengono
+riscritte né azzerate.
+
 ## Requisiti
 
-- Windows 10/11 x64.
+- Windows 10 versione 2004 (build 10.0.19041.0) o successivo, oppure Windows 11, x64.
 - **.NET 10 Desktop Runtime** per la build framework-dependent (quella prodotta di default da
   `scripts/publish.ps1`). La variante `-SelfContained` non richiede nulla ma pesa ~80 MB.
 - **Node.js** (già presente se usi Claude Code o Codex): serve solo per lo stato live, perché gli

@@ -9,7 +9,7 @@ using AIUsageMonitor.Core.Usage;
 
 namespace AIUsageMonitor.App.Startup;
 
-/// <summary>Severity of a user-facing notice; the tray maps it to the balloon icon.</summary>
+/// <summary>Severity of a user-facing notice, displayed in the notification title.</summary>
 public enum NoticeKind { Info, Warning, Error }
 
 /// <summary>Composition root: owns every Core service and republishes their events as one StateChanged.</summary>
@@ -31,7 +31,7 @@ public sealed class AppServices : IDisposable
     /// <summary>Raised on a background thread whenever usage or sessions change. Marshal with UiDispatcher.</summary>
     public event Action? StateChanged;
 
-    /// <summary>Raised on the calling thread with a message to surface to the user (rendered as a tray balloon).</summary>
+    /// <summary>Raised on the calling thread with a message to surface to the user as a Windows notification.</summary>
     public event Action<string, string, NoticeKind>? Notice;
 
     private readonly Dictionary<AgentKind, (HookStatusReport Report, DateTimeOffset At)> _hookStatus = new();
@@ -210,7 +210,7 @@ public sealed class AppServices : IDisposable
 
     /// <summary>
     /// Alza un <see cref="Notice"/> per conto di chi non possiede l'icona della tray (i ViewModel del notch): il
-    /// renderer resta uno solo, <c>TrayIconController</c>, che lo mostra come balloon con l'icona della severita'.
+    /// renderer resta uno solo, <c>TrayIconController</c>, che lo inoltra al servizio notifiche con il logo dell'app.
     /// </summary>
     public void Notify(string title, string text, NoticeKind kind) => Notice?.Invoke(title, text, kind);
 

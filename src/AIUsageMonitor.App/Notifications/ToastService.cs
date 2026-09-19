@@ -6,7 +6,7 @@ using WinForms = System.Windows.Forms;
 
 namespace AIUsageMonitor.App.Notifications;
 
-/// <summary>Turns session transitions into Windows toasts (balloon tips), honoring the per-event and per-agent settings.</summary>
+/// <summary>Turns session transitions into Windows toasts, honoring the per-event and per-agent settings.</summary>
 public sealed class ToastService
 {
     private static readonly TimeSpan MinGapPerAgent = TimeSpan.FromSeconds(3);
