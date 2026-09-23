@@ -211,4 +211,84 @@ public class LedgerWiringTests
         Assert.Equal(new TokenUsage(60, 9, 20, 0), tokens);
         Assert.Equal(tokens, source.SubagentLedgers(session)![child].ToTokenUsage());
     }
+
+    private const string CodexParent = "01a0cb74-88e5-7a93-8cf2-1a6c08b6a9c3";
+
+    private static string ForkedChildMeta(string child) =>
+        $$$"""{"timestamp":"2026-09-23T10:05:00.000Z","type":"session_meta","payload":{"session_id":"{{{CodexParent}}}","id":"{{{child}}}","forked_from_id":"{{{CodexParent}}}","parent_thread_id":"{{{CodexParent}}}","cwd":"C:\\demo\\proj","thread_source":"subagent"}}""" + "\n";
+
+    private static string CodexLine(string type, string payload) =>
+        $$$"""{"timestamp":"2026-09-23T10:05:00.500Z","type":"{{{type}}}","payload":{{{payload}}}}""" + "\n";
+
+    [Fact]
+    public void AppTokenSource_reports_a_forked_Codex_child_with_the_tokens_of_its_own_turns_only()
+    {
+        using var dir = new TempDir();
+        const string child = "01a0cb74-99f6-7b04-9d03-2b7d19c7bad4";
+        // A fork copies the parent's history, token_count included: the parent's 1M tokens are not the child's.
+        var rollout = dir.File($".codex/sessions/2026/09/23/rollout-2026-09-23T10-05-00-{child}.jsonl",
+            ForkedChildMeta(child) +
+            CodexLine("turn_context", """{"model":"gpt-6-sol"}""") +
+            CodexTokenCount(1_000_000, 900_000, 5_000) +
+            CodexLine("turn_context", """{"model":"gpt-6-sol"}"""));
+        var session = new SessionState(AgentKind.Codex, CodexParent, "demo", null, SessionPhase.Working, null, T0, T0,
+            Subagents: [new(child, "worker", SubagentPhase.Running, T0, null, null, TokenUsage.Zero)]);
+        var source = new AppTokenSource(new AppPaths(dir.Path, dir.Sub("local")), new FakeClock(T0));
+
+        Assert.Null(source.SubagentTokens(session));
+        Assert.Null(source.SubagentLedgers(session));
+
+        File.AppendAllText(rollout, CodexLine("inter_agent_communication_metadata", """{"trigger_turn":true}""") +
+                                    CodexTokenCount(1_000_300, 900_200, 5_040));
+
+        var tokens = source.SubagentTokens(session)![child];
+        Assert.Equal(new TokenUsage(100, 40, 200, 0), tokens);
+        Assert.Equal(tokens, source.SubagentLedgers(session)![child].ToTokenUsage());
+    }
+
+    [Fact]
+    public void AppTokenSource_reports_a_Codex_thread_with_the_usage_before_and_after_a_restart_of_its_total()
+    {
+        using var dir = new TempDir();
+        // Codex restarts the cumulative total when it wakes a thread for a new task: the newest total (300) is only
+        // the last task, the ledger — and so the row — keeps both.
+        dir.File($".codex/sessions/2026/09/23/rollout-2026-09-23T10-00-00-{CodexParent}.jsonl",
+            CodexLine("turn_context", """{"model":"gpt-6-luna"}""") +
+            CodexTokenCount(1_000, 0, 10) +
+            CodexLine("event_msg", """{"type":"task_started","turn_id":"t2"}""") +
+            CodexTokenCount(300, 0, 3));
+        var session = new SessionState(AgentKind.Codex, CodexParent, "demo", null, SessionPhase.Idle, null, T0, T0);
+        var source = new AppTokenSource(new AppPaths(dir.Path, dir.Sub("local")), new FakeClock(T0));
+
+        var tokens = source.SessionTokens(session);
+
+        Assert.Equal(new TokenUsage(1_300, 13, 0, 0), tokens);
+        Assert.Equal(tokens, source.SessionLedger(session)!.ToTokenUsage());
+    }
+
+    [Fact]
+    public void AppTokenSource_releases_the_Codex_child_the_tracker_no_longer_lists()
+    {
+        using var dir = new TempDir();
+        const string kept = "01a0cb74-99f6-7b04-9d03-2b7d19c7bad4";
+        const string dropped = "01a0cb74-aa07-7c15-8e14-3c8e2ad8cbe5";
+        foreach (var child in (string[])[kept, dropped])
+            dir.File($".codex/sessions/2026/09/23/rollout-2026-09-23T10-05-00-{child}.jsonl",
+                CodexLine("turn_context", """{"model":"gpt-6-sol"}""") + CodexTokenCount(50, 10, 5));
+        SubagentState Done(string id) => new(id, "worker", SubagentPhase.Done, T0, T0, null, TokenUsage.Zero);
+        var both = new SessionState(AgentKind.Codex, CodexParent, "demo", null, SessionPhase.Working, null, T0, T0,
+            Subagents: [Done(kept), Done(dropped)]);
+        var source = new AppTokenSource(new AppPaths(dir.Path, dir.Sub("local")), new FakeClock(T0));
+        Assert.Equal(2, source.SubagentTokens(both)!.Count);
+
+        // A finished child is read again from the rollout it was found in, and a vanished rollout keeps the ledger
+        // read so far: only a released state lets a later read find that the rollout is gone.
+        File.Delete(Directory.EnumerateFiles(dir.Path, $"*{dropped}.jsonl", SearchOption.AllDirectories).Single());
+        Assert.Equal(2, source.SubagentTokens(both)!.Count);
+
+        // The tracker trims the oldest finished subagents: the next read releases what it kept for the dropped one.
+        source.SubagentTokens(both with { Subagents = [Done(kept)] });
+
+        Assert.Equal([kept], source.SubagentTokens(both)!.Keys);
+    }
 }

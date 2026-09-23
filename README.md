@@ -100,7 +100,10 @@ Sono i token cumulativi della conversazione: il contesto inviato di nuovo a ogni
 conteggiato di nuovo, quindi possono superare di molto la lunghezza del testo visibile. Il tooltip
 separa input senza cache, cache letta e cache scritta. Le risposte Claude in streaming vengono
 deduplicate per identificativo del messaggio, con ripiego sull'identificativo della richiesta;
-per Codex si usa l'ultimo totale cumulativo riportato dal thread.
+per Codex si sommano le crescite del totale cumulativo riportato dal thread, contando per intero le
+ripartenze da zero (Codex azzera il totale quando risveglia un thread per un nuovo compito) e
+lasciando fuori la cronologia che un subagente forkato copia dal padre, già contata sul padre.
+Così i token di ogni riga sono esattamente quelli di cui la riga mostra il costo.
 
 La lista espandibile dei workflow mostra solo gli agenti **in corso**, con modello effettivo letto
 dal transcript e token ↑ input/↓ output. Gli agenti conclusi escono dalla lista e dal riepilogo attivo.

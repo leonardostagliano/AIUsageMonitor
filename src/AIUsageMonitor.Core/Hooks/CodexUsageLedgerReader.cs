@@ -20,12 +20,26 @@ namespace AIUsageMonitor.Core.Hooks;
 /// (all 18 drops in 390 local rollouts on 2026-09-23 followed a <c>task_started</c>, and each new total equalled that
 /// request's <c>last_token_usage</c>). A total that goes down is therefore a new count, taken whole like the first
 /// one, so the ledger keeps everything the rollout consumed. <see cref="CodexTokenCounter"/>, which reads only the
-/// newest total, shows just the part since the last restart for these threads.
+/// newest total, would show just the part since the last restart for these threads: the app shows the ledger's total
+/// instead (<see cref="UsageLedger.ToTokenUsage"/>), so tokens and cost describe the same usage.
+/// </para>
+/// <para>
+/// A subagent spawned as a fork (<c>session_meta</c> with <c>forked_from_id</c> and a parent thread) starts its
+/// rollout with a copy of the parent's history, <c>token_count</c> events included: those carry the PARENT's
+/// cumulative totals, already billed to the parent, and the child's own first request continues from the last of
+/// them. The copied totals are therefore only a baseline: they move the previous total without adding anything, up to
+/// the child's first <c>inter_agent_communication_metadata</c>, the line that opens the turn its parent gave it.
+/// Checked on 2026-09-24 against 188 forked rollouts written by Codex 0.144–0.155 (depth 1 to 3): every copied
+/// <c>token_count</c> comes before that line and none of the child's own does; the copies held 1.94 billion input
+/// tokens, 62% of those rollouts' totals.
 /// </para>
 /// </remarks>
 /// <remarks>Not thread-safe: the pump does all its IO on one thread.</remarks>
 public sealed class CodexUsageLedgerReader
 {
+    /// <summary>Record type of the line that opens a turn a subagent runs for another agent.</summary>
+    private const string InterAgentMarker = "inter_agent_communication_metadata";
+
     private readonly Dictionary<string, RolloutState> _states = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The ledger of <paramref name="rolloutPath"/>, including everything appended since the last call. Never throws.</summary>
@@ -71,26 +85,44 @@ public sealed class CodexUsageLedgerReader
         return state.ToLedger();
     }
 
+    /// <summary>The ledger of <paramref name="rolloutPath"/> as last read, without touching the file (empty when never read).</summary>
+    public UsageLedger LedgerOf(string rolloutPath) =>
+        !string.IsNullOrWhiteSpace(rolloutPath) && _states.TryGetValue(rolloutPath, out var state) ? state.ToLedger() : UsageLedger.Empty;
+
     /// <summary>Drops the state of a rollout whose session is gone.</summary>
     public void Forget(string rolloutPath) => _states.Remove(rolloutPath);
 
     private static void Apply(RolloutState state, string line)
     {
-        // Cheap pre-filter: only settings and token_count lines matter.
+        // Cheap pre-filter: only the meta, settings, token_count and turn-opening lines matter.
         if (!line.Contains("token_count", StringComparison.Ordinal)
             && !line.Contains("\"model\"", StringComparison.Ordinal)
-            && !line.Contains("service_tier", StringComparison.Ordinal)) return;
+            && !line.Contains("service_tier", StringComparison.Ordinal)
+            && !line.Contains("forked_from_id", StringComparison.Ordinal)
+            && !line.Contains(InterAgentMarker, StringComparison.Ordinal)) return;
 
         try
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return;
-            if (!root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object) return;
             var type = String(root, "type");
+            // The first turn a forked child runs for its parent: the copied history is over.
+            if (type == InterAgentMarker)
+            {
+                state.InheritedHistory = false;
+                return;
+            }
+            if (!root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object) return;
             var payloadType = String(payload, "type");
 
-            if (type is "session_meta" or "turn_context" || (type == "event_msg" && payloadType == "turn_context"))
+            if (type == "session_meta")
+            {
+                // Only as the rollout's opening line: a later one cannot turn counted usage back into a copy.
+                if (state.LastTotal is null && IsForkedSubagent(root, payload)) state.InheritedHistory = true;
+                ApplySettings(state, payload);
+            }
+            else if (type == "turn_context" || (type == "event_msg" && payloadType == "turn_context"))
             {
                 ApplySettings(state, payload);
             }
@@ -109,6 +141,14 @@ public sealed class CodexUsageLedgerReader
             // Not JSON (or a half-written line that was rotated in): nothing to count.
         }
     }
+
+    /// <summary>
+    /// A subagent spawned as a fork of its parent: <c>forked_from_id</c> plus a parent thread. A conversation the user
+    /// forked has no parent thread and no turn marker to end its copied history on, so it keeps counting it whole.
+    /// </summary>
+    private static bool IsForkedSubagent(JsonElement root, JsonElement payload) =>
+        String(payload, "forked_from_id") is { Length: > 0 }
+        && (String(payload, "parent_thread_id") ?? String(root, "parent_thread_id")) is { Length: > 0 };
 
     private static void ApplySettings(RolloutState state, JsonElement settings)
     {
@@ -131,6 +171,13 @@ public sealed class CodexUsageLedgerReader
 
         var current = new Totals(Long(total, "input_tokens"), Long(total, "cached_input_tokens"),
             Long(total, "cache_write_input_tokens"), Long(total, "output_tokens"));
+        // A total copied from the parent of a forked child (see the class remarks): the baseline of the child's own
+        // growth, never usage of its own.
+        if (state.InheritedHistory)
+        {
+            state.LastTotal = current;
+            return;
+        }
         // A total below the previous one is a restart (see the class remarks): counted whole, like the first event.
         var previous = state.LastTotal is { } last && current.Input >= last.Input && current.Output >= last.Output
             ? last
@@ -170,12 +217,16 @@ public sealed class CodexUsageLedgerReader
         public string? Model { get; private set; }
         public PriceTier Tier { get; set; } = PriceTier.Standard;
         public Totals? LastTotal { get; set; }
+
+        /// <summary>True while reading the history a forked subagent copied from its parent (see the class remarks).</summary>
+        public bool InheritedHistory { get; set; }
+
         public UsageLedgerBuilder Ledger { get; } = new();
 
         /// <summary>
-        /// Growth counted before the rollout named any model, under an empty model. A forked subagent writes its
-        /// inherited total (often most of its usage) before its first turn_context: that growth moves under the first
-        /// model the rollout names instead of staying unpriced.
+        /// Growth counted before the rollout named any model, under an empty model: a rollout whose first total comes
+        /// before its first turn_context (a conversation the user forked, whose copied total is counted whole) moves
+        /// it under the first model the rollout names instead of leaving it unpriced.
         /// </summary>
         public UsageLedgerBuilder Pending { get; } = new();
 
@@ -198,6 +249,7 @@ public sealed class CodexUsageLedgerReader
             Model = null;
             Tier = PriceTier.Standard;
             LastTotal = null;
+            InheritedHistory = false;
             Ledger.Clear();
             Pending.Clear();
         }

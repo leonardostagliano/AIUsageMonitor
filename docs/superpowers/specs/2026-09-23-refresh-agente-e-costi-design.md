@@ -141,21 +141,32 @@ dai test).
 
 - Il modello in vigore è l'ultimo `turn_context.payload.model` o `thread_settings_applied.thread_settings.model` visto
   prima del `token_count`; stessa regola per `service_tier`.
-- La crescita letta prima che il rollout nomini un modello resta in sospeso e passa sotto il primo modello nominato:
-  un subagente forkato scrive il totale ereditato prima del primo `turn_context` (8 rollout locali di luglio, dal 63%
-  al 99,5% del loro consumo). Finché nessun modello compare, resta sotto un modello vuoto, quindi non prezzata.
+- La crescita letta prima che il rollout nomini un modello resta in sospeso e passa sotto il primo modello nominato.
+  Finché nessun modello compare, resta sotto un modello vuoto, quindi non prezzata.
 - Ogni `token_count` con `info.total_token_usage` contribuisce la **differenza** rispetto al totale precedente dello
   stesso rollout. Gli eventi ripetuti con lo stesso totale danno zero. Il primo evento contribuisce il suo totale
   intero, anche quando il thread è stato ripreso e parte con un totale ereditato. Verificato il 2026-09-23 su 60
   rollout locali: in 58 su 59 la somma dei `last_token_usage` coincide con il totale finale; il caso che non torna è
   un thread ripreso, che la differenza tra totali copre.
+- **Subagente forkato** (`spawn_agent {fork_turns:"all"}`: `session_meta` con `forked_from_id` e un thread padre). Il
+  rollout comincia con una copia della cronologia del padre, compresi i suoi `token_count`: sono i totali cumulativi
+  **del padre**, già fatturati al padre, e la prima richiesta del figlio prosegue dall'ultimo di essi. Quei totali
+  sono quindi solo la base: aggiornano il totale precedente senza aggiungere nulla fino alla prima riga
+  `inter_agent_communication_metadata`, che apre il turno assegnato dal padre; da lì conta solo la crescita del
+  figlio. Verificato il 2026-09-24 su 188 rollout forkati (Codex 0.144–0.155, profondità da 1 a 3): ogni
+  `token_count` copiato precede quella riga e nessuno del figlio la precede; le copie valevano 1,94 miliardi di token
+  di input, il 62% dei totali di quei rollout (un figlio da 117 M di input ne aveva consumati 1,09 M). Una
+  conversazione forkata dall'utente (senza thread padre) non ha un marcatore che chiuda la copia e resta contata per
+  intero.
 - Un totale che scende (input o output sotto il precedente) è una **ripartenza** e conta per intero, come il primo
   evento. Codex azzera il totale cumulativo quando risveglia un thread subagente per un nuovo task: su 390 rollout
   locali (2026-09-23) ci sono 18 cali in 14 rollout, tutti subito dopo un `task_started`, e in tutti il nuovo totale
   coincide con il `last_token_usage` dell'evento. Così il registro contiene tutto il consumo del rollout.
-- **Divario con il totale mostrato.** `CodexTokenCounter` legge solo l'ultimo totale: per un thread con ripartenze
-  mostra solo i token dall'ultima ripartenza, mentre il registro li somma tutti (fino a 35 volte tanto nei rollout
-  locali). Senza ripartenze la somma delle voci coincide con il totale mostrato. Punto aperto (sezione 10).
+- **Totale mostrato.** `CodexTokenCounter` legge solo l'ultimo totale: per un thread con ripartenze darebbe solo i
+  token dall'ultima ripartenza (il registro li somma tutti, fino a 35 volte tanto nei rollout locali, e le
+  ripartenze capitano anche ai thread principali: 7 cali in 74 rollout), per un figlio forkato anche la copia del
+  padre. Per Codex i token di sessioni e subagenti sono quindi il totale del registro (`ledger.ToTokenUsage()`): la
+  riga mostra esattamente i token che il suo costo prezza. Senza ripartenze né copia i due totali coincidono.
 - Suddivisione: `CacheRead = cached_input_tokens`, `Input = input_tokens − cached_input_tokens`,
   `CacheWrite5m = cache_write_input_tokens` (OpenAI non distingue la durata), `Output = output_tokens`. I token di
   ragionamento sono già dentro `output_tokens` e si pagano come output.
@@ -239,9 +250,9 @@ AgentCardViewModel / SessionRowViewModel / SubagentRowViewModel ◄── CostCa
 ```
 
 - `ITokenSource` riceve due membri con implementazione di default `null`, come `SubagentModels`:
-  `SessionLedger(SessionState)` e `SubagentLedgers(SessionState)`. Per Claude non fanno IO (il registro viene dalla
-  lettura appena fatta da `SessionTokens` / `SubagentTokens`); per Codex leggono il rollout in avanti in modo
-  incrementale.
+  `SessionLedger(SessionState)` e `SubagentLedgers(SessionState)`. Non fanno IO: il registro viene dalla lettura
+  appena fatta da `SessionTokens` / `SubagentTokens`, che per Codex è la lettura in avanti e incrementale del
+  rollout (e il totale è quello del registro, 5.3).
 - `SessionState.Ledger` e `SubagentState.Ledger` (default `null`); `SessionTracker.UpdateTokens` e
   `UpdateTokensSilently` accettano i registri come parametri opzionali.
 - `PricingChanged` è collegato a `AppServices.StateChanged`, così un nuovo listino o tasso ridisegna le card.
@@ -336,6 +347,8 @@ Tutti senza rete (`FakeHttpMessageHandler`, `ManualTimeProvider`, `TempDir` esis
   log lo segnala.
 - **Endpoint quota Claude** sotto refresh ripetuti: il cooldown di 10 s più il ciclo periodico lo limitano; un 429
   viene mostrato come oggi ("non aggiornato").
-- **Totale Codex dei subagenti risvegliati** (5.3): `CodexTokenCounter` mostra solo i token dall'ultima ripartenza del
-  totale cumulativo, il registro tutto il consumo. Da decidere dove si collegano i registri alle righe: mostrare come
-  totale `ledger.ToTokenUsage()` quando il registro esiste, oppure accettare e spiegare il divario.
+- **Totale Codex dei thread risvegliati e dei figli forkati** (5.3): deciso di mostrare come totale
+  `ledger.ToTokenUsage()`, così token e costo descrivono lo stesso consumo.
+- **Marcatore del fork**: se una versione futura di Codex smettesse di scrivere `inter_agent_communication_metadata`,
+  un figlio forkato non conterebbe più nulla (token e costo fermi a zero): da ricontrollare sui rollout nuovi quando
+  cambia il formato.

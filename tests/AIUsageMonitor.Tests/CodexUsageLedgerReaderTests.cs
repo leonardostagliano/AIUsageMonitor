@@ -57,6 +57,19 @@ public class CodexUsageLedgerReaderTests
     private static string ForkedSessionMeta() =>
         Json(new { timestamp = Ts, type = "session_meta", payload = new { id = "child", forked_from_id = "parent", cwd = "C:\\demo" } });
 
+    /// <summary>session_meta of a subagent spawned with <c>spawn_agent {fork_turns:"all"}</c>, as Codex 0.144 writes it.</summary>
+    private static string ForkedSubagentMeta() =>
+        Json(new { timestamp = Ts, type = "session_meta", payload = new
+        {
+            session_id = "parent", id = "child", forked_from_id = "parent", parent_thread_id = "parent", cwd = "C:\\demo",
+            source = new { subagent = new { thread_spawn = new { parent_thread_id = "parent", depth = 1, agent_path = "/root/worker" } } },
+            thread_source = "subagent"
+        } });
+
+    /// <summary>The line that opens the turn a parent gives its subagent.</summary>
+    private static string InterAgentTurn() =>
+        Json(new { timestamp = Ts, type = "inter_agent_communication_metadata", payload = new { trigger_turn = true } });
+
     private static string Compacted() =>
         Json(new { timestamp = Ts, type = "compacted", payload = new { message = "", replacement_history = Array.Empty<object>() } });
 
@@ -186,7 +199,8 @@ public class CodexUsageLedgerReaderTests
     [Fact]
     public void Growth_before_the_first_model_moves_under_the_first_model_the_rollout_names()
     {
-        // Shaped like a forked subagent: its inherited total arrives before its first turn_context.
+        // Shaped like a conversation the user forked (no parent thread): its inherited total arrives before its first
+        // turn_context and, with no turn marker to end the copy on, is counted whole.
         using var dir = new TempDir();
         var file = dir.File("rollout-k.jsonl", Join(
             ForkedSessionMeta(),
@@ -204,6 +218,57 @@ public class CodexUsageLedgerReaderTests
 
         Assert.Equal(new UsageKey("gpt-6-sol", PriceTier.Standard, null, 0), entry.Key);
         Assert.Equal(new LedgerTokens(34_800_000 - 34_300_000, 49_000, 34_300_000, 0, 0), entry.Tokens);
+    }
+
+    [Fact]
+    public void A_forked_subagent_counts_only_its_own_growth_over_the_totals_copied_from_its_parent()
+    {
+        // The opening of a real forked rollout (child 019f587b of parent 019f582f, Codex 0.144): the copied history
+        // carries the parent's totals, the child's own turn starts at inter_agent_communication_metadata and its
+        // first total continues from the last copied one.
+        using var dir = new TempDir();
+        var file = dir.File("rollout-f.jsonl", Join(
+            ForkedSubagentMeta(),
+            Compacted(),
+            TokenCount(34_723_453, 34_250_496, 48_154, lastInput: 0),
+            Event("task_started"),
+            TurnContext("gpt-5.6-sol"),
+            // Quoting the marker in a message is not the marker.
+            RawUserMessage("inter_agent_communication_metadata"),
+            TokenCount(34_745_812, 34_260_480, 48_409, lastInput: 22_359),
+            TokenCount(34_773_421, 34_281_728, 48_481, lastInput: 27_609),
+            Event("task_complete"),
+            Event("task_started"),
+            TurnContext("gpt-5.6-sol"),
+            InterAgentTurn()));
+        var reader = new CodexUsageLedgerReader();
+
+        Assert.True(reader.Read(file).IsEmpty);
+
+        File.AppendAllText(file, Join(
+            TokenCount(34_795_927, 34_302_976, 48_649, lastInput: 22_506),
+            TokenCount(34_821_620, 34_325_248, 48_769, lastInput: 25_693)));
+        var entry = Assert.Single(reader.Read(file).Entries);
+
+        Assert.Equal(new UsageKey("gpt-5.6-sol", PriceTier.Standard, null, 0), entry.Key);
+        // 22 506 + 25 693 input, 21 248 + 22 272 of it cached, 168 + 120 output: the two requests of the child itself.
+        Assert.Equal(new LedgerTokens(48_199 - 43_520, 288, 43_520, 0, 0), entry.Tokens);
+        Assert.Equal(entry, Assert.Single(new CodexUsageLedgerReader().Read(file).Entries));
+        Assert.Equal(entry, Assert.Single(reader.LedgerOf(file).Entries));
+    }
+
+    [Fact]
+    public void LedgerOf_reads_no_file()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("rollout-l.jsonl", Join(TurnContext("m"), TokenCount(100, 0, 10)));
+        var reader = new CodexUsageLedgerReader();
+
+        Assert.True(reader.LedgerOf(file).IsEmpty);
+        var ledger = reader.Read(file);
+        File.AppendAllText(file, Join(TokenCount(250, 0, 25)));
+
+        Assert.Equal(ledger, reader.LedgerOf(file));
     }
 
     [Fact]
