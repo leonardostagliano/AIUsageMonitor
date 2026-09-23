@@ -6,6 +6,7 @@ using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Pricing;
 
 namespace AIUsageMonitor.App.Notch;
 
@@ -24,14 +25,16 @@ public sealed class SessionRowViewModel : ObservableObject
     private readonly AppServices _services;
     private readonly RelayCommand _focusTerminal;
     private SessionState _session;
+    private PricingSnapshot? _pricing;
     private string _elapsedText = "";
 
-    public SessionRowViewModel(SessionState session, AppServices services, DateTimeOffset now)
+    public SessionRowViewModel(SessionState session, AppServices services, DateTimeOffset now, PricingSnapshot? pricing)
     {
         _session = session;
         _services = services;
         ToggleCommand = new RelayCommand(Toggle);
         _focusTerminal = new RelayCommand(FocusTerminal, () => CanFocus);
+        _pricing = pricing;
         SyncSubagents(now);
         Tick(now);
     }
@@ -65,11 +68,34 @@ public sealed class SessionRowViewModel : ObservableObject
 
     public ICommand FocusTerminalCommand => _focusTerminal;
 
-    /// <summary>Processed input and output of the conversation, including input served from cache.</summary>
-    public string TokensText => _session.Tokens is { } tokens ? TokenFormatter.InputOutput(tokens) : "Token in attesa";
+    /// <summary>Cost of the tokens on this row — the session itself, not its agents, like the token counts; null while costs are hidden.</summary>
+    private CostResult? OwnCost => _pricing?.Cost(_session.Ledger);
 
-    /// <summary>Breakdown for the tooltip of the token column; null (no tooltip) when there is no total yet.</summary>
-    public string? TokensTooltip => _session.Tokens is { Total: > 0 } tokens ? TokenFormatter.Breakdown(tokens) : null;
+    /// <summary>Processed input and output of the conversation, including input served from cache, then the cost.</summary>
+    public string TokensText
+    {
+        get
+        {
+            if (_session.Tokens is not { } tokens) return "Token in attesa";
+            var text = TokenFormatter.InputOutput(tokens);
+            return OwnCost is { } cost && CostFormatter.Short(cost) is { } costText ? $"{text} · {costText}" : text;
+        }
+    }
+
+    /// <summary>Breakdown for the tooltip of the token column (plus the cost block); null (no tooltip) when there is no total yet.</summary>
+    public string? TokensTooltip
+    {
+        get
+        {
+            if (_session.Tokens is not { Total: > 0 } tokens) return null;
+            var breakdown = TokenFormatter.Breakdown(tokens);
+            if (_pricing is null || OwnCost is not { } own) return breakdown;
+            var withSubagents = _session.SubagentLedger.IsEmpty
+                ? null
+                : _pricing.Cost((_session.Ledger ?? UsageLedger.Empty) + _session.SubagentLedger);
+            return CostTooltips.Row(own, withSubagents, _pricing) is { } block ? $"{breakdown}\n\n{block}" : breakdown;
+        }
+    }
 
     /// <summary>Running subagents, most recently started first.</summary>
     public ObservableCollection<SubagentRowViewModel> Subagents { get; } = new();
@@ -84,7 +110,10 @@ public sealed class SessionRowViewModel : ObservableObject
             var count = _session.ActiveSubagents;
             if (count == 0) return "";
             var label = count == 1 ? "1 agente attivo" : $"{count} agenti attivi";
-            return $"{label} · {TokenFormatter.Compact(_session.ActiveSubagentTokens.Total)} tok";
+            var summary = $"{label} · {TokenFormatter.Compact(_session.ActiveSubagentTokens.Total)} tok";
+            return _pricing?.Cost(_session.ActiveSubagentLedger) is { } cost && CostFormatter.Short(cost) is { } costText
+                ? $"{summary} · {costText}"
+                : summary;
         }
     }
 
@@ -98,9 +127,10 @@ public sealed class SessionRowViewModel : ObservableObject
 
     public Visibility SubagentListVisibility => HasSubagents && IsExpanded ? Visibility.Visible : Visibility.Collapsed;
 
-    public void Update(SessionState session, DateTimeOffset now)
+    public void Update(SessionState session, DateTimeOffset now, PricingSnapshot? pricing)
     {
         _session = session;
+        _pricing = pricing;
         Raise(nameof(Name)); Raise(nameof(PhaseLabel)); Raise(nameof(DotBrush)); Raise(nameof(IsPulsing)); Raise(nameof(Tooltip));
         Raise(nameof(TokensText)); Raise(nameof(TokensTooltip));
         // L'host arriva col primo SessionStart/UserPromptSubmit: una riga nata senza puo' diventare cliccabile dopo.
@@ -175,13 +205,13 @@ public sealed class SessionRowViewModel : ObservableObject
         {
             if (byId.TryGetValue(ordered[i].AgentId, out var existing))
             {
-                existing.Update(ordered[i], now);
+                existing.Update(ordered[i], now, _pricing);
                 var currentIndex = Subagents.IndexOf(existing);
                 if (currentIndex != i) Subagents.Move(currentIndex, i);
             }
             else
             {
-                Subagents.Insert(i, new SubagentRowViewModel(ordered[i], now));
+                Subagents.Insert(i, new SubagentRowViewModel(ordered[i], now, _pricing));
             }
         }
         while (Subagents.Count > ordered.Count) Subagents.RemoveAt(Subagents.Count - 1);
