@@ -284,7 +284,10 @@ AgentCardViewModel / SessionRowViewModel / SubagentRowViewModel ◄── CostCa
 Nuovo gruppo **COSTI**, tra NOTIFICHE e AGGIORNAMENTI:
 
 - `Mostra costi (prezzi API di listino)`, attivo di default. Spento: nessun download e nessun costo nell'interfaccia.
-- `Tasso di riserva: 1 € = [1,14] $`, usato solo quando manca il tasso BCE.
+- `Tasso di riserva: 1 € = [1,14] $`, usato solo quando manca il tasso BCE. Il campo accetta la virgola o il punto
+  come separatore decimale e nessun separatore delle migliaia (`FallbackRateInput`); un testo che non è un numero o un
+  valore fuori da 0,5–2,0 viene segnalato sotto il campo e Salva resta disattivato, invece di salvare un valore
+  corretto in silenzio.
 - Riga di stato, in sola lettura: `Listino LiteLLM del 23/09 14:02 · 216 modelli` (o `copia imbarcata` /
   `override attivo`) e `BCE: 1 € = 1,1411 $ del 23/09` (o `Tasso di riserva: 1 € = 1,14 $`), con l'ultimo errore se c'è.
 - Pulsante `Apri cartella dati`, per chi vuole scrivere `prices-override.json` (il gruppo HOOK ha già un `Apri cartella`).

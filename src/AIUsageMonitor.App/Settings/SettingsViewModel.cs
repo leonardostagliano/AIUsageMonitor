@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Windows;
 using System.Windows.Input;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
@@ -19,19 +20,24 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     private string _claudeHookStatus = "";
     private string _codexHookStatus = "";
     private string _pricingStatus = "";
+    private string _usdPerEurText;
+    private string? _usdPerEurError;
+    private readonly RelayCommand _save;
     private readonly Action _pricingChanged;
 
     public SettingsViewModel(AppServices services)
     {
         _services = services;
         _draft = services.Settings.Current.Clone();
+        _usdPerEurText = FallbackRateInput.Format(_draft.UsdPerEur);
         _autoStart = AutoStart.IsEnabled();
         // Stessa enumerazione di NotchWindow.Reposition (primario per primo): MonitorIndex e' un indice in QUELLA lista,
         // non in Screen.AllScreens, che Windows non garantisce inizi dal monitor primario. Usare AllScreens qui
         // metterebbe "(principale)" sulla riga sbagliata e ancorerebbe la notch a un monitor diverso da quello scelto.
         Monitors = NotchWindow.EnumerateScreens().Select((s, i) => $"{i + 1}: {s.DeviceName.TrimStart('\\', '.')} {s.Bounds.Width}x{s.Bounds.Height}{(s.Primary ? " (principale)" : "")}").ToList();
 
-        SaveCommand = new RelayCommand(Save);
+        // Salva resta spento finche' il tasso di riserva scritto non e' valido: il messaggio sotto il campo dice perche'.
+        SaveCommand = _save = new RelayCommand(Save, () => UsdPerEurError is null);
         InstallClaudeHooksCommand = new RelayCommand(() => Install(AgentKind.Claude));
         RemoveClaudeHooksCommand = new RelayCommand(() => Remove(AgentKind.Claude));
         InstallCodexHooksCommand = new RelayCommand(() => Install(AgentKind.Codex));
@@ -78,7 +84,36 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     public bool NotifyCodex { get => _draft.NotifyCodex; set { _draft.NotifyCodex = value; Raise(); } }
     public bool UpdatesAutoCheck { get => _draft.UpdatesAutoCheck; set { _draft.UpdatesAutoCheck = value; Raise(); } }
     public bool ShowCosts { get => _draft.ShowCosts; set { _draft.ShowCosts = value; Raise(); } }
-    public double UsdPerEur { get => _draft.UsdPerEur; set { _draft.UsdPerEur = value; Raise(); } }
+
+    /// <summary>
+    /// Tasso di riserva come testo: "1,14" e "1.14" valgono uguale (FallbackRateInput). Con il convertitore di WPF in
+    /// it-IT il punto era il separatore delle migliaia, "1.14" diventava 114 e il salvataggio lo portava a 2,00.
+    /// </summary>
+    public string UsdPerEurText
+    {
+        get => _usdPerEurText;
+        set
+        {
+            if (!Set(ref _usdPerEurText, value)) return;
+            if (FallbackRateInput.Parse(value, out var error) is { } rate) _draft.UsdPerEur = rate;
+            UsdPerEurError = error;
+        }
+    }
+
+    /// <summary>Perche' il tasso scritto non vale; null quando e' valido.</summary>
+    public string? UsdPerEurError
+    {
+        get => _usdPerEurError;
+        private set
+        {
+            if (!Set(ref _usdPerEurError, value)) return;
+            Raise(nameof(UsdPerEurErrorVisibility));
+            _save.RaiseCanExecuteChanged();
+        }
+    }
+
+    public Visibility UsdPerEurErrorVisibility => UsdPerEurError is null ? Visibility.Collapsed : Visibility.Visible;
+
     public string PricingStatus { get => _pricingStatus; private set => Set(ref _pricingStatus, value); }
     public bool AutoStartEnabled { get => _autoStart; set => Set(ref _autoStart, value); }
     public string ClaudeHookStatus { get => _claudeHookStatus; private set => Set(ref _claudeHookStatus, value); }
@@ -87,6 +122,7 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
 
     private void Save()
     {
+        if (UsdPerEurError is not null) return;
         // NotchVisible non e' esposto qui: il menu tray puo' averlo cambiato mentre la finestra era aperta,
         // quindi si riprende il valore corrente invece di riscrivere quello catturato all'apertura.
         _draft.NotchVisible = _services.Settings.Current.NotchVisible;

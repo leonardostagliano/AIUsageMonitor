@@ -39,6 +39,9 @@ public sealed class AppSettings
     /// </summary>
     public bool ShowCosts { get; set; } = true;
 
+    /// <summary>Intervallo ammesso per <see cref="UsdPerEur"/>.</summary>
+    public const double MinUsdPerEur = 0.5, MaxUsdPerEur = 2.0;
+
     /// <summary>Tasso di riserva (1 € = UsdPerEur $), usato solo quando manca il tasso BCE.</summary>
     public double UsdPerEur { get; set; } = 1.14;
 
@@ -51,7 +54,7 @@ public sealed class AppSettings
         CollapseDelayMs = Math.Clamp(CollapseDelayMs, 0, 5000);
         MonitorIndex = Math.Max(0, MonitorIndex);
         VerticalOffset = Math.Clamp(VerticalOffset, -5000, 5000);
-        UsdPerEur = double.IsFinite(UsdPerEur) ? Math.Clamp(UsdPerEur, 0.5, 2.0) : 1.14;
+        UsdPerEur = double.IsFinite(UsdPerEur) ? Math.Clamp(UsdPerEur, MinUsdPerEur, MaxUsdPerEur) : 1.14;
         return this;
     }
 }
