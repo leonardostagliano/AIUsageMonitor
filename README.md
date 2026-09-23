@@ -152,7 +152,7 @@ mostra il dettaglio per modello, la data del listino e il tasso usato.
   vale l'ultimo scaricato, poi il tasso di riserva delle impostazioni (default 1 € = 1,14 $).
 - **Modelli senza prezzo** (per esempio `codex-auto-review`, che nessun listino pubblica): il costo
   mostrato è un minimo, `≥ 1,20 €`, e il tooltip dice quale modello manca; se nessun modello ha un
-  prezzo compare `costo n/d`.
+  prezzo, o la parte con un prezzo resta sotto il centesimo, compare `costo n/d`.
 
 Dalle impostazioni (gruppo COSTI) si nascondono i costi — e con loro ogni download di listino e
 tasso — e si imposta il tasso di riserva.

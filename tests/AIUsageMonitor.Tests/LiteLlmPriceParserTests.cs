@@ -121,7 +121,7 @@ public class LiteLlmPriceParserTests
     }
 
     [Fact]
-    public void A_missing_band_field_falls_back_to_its_variant_base_and_a_missing_variant_field_to_the_standard_base()
+    public void Missing_fields_come_from_the_group_they_fall_back_on_with_its_cache_discount_and_band_surcharge()
     {
         using var doc = JsonDocument.Parse("""
             {
@@ -135,12 +135,69 @@ public class LiteLlmPriceParserTests
         var price = LiteLlmPriceParser.ParseEntry("x", doc.RootElement)!;
 
         Assert.Equal(new PriceRates(0.000001m, 0.000002m, 0.0000001m, 0.000003m, 0.000003m), price.Standard.Base);
+        // The band lists only its input: output as the base, cache prices with the base's ratio to input (0.1 and 3).
         Assert.Equal(200_000L, Assert.Single(price.Standard.Bands).Key);
-        Assert.Equal(price.Standard.Base with { Input = 0.000005m }, price.Standard.Bands[200_000]);
-        Assert.Equal(price.Standard.Base with { Input = 0.000004m, Output = 0.000006m }, price.Priority!.Base);
+        Assert.Equal(new PriceRates(0.000005m, 0.000002m, 0.0000005m, 0.000015m, 0.000015m), price.Standard.Bands[200_000]);
+        // Same for the priority base on the standard base.
+        Assert.Equal(new PriceRates(0.000004m, 0.000006m, 0.0000004m, 0.000012m, 0.000012m), price.Priority!.Base);
+        // Its band lists only its input: the rest is its base with the standard band's surcharge (×1 on output, ×5 on
+        // cache), with the same cache ratio to input.
         Assert.Equal(200_000L, Assert.Single(price.Priority.Bands).Key);
-        Assert.Equal(price.Priority.Base with { Input = 0.000008m }, price.Priority.Bands[200_000]);
+        Assert.Equal(new PriceRates(0.000008m, 0.000006m, 0.0000008m, 0.000024m, 0.000024m), price.Priority.Bands[200_000]);
         Assert.Null(price.Flex);
+    }
+
+    [Fact]
+    public void A_variant_without_the_band_of_a_long_prompt_gets_the_standard_band_surcharge_on_its_own_base()
+    {
+        // gpt-5.5 as the list gives it on 2026-09-24: a 272k band for standard and flex, none for priority.
+        using var doc = JsonDocument.Parse("""
+            {
+              "input_cost_per_token": 0.000005, "output_cost_per_token": 0.00003, "cache_read_input_token_cost": 5e-7,
+              "input_cost_per_token_above_272k_tokens": 0.00001, "output_cost_per_token_above_272k_tokens": 0.000045,
+              "cache_read_input_token_cost_above_272k_tokens": 0.000001,
+              "input_cost_per_token_priority": 0.0000125, "output_cost_per_token_priority": 0.000075,
+              "cache_read_input_token_cost_priority": 0.00000125,
+              "input_cost_per_token_flex": 0.0000025, "output_cost_per_token_flex": 0.000015, "cache_read_input_token_cost_flex": 2.5e-7,
+              "input_cost_per_token_above_272k_tokens_flex": 0.000005, "output_cost_per_token_above_272k_tokens_flex": 0.0000225,
+              "cache_read_input_token_cost_above_272k_tokens_flex": 5e-7
+            }
+            """);
+
+        var price = LiteLlmPriceParser.ParseEntry("gpt-5.5", doc.RootElement)!;
+
+        // The rule reproduces the band the list does give for flex...
+        var flex = price.Flex!.For(272_000);
+        Assert.Equal((0.000005m, 0.0000225m, 0.0000005m), (flex.Input, flex.Output, flex.CacheRead));
+        // ...and gives priority ×2 on input and cache, ×1.5 on output: never the short-prompt priority price, nor the
+        // standard band, which would make a long priority prompt cheaper than a short one.
+        var priority = price.Priority!.For(272_000);
+        Assert.Equal((0.000025m, 0.0001125m, 0.0000025m), (priority.Input, priority.Output, priority.CacheRead));
+        Assert.Equal(price.Priority.Base, price.Priority.For(0));
+    }
+
+    [Fact]
+    public void A_variant_without_a_cache_price_keeps_the_standard_ratio_to_input()
+    {
+        using var doc = JsonDocument.Parse("""
+            {
+              "pro": {
+                "input_cost_per_token": 0.00003, "output_cost_per_token": 0.00018,
+                "input_cost_per_token_flex": 0.000015, "output_cost_per_token_flex": 0.00009
+              },
+              "discounted": {
+                "input_cost_per_token": 0.000002, "output_cost_per_token": 0.00001, "cache_read_input_token_cost": 2e-7,
+                "input_cost_per_token_priority": 0.000004, "output_cost_per_token_priority": 0.00002
+              }
+            }
+            """);
+
+        var models = LiteLlmPriceParser.Parse(doc.RootElement).Models;
+
+        // gpt-5.4-pro lists no cache price at all: a cached flex token costs the flex input, not the standard 3e-5.
+        Assert.Equal(0.000015m, models["pro"].Flex!.Base.CacheRead);
+        // With a listed discount (10%) the variant gets the same discount on its own input.
+        Assert.Equal(0.0000004m, models["discounted"].Priority!.Base.CacheRead);
     }
 
     [Fact]
@@ -173,6 +230,10 @@ public class LiteLlmPriceParserTests
               "huge-multiplier": { "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "provider_specific_entry": { "fast": 1e30, "us": 1.1 } },
               "huge-web-search": { "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "search_context_cost_per_query": 1e30 },
               "huge-priority": { "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "input_cost_per_token_priority": 1e30 },
+              "negative-input": { "input_cost_per_token": -1e-6, "output_cost_per_token": 2e-6 },
+              "implausible-output": { "input_cost_per_token": 1e-6, "output_cost_per_token": 1.5 },
+              "odd-multipliers": { "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "provider_specific_entry": { "fast": 1000, "us": 0, "eu": -2, "au": 1.2 } },
+              "negative-cache-read": { "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "cache_read_input_token_cost": -1e-7 },
               "odd-bands": {
                 "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
                 "input_cost_per_token_above_99999999999999999999k_tokens": 5e-6,
@@ -192,6 +253,11 @@ public class LiteLlmPriceParserTests
         Assert.Equal(1.1m, parsed.Models["huge-multiplier"].Multipliers["us"]);
         Assert.Equal(0m, parsed.Models["huge-web-search"].WebSearch);
         Assert.Null(parsed.Models["huge-priority"].Priority);
+        // Negative or implausible prices (above 1 USD per token) and multipliers outside 0–100 are ignored too.
+        Assert.False(parsed.Models.ContainsKey("negative-input"));
+        Assert.False(parsed.Models.ContainsKey("implausible-output"));
+        Assert.Equal("au", Assert.Single(parsed.Models["odd-multipliers"].Multipliers).Key);
+        Assert.Equal(standard, parsed.Models["negative-cache-read"].Standard.Base);
         Assert.Empty(parsed.Models["odd-bands"].Standard.Bands);
         Assert.Empty(parsed.UnknownThresholds);
     }

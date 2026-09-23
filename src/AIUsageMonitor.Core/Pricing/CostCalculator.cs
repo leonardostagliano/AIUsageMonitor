@@ -24,11 +24,29 @@ public sealed record CostResult(decimal Eur, IReadOnlyList<ModelCost> ByModel)
         if (!b.HasUsage) return a;
         if (!a.HasUsage) return b;
         var merged = new Dictionary<string, (decimal Eur, bool Priced)>(StringComparer.Ordinal);
-        foreach (var model in a.ByModel.Concat(b.ByModel))
-            merged[model.Model] = merged.TryGetValue(model.Model, out var existing)
-                ? (existing.Eur + model.Eur, existing.Priced && model.Priced)
-                : (model.Eur, model.Priced);
+        foreach (var model in a.ByModel.Concat(b.ByModel)) Add(merged, model.Model, model.Eur, model.Priced);
         return Build(merged);
+    }
+
+    /// <summary>
+    /// Adds <paramref name="eur"/> to the line of <paramref name="model"/>. A sum a decimal cannot hold turns the line
+    /// into an unpriced one: a cost must never throw into the view models that show it.
+    /// </summary>
+    internal static void Add(Dictionary<string, (decimal Eur, bool Priced)> byModel, string model, decimal eur, bool priced)
+    {
+        if (!byModel.TryGetValue(model, out var existing))
+        {
+            byModel[model] = (eur, priced);
+            return;
+        }
+        try
+        {
+            byModel[model] = (existing.Eur + eur, existing.Priced && priced);
+        }
+        catch (OverflowException)
+        {
+            byModel[model] = (0m, false);
+        }
     }
 
     internal static CostResult Build(Dictionary<string, (decimal Eur, bool Priced)> byModel)
@@ -38,7 +56,20 @@ public sealed record CostResult(decimal Eur, IReadOnlyList<ModelCost> ByModel)
             .ThenBy(kv => kv.Key, StringComparer.Ordinal)
             .Select(kv => new ModelCost(kv.Key, kv.Value.Eur, kv.Value.Priced))
             .ToList();
-        return new CostResult(models.Sum(m => m.Eur), models);
+        var total = 0m;
+        for (var i = 0; i < models.Count; i++)
+        {
+            try
+            {
+                total += models[i].Eur;
+            }
+            catch (OverflowException)
+            {
+                // Same rule as Add: left out of the total and shown as unpriced.
+                models[i] = models[i] with { Eur = 0m, Priced = false };
+            }
+        }
+        return new CostResult(total, models);
     }
 }
 
@@ -78,10 +109,22 @@ public static class CostCalculator
         {
             var name = string.IsNullOrWhiteSpace(entry.Key.Model) ? UnknownModel : entry.Key.Model;
             var price = catalog.Find(entry.Key.Model);
-            var eur = price is null ? 0m : Usd(entry.Key, entry.Tokens, price) / usdPerEur;
-            byModel[name] = byModel.TryGetValue(name, out var existing)
-                ? (existing.Eur + eur, existing.Priced && price is not null)
-                : (eur, price is not null);
+            var eur = 0m;
+            var priced = price is not null;
+            if (price is not null)
+            {
+                try
+                {
+                    eur = Usd(entry.Key, entry.Tokens, price) / usdPerEur;
+                }
+                catch (OverflowException)
+                {
+                    // Rates no decimal can multiply out (a damaged or hostile price list): unpriced, never an
+                    // exception in the notch refresh. LiteLlmPriceParser already refuses implausible rates.
+                    priced = false;
+                }
+            }
+            CostResult.Add(byModel, name, eur, priced);
         }
         return CostResult.Build(byModel);
     }

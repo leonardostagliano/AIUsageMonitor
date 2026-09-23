@@ -118,6 +118,26 @@ public class CostCalculatorTests
     }
 
     [Fact]
+    public void Rates_no_decimal_can_multiply_out_make_the_model_unpriced_instead_of_throwing()
+    {
+        // Built directly, past the parser's bounds: the calculator must hold on its own.
+        var huge = new PriceRates(1e28m, 0m, 0m, 0m, 0m);
+        var catalog = Catalog(Price("huge", huge), Price("big-a", huge with { Input = 4e27m }), Price("big-b", huge with { Input = 4e27m }),
+            Price("m", OpusRates));
+
+        var entry = CostCalculator.Compute(Ledger((Key("huge"), new LedgerTokens(10, 0, 0, 0, 0)), (Key("m"), new LedgerTokens(1_000_000, 0, 0, 0, 0))), catalog, 1m);
+        Assert.Equal(4m, entry.Eur);
+        Assert.Equal(["huge"], entry.UnpricedModels);
+
+        // Each line fits, their sum does not: the line that overflows the total is left out of it.
+        var sum = CostCalculator.Compute(Ledger((Key("big-a"), new LedgerTokens(10, 0, 0, 0, 0)), (Key("big-b"), new LedgerTokens(10, 0, 0, 0, 0))), catalog, 1m);
+        Assert.Equal(4e28m, sum.Eur);
+        Assert.Single(sum.UnpricedModels);
+        // Merging results follows the same rule: 4e28 + 4e28 does not fit either.
+        Assert.False((sum + sum).AnyPriced);
+    }
+
+    [Fact]
     public void An_empty_or_missing_ledger_has_no_cost()
     {
         Assert.False(CostCalculator.Compute(null, PriceCatalog.Empty, 1.14m).HasUsage);
@@ -145,11 +165,14 @@ public class CostCalculatorTests
         var partial = new CostResult(3.21m, [new ModelCost("m", 3.21m, true), new ModelCost("codex-auto-review", 0m, false)]);
         var none = new CostResult(0m, [new ModelCost("codex-auto-review", 0m, false)]);
         var tiny = new CostResult(0.001m, [new ModelCost("m", 0.001m, true)]);
+        var tinyPartial = new CostResult(0.001m, [new ModelCost("m", 0.001m, true), new ModelCost("codex-auto-review", 0m, false)]);
 
         Assert.Equal("≈ 3,21 €", CostFormatter.Short(priced));
         Assert.Equal("≥ 3,21 €", CostFormatter.Short(partial));
         Assert.Equal("costo n/d", CostFormatter.Short(none));
         Assert.Equal("< 0,01 €", CostFormatter.Short(tiny));
+        // Under a cent the priced part says nothing about the unpriced model: not "< 0,01 €", which would be a maximum.
+        Assert.Equal("costo n/d", CostFormatter.Short(tinyPartial));
         Assert.Equal(["m ≈ 3,21 €", "codex-auto-review: prezzo non disponibile"], CostFormatter.ModelLines(partial));
         Assert.Equal(["m < 0,01 €"], CostFormatter.ModelLines(tiny));
     }

@@ -200,6 +200,23 @@ Mappatura dei campi LiteLLM:
 | moltiplicatori | `provider_specific_entry` (`fast`, e chiavi geo come `us`) |
 | `WebSearch` | `search_context_cost_per_query.search_context_size_medium` |
 
+I ripieghi "assente: …" della tabella valgono per la base Standard. Per gli altri gruppi (base di una variante, fascia)
+un campo assente viene dal gruppo di ripiego, con queste regole, verificate sul listino del 2026-09-24:
+
+- `Input` e `Output` assenti: quelli del gruppo di ripiego (la base Standard per una variante, la base della variante
+  per una fascia).
+- Prezzi di cache assenti: stesso rapporto con l'input del gruppo di ripiego, applicato all'input del gruppo (lo stesso
+  sconto). Seguono questa regola 140 dei 144 prezzi di cache che il listino dà per varianti e fasce, gli altri 4 entro
+  il 4%. Prendere il prezzo del ripiego così com'è poteva far costare un token in cache più di uno fuori cache (flex di
+  `gpt-5.4-pro`: 3e-5 contro un input flex di 1,5e-5).
+- Fascia di una variante: la base della variante con la maggiorazione della fascia Standard, campo per campo, poi i
+  campi che la variante elenca per quella fascia. I 72 prezzi di fascia che il listino dà per le varianti sono
+  esattamente questo; senza, una richiesta priority oltre 272k su `gpt-5.5` (che non ha la fascia priority) sarebbe
+  costata come una corta, o meno di una corta con la fascia Standard.
+- Valori plausibili: prezzi per token tra 0 e 1 USD, moltiplicatori oltre 0 e fino a 100, ricerca web tra 0 e 100 USD;
+  il resto si ignora come un campo assente. Un calcolo che comunque non sta in un `decimal` rende la voce non
+  prezzata invece di sollevare un'eccezione.
+
 **Risoluzione del nome.** Nell'ordine: id esatto; id in minuscolo senza il suffisso `[1m]` e senza prefisso
 `anthropic/` o `openai/`; lo stesso senza suffisso data (`-20251001`, `-2025-10-01`). Nessun'altra somiglianza. Un
 modello non risolto è **non prezzato**.
@@ -269,7 +286,8 @@ AgentCardViewModel / SessionRowViewModel / SubagentRowViewModel ◄── CostCa
 
 - `≈ 3,21 €` con cultura it-IT: due decimali sotto 100 €, nessun decimale da 100 € in su (`≈ 1.234 €`); sotto un
   centesimo `< 0,01 €`; zero token: nessun costo.
-- Minimo per modelli non prezzati: `≥ 3,21 €`. Nulla di prezzato: `costo n/d`.
+- Minimo per modelli non prezzati: `≥ 3,21 €`. Nulla di prezzato, o parte prezzata sotto un centesimo con modelli non
+  prezzati: `costo n/d` (`< 0,01 €` direbbe che il costo intero è sotto il centesimo).
 - Con "Mostra costi" spento nessun testo di costo compare e nessun tooltip lo cita.
 
 ### 6.2 Notch

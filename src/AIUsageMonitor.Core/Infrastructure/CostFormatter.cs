@@ -21,14 +21,15 @@ public static class CostFormatter
     }
 
     /// <summary>
-    /// "≈ 3,21 €"; "≥ 3,21 €" when some model has no price (the amount is a minimum); "costo n/d" when none has;
-    /// null when there is no usage to price.
+    /// "≈ 3,21 €"; "≥ 3,21 €" when some model has no price (the amount is a minimum); "costo n/d" when none has, or
+    /// when some has none and the priced part is under a cent ("&lt; 0,01 €" would read as a maximum); null when there
+    /// is no usage to price.
     /// </summary>
     public static string? Short(CostResult cost)
     {
         if (!cost.HasUsage) return null;
         if (!cost.AnyPriced) return "costo n/d";
-        if (cost.Eur < 0.01m) return Amount(cost.Eur);
+        if (cost.Eur < 0.01m) return cost.AnyUnpriced ? "costo n/d" : Amount(cost.Eur);
         return (cost.AnyUnpriced ? "≥ " : "≈ ") + Amount(cost.Eur);
     }
 
