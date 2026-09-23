@@ -1,0 +1,133 @@
+name: Windows release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# I push ravvicinati restano in coda invece di annullare un rilascio gia' in corso.
+concurrency:
+  group: windows-release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CI: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout push with full history and tags
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # Niente cache npm: il repository non ha package.json, gli script usano solo moduli integrati di Node.
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Calculate release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PLAN: ${{ runner.temp }}/windows-release.json
+        run: |
+          node scripts/windows-release.mjs prepare
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test .NET projects
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          dotnet test AIUsageMonitor.slnx -c Release
+          if ($LASTEXITCODE -ne 0) { throw "dotnet test non riuscito (codice $LASTEXITCODE)." }
+
+      - name: Test hook and release scripts
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw "node --test non riuscito (codice $LASTEXITCODE)." }
+
+      # Framework-dependent con --no-self-contained: con l'SDK .NET 10 `--self-contained false` insieme a
+      # PublishSingleFile non arriva a MSBuild e produce in silenzio un eseguibile self-contained.
+      - name: Publish framework-dependent and self-contained executables
+        if: steps.version.outputs.skip != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $version = $env:RELEASE_VERSION
+          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw "Versione di rilascio non valida: '$version'." }
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          $variants = @(
+            @{ Mode = @('--no-self-contained'); Output = 'publish/framework-dependent'; Asset = "AIUsageMonitor-$version-win-x64.exe" },
+            @{ Mode = @('--self-contained', 'true'); Output = 'publish/self-contained'; Asset = "AIUsageMonitor-$version-win-x64-selfcontained.exe" }
+          )
+          foreach ($variant in $variants) {
+            $arguments = @('publish', 'src/AIUsageMonitor.App', '-c', 'Release', '-r', 'win-x64') + $variant.Mode + @(
+              "-p:Version=$version", '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
+              '-p:DebugType=none', '-o', $variant.Output)
+            dotnet @arguments
+            if ($LASTEXITCODE -ne 0) { throw "dotnet publish $($variant.Mode -join ' ') non riuscito (codice $LASTEXITCODE)." }
+            Copy-Item -LiteralPath (Join-Path $variant.Output 'AIUsageMonitor.exe') -Destination (Join-Path 'release' $variant.Asset)
+          }
+          Get-ChildItem release | Format-Table Name, Length
+
+      # L'updater scarica la variante registrata nell'AssemblyMetadata "AIUsageMonitor.SelfContained" (nel blob
+      # dell'attributo: chiave UTF-8 preceduta dalla lunghezza, poi il valore preceduto dalla lunghezza): deve
+      # coincidere con il runtimeconfig incluso nell'eseguibile, che ha "includedFrameworks" solo se self-contained.
+      - name: Smoke test the published executables
+        if: steps.version.outputs.skip != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $version = $env:RELEASE_VERSION
+          $directory = (Resolve-Path -LiteralPath 'release').Path
+          $artifacts = @(
+            @{ Name = "AIUsageMonitor-$version-win-x64.exe"; SelfContained = $false },
+            @{ Name = "AIUsageMonitor-$version-win-x64-selfcontained.exe"; SelfContained = $true }
+          )
+          foreach ($artifact in $artifacts) {
+            $name = $artifact.Name
+            $path = Join-Path $directory $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Manca $name." }
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            if ($bytes.Length -le 0) { throw "${name}: file vuoto." }
+            if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "${name}: manca l'intestazione MZ di un eseguibile Windows." }
+            $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+            if ($info.FileVersion -ne "$version.0") { throw "${name}: FileVersion '$($info.FileVersion)', attesa '$version.0'." }
+            $product = "$($info.ProductVersion)"
+            if ($product -ne $version -and -not $product.StartsWith("$version+", [System.StringComparison]::Ordinal)) {
+              throw "${name}: ProductVersion '$product', attesa '$version' o '$version+<commit>'."
+            }
+            $text = [System.Text.Encoding]::Latin1.GetString($bytes)
+            $marker = if ($artifact.SelfContained) { "AIUsageMonitor.SelfContained$([char]4)true" } else { "AIUsageMonitor.SelfContained$([char]5)false" }
+            if (-not $text.Contains($marker)) { throw "${name}: AssemblyMetadata AIUsageMonitor.SelfContained diverso da $($artifact.SelfContained)." }
+            if ($text.Contains('"includedFrameworks"') -ne $artifact.SelfContained) { throw "${name}: il runtimeconfig incluso non corrisponde alla variante (self-contained $($artifact.SelfContained))." }
+            Write-Host "${name}: $($bytes.Length) byte, FileVersion $($info.FileVersion), ProductVersion $product, self-contained $($artifact.SelfContained)"
+          }
+
+      - name: Publish complete GitHub Release
+        if: steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PLAN: ${{ runner.temp }}/windows-release.json
+        run: |
+          node scripts/windows-release.mjs publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

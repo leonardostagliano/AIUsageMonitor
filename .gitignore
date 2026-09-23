@@ -6,3 +6,4 @@ publish/
 .vs/
 TestResults/
 *.log
+release/
