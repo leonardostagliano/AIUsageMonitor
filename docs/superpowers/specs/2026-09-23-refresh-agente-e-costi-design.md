@@ -274,7 +274,7 @@ Nuovo gruppo **COSTI**, tra NOTIFICHE e AGGIORNAMENTI:
 - `Mostra costi (prezzi API di listino)`, attivo di default. Spento: nessun download e nessun costo nell'interfaccia.
 - `Tasso di riserva: 1 € = [1,14] $`, usato solo quando manca il tasso BCE.
 - Riga di stato, in sola lettura: `Listino LiteLLM del 23/09 14:02 · 216 modelli` (o `copia imbarcata` /
-  `override attivo`) e `BCE 1,1411 del 23/09` (o `tasso di riserva`), con l'ultimo errore se c'è.
+  `override attivo`) e `BCE: 1 € = 1,1411 $ del 23/09` (o `Tasso di riserva: 1 € = 1,14 $`), con l'ultimo errore se c'è.
 - Pulsante `Apri cartella` sulla cartella dati, per chi vuole scrivere `prices-override.json`.
 
 `AppSettings`: `ShowCosts` (bool, default `true`), `UsdPerEur` (double, default `1.14`, normalizzato in 0,5–2,0).

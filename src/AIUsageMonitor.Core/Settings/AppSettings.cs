@@ -33,6 +33,15 @@ public sealed class AppSettings
     /// </summary>
     public bool UpdatesAutoCheck { get; set; } = true;
 
+    /// <summary>
+    /// Mostra il costo API equivalente in euro accanto ai token. Spento, l'app non scarica ne' il listino prezzi ne' il
+    /// tasso BCE e nessun costo compare nell'interfaccia.
+    /// </summary>
+    public bool ShowCosts { get; set; } = true;
+
+    /// <summary>Tasso di riserva (1 € = UsdPerEur $), usato solo quando manca il tasso BCE.</summary>
+    public double UsdPerEur { get; set; } = 1.14;
+
     public AppSettings Clone() => (AppSettings)MemberwiseClone();
 
     public AppSettings Normalized()
@@ -42,6 +51,7 @@ public sealed class AppSettings
         CollapseDelayMs = Math.Clamp(CollapseDelayMs, 0, 5000);
         MonitorIndex = Math.Max(0, MonitorIndex);
         VerticalOffset = Math.Clamp(VerticalOffset, -5000, 5000);
+        UsdPerEur = double.IsFinite(UsdPerEur) ? Math.Clamp(UsdPerEur, 0.5, 2.0) : 1.14;
         return this;
     }
 }
