@@ -84,13 +84,20 @@ public static partial class LiteLlmPriceParser
             long band = 0;
             if (match.Groups[3].Success)
             {
-                band = long.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture) * 1000;
+                // \d also matches non-ASCII digits, which NumberStyles.None rejects; a band that does not fit a long
+                // once in tokens is no threshold either.
+                if (!long.TryParse(match.Groups[3].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var thousands)
+                    || thousands > long.MaxValue / 1000) continue;
+                band = thousands * 1000;
                 if (!PricingThresholds.Known.Contains(band))
                 {
                     unknownThresholds?.Add(band);
                     continue;
                 }
             }
+
+            // Checked before the variant's rates are created: a variant exists only through a usable field.
+            if (!TryRate(field.Value, out var rate)) continue;
 
             var rateField = match.Groups[1].Value switch
             {
@@ -101,7 +108,7 @@ public static partial class LiteLlmPriceParser
             };
             var variant = match.Groups[4].Success ? match.Groups[4].Value : "";
             if (!raw.TryGetValue((variant, band), out var rates)) raw[(variant, band)] = rates = new Dictionary<RateField, decimal>();
-            rates[rateField] = Rate(field.Value);
+            rates[rateField] = rate;
         }
 
         if (!raw.TryGetValue(("", 0), out var standardRaw)
@@ -146,23 +153,29 @@ public static partial class LiteLlmPriceParser
         var multipliers = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
         if (entry.TryGetProperty("provider_specific_entry", out var specific) && specific.ValueKind == JsonValueKind.Object)
             foreach (var property in specific.EnumerateObject())
-                if (property.Value.ValueKind == JsonValueKind.Number)
-                    multipliers[property.Name.ToLowerInvariant()] = Rate(property.Value);
+                if (TryRate(property.Value, out var multiplier))
+                    multipliers[property.Name.ToLowerInvariant()] = multiplier;
         return multipliers;
     }
 
     private static decimal WebSearch(JsonElement entry)
     {
         if (!entry.TryGetProperty("search_context_cost_per_query", out var cost)) return 0m;
-        if (cost.ValueKind == JsonValueKind.Number) return Rate(cost);
-        return cost.ValueKind == JsonValueKind.Object && cost.TryGetProperty("search_context_size_medium", out var medium)
-               && medium.ValueKind == JsonValueKind.Number
-            ? Rate(medium)
-            : 0m;
+        if (cost.ValueKind == JsonValueKind.Object && cost.TryGetProperty("search_context_size_medium", out var medium)) cost = medium;
+        return TryRate(cost, out var price) ? price : 0m;
     }
 
-    /// <summary>Prices are written in exponent notation (2.5e-7): read as double, then kept as decimal (15 significant digits).</summary>
-    private static decimal Rate(JsonElement value) => (decimal)value.GetDouble();
+    /// <summary>
+    /// Prices are written in exponent notation (2.5e-7): read as double, then kept as decimal (15 significant digits).
+    /// False for anything else and for a number a decimal cannot hold (beyond ±7.9e28, or out of the double range).
+    /// </summary>
+    private static bool TryRate(JsonElement value, out decimal rate)
+    {
+        rate = 0m;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var number) || !(Math.Abs(number) < 7.9e28)) return false;
+        rate = (decimal)number;
+        return true;
+    }
 
     private static bool IsNumber(JsonElement element, string property) =>
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number;
