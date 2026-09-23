@@ -41,6 +41,57 @@ public class LedgerWiringTests
     }
 
     [Fact]
+    public void SubagentLedger_sums_every_known_subagent_and_ActiveSubagentLedger_only_the_running_ones()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStart", agentId: "a2", plusSeconds: 2));
+        tracker.Apply(Ev("SubagentStop", agentId: "a2", plusSeconds: 3));
+
+        tracker.UpdateTokens(AgentKind.Claude, "s1", null, null, null, null,
+            new Dictionary<string, UsageLedger> { ["a1"] = Ledger("n", 7), ["a2"] = Ledger("k", 3) });
+
+        var s = Assert.Single(tracker.Sessions);
+        Assert.Equal(Ledger("n", 7) + Ledger("k", 3), s.SubagentLedger);
+        Assert.Equal(Ledger("n", 7), s.ActiveSubagentLedger);
+    }
+
+    [Fact]
+    public void Each_ledger_raises_Changed_on_its_own_and_keeps_the_token_update_of_the_same_call()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.UpdateTokens(AgentKind.Claude, "s1", null, null, null, Ledger("m", 5), new Dictionary<string, UsageLedger> { ["a1"] = Ledger("n", 7) });
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        // Only the session ledger moves.
+        tracker.UpdateTokens(AgentKind.Claude, "s1", null, null, null, Ledger("m", 6), null);
+        Assert.Single(changes);
+        Assert.Equal(Ledger("m", 6), tracker.Sessions.Single().Ledger);
+
+        // Only the ledger of a1 moves (the session ledger is not reported at all).
+        tracker.UpdateTokens(AgentKind.Claude, "s1", null, null, null, null, new Dictionary<string, UsageLedger> { ["a1"] = Ledger("n", 8) });
+        Assert.Equal(2, changes.Count);
+        Assert.Equal(Ledger("n", 8), tracker.Sessions.Single().Subagents!.Single().Ledger);
+
+        // Tokens and ledger of a1 move in the same call, next to an unchanged session ledger: one change, and neither
+        // update of the subagent overwrites the other.
+        var tokens = new TokenUsage(9, 1, 0, 0);
+        tracker.UpdateTokens(AgentKind.Claude, "s1", null, new Dictionary<string, TokenUsage> { ["a1"] = tokens }, null, Ledger("m", 6),
+            new Dictionary<string, UsageLedger> { ["a1"] = Ledger("n", 9) });
+        Assert.Equal(3, changes.Count);
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Same(session, changes[^1].Session);
+        Assert.Equal(Ledger("m", 6), session.Ledger);
+        var a1 = Assert.Single(session.Subagents!);
+        Assert.Equal(tokens, a1.Tokens);
+        Assert.Equal(Ledger("n", 9), a1.Ledger);
+    }
+
+    [Fact]
     public void UpdateTokensSilently_stores_the_ledgers_without_raising()
     {
         var tracker = new SessionTracker(new FakeClock(T0));
@@ -59,10 +110,15 @@ public class LedgerWiringTests
         public TokenUsage? SessionTokens(SessionState session) => new(1, 1, 0, 0);
         public IReadOnlyDictionary<string, TokenUsage>? SubagentTokens(SessionState session) => null;
         public UsageLedger? SessionLedger(SessionState session) => Ledger("m", 1);
+        public IReadOnlyDictionary<string, UsageLedger>? SubagentLedgers(SessionState session) =>
+            new Dictionary<string, UsageLedger> { ["a1"] = Ledger("n", 1) };
     }
 
+    private static string SubagentLine(string evt, string sid, string agentId, DateTimeOffset ts) =>
+        $$"""{"ts":"{{ts:yyyy-MM-ddTHH:mm:ss.fffZ}}","agent":"claude","event":"{{evt}}","session_id":"{{sid}}","cwd":"C:\\demo\\proj","notification_type":null,"message":null,"source":null,"agent_id":"{{agentId}}","agent_type":"general-purpose"}""" + "\n";
+
     [Fact]
-    public void The_pump_hands_the_session_ledger_to_the_tracker()
+    public void The_pump_hands_the_session_and_subagent_ledgers_to_the_tracker()
     {
         using var dir = new TempDir();
         var paths = new AppPaths(dir.Path, dir.Sub("lad"));
@@ -75,10 +131,13 @@ public class LedgerWiringTests
         };
         pump.Start();
 
-        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", T0) + Line("Stop", "s1", T0.AddSeconds(1)));
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "s1", T0) + SubagentLine("SubagentStart", "s1", "a1", T0.AddSeconds(1))
+                                             + Line("Stop", "s1", T0.AddSeconds(2)));
         pump.Pump();
 
-        Assert.Equal(Ledger("m", 1), Assert.Single(tracker.Sessions).Ledger);
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(Ledger("m", 1), session.Ledger);
+        Assert.Equal(Ledger("n", 1), Assert.Single(session.Subagents!).Ledger);
     }
 
     [Fact]
@@ -117,5 +176,39 @@ public class LedgerWiringTests
 
         Assert.Equal(tokens, ledger!.ToTokenUsage());
         Assert.Equal("gpt-6-luna", ledger.Entries.Single().Key.Model);
+    }
+
+    private static string CodexTokenCount(long input, long cached, long output) =>
+        $$$"""{"timestamp":"2026-09-23T10:05:01.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":{{{input}}},"cached_input_tokens":{{{cached}}},"cache_write_input_tokens":0,"output_tokens":{{{output}}},"reasoning_output_tokens":0,"total_tokens":{{{input + output}}}}},"rate_limits":null}}""" + "\n";
+
+    [Fact]
+    public void AppTokenSource_reports_the_Codex_ledger_of_a_child_thread_and_follows_it_once_finished()
+    {
+        using var dir = new TempDir();
+        const string parent = "01a0cb74-88e5-7a93-8cf2-1a6c08b6a9c3";
+        const string child = "01a0cb74-99f6-7b04-9d03-2b7d19c7bad4";
+        var rollout = dir.File($".codex/sessions/2026/09/23/rollout-2026-09-23T10-05-00-{child}.jsonl",
+            $$$"""{"timestamp":"2026-09-23T10:05:00.000Z","type":"session_meta","payload":{"session_id":"{{{parent}}}","id":"{{{child}}}","parent_thread_id":"{{{parent}}}","cwd":"C:\\demo\\proj"}}""" + "\n" +
+            """{"timestamp":"2026-09-23T10:05:00.500Z","type":"turn_context","payload":{"model":"gpt-6-sol"}}""" + "\n" +
+            CodexTokenCount(50, 10, 5));
+        File.SetLastWriteTimeUtc(rollout, T0.UtcDateTime);
+        var clock = new FakeClock(T0);
+        var session = new SessionState(AgentKind.Codex, parent, "demo", null, SessionPhase.Working, null, T0, T0,
+            Subagents: [new(child, "worker", SubagentPhase.Done, T0, T0, null, TokenUsage.Zero)]);
+        var source = new AppTokenSource(new AppPaths(dir.Path, dir.Sub("local")), clock);
+
+        var tokens = source.SubagentTokens(session)![child];
+        var ledger = source.SubagentLedgers(session)![child];
+        Assert.Equal(tokens, ledger.ToTokenUsage());
+        Assert.Equal("gpt-6-sol", ledger.Entries.Single().Key.Model);
+
+        // The finished child still writes a last total, read after every cache of the counter has expired.
+        File.AppendAllText(rollout, CodexTokenCount(80, 20, 9));
+        File.SetLastWriteTimeUtc(rollout, T0.UtcDateTime);
+        clock.Advance(CodexTokenCounter.CacheTtl + TimeSpan.FromSeconds(1));
+
+        tokens = source.SubagentTokens(session)![child];
+        Assert.Equal(new TokenUsage(60, 9, 20, 0), tokens);
+        Assert.Equal(tokens, source.SubagentLedgers(session)![child].ToTokenUsage());
     }
 }

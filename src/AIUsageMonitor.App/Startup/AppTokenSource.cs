@@ -7,7 +7,8 @@ namespace AIUsageMonitor.App.Startup;
 /// <summary>
 /// The <see cref="ITokenSource"/> the pump asks for totals: Claude Code counts the transcript of the session and of
 /// every subagent it spawned, Codex reads the cumulative total of the thread and of its child threads. The ledgers
-/// come from the same Claude counter state (no IO) and, for Codex, from an incremental forward read of the rollout.
+/// come from the same Claude counter state (no extra transcript read) and, for Codex, from an incremental forward read
+/// of the rollout.
 /// </summary>
 /// <remarks>
 /// Every member runs on the pump thread — that is where <see cref="HookEventPump"/> does its IO — and so does
@@ -104,7 +105,8 @@ public sealed class AppTokenSource : ITokenSource
         foreach (var subagent in session.Subagents)
         {
             UsageLedger? ledger;
-            if (session.Agent == AgentKind.Codex) ledger = CodexLedger(subagent.AgentId);
+            if (session.Agent == AgentKind.Codex)
+                ledger = CodexLedger(subagent.AgentId, reuseKnownRollout: subagent.Phase == SubagentPhase.Done);
             else
             {
                 // Same path SubagentTokens has just read, so the counter state behind LedgerOf is current.
@@ -117,10 +119,23 @@ public sealed class AppTokenSource : ITokenSource
         return ledgers.Count == 0 ? null : ledgers;
     }
 
-    private UsageLedger? CodexLedger(string threadId)
+    /// <param name="reuseKnownRollout">
+    /// True for a finished child: the rollout it was last read from is read again as is. Resolving it anew would cost
+    /// a recursive scan of the sessions directory per finished child every <see cref="CodexTokenCounter.CacheTtl"/>,
+    /// while the incremental read of a known rollout only opens it and parses what was appended since.
+    /// </param>
+    private UsageLedger? CodexLedger(string threadId, bool reuseKnownRollout = false)
     {
-        if (!_codex.TryResolveRollout(threadId, out var path) || path is null) return null;
-        _codexRollouts[threadId] = path;
+        string? path;
+        if (!reuseKnownRollout || !_codexRollouts.TryGetValue(threadId, out path))
+        {
+            if (!_codex.TryResolveRollout(threadId, out path) || path is null) return null;
+            // The thread now resolves to another rollout: the state read from the previous one would otherwise stay
+            // until the app exits (Forget is always safe, a later Read rebuilds the state from the start of the file).
+            if (_codexRollouts.TryGetValue(threadId, out var previous) && !string.Equals(previous, path, StringComparison.OrdinalIgnoreCase))
+                _codexLedgers.Forget(previous);
+            _codexRollouts[threadId] = path;
+        }
         return NullIfEmpty(_codexLedgers.Read(path));
     }
 
