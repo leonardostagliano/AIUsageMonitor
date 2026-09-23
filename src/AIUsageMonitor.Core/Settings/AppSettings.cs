@@ -27,6 +27,12 @@ public sealed class AppSettings
     public bool NotifyClaude { get; set; } = true;
     public bool NotifyCodex { get; set; } = true;
 
+    /// <summary>
+    /// Controllo automatico delle release (15 s dopo l'avvio, poi ogni 6 ore). Parte solo dopo che l'utente ha collegato
+    /// l'account GitHub dalle impostazioni: senza sessione un controllo potrebbe solo fallire.
+    /// </summary>
+    public bool UpdatesAutoCheck { get; set; } = true;
+
     public AppSettings Clone() => (AppSettings)MemberwiseClone();
 
     public AppSettings Normalized()

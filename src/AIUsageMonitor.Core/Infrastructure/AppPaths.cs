@@ -34,4 +34,8 @@ public sealed class AppPaths
     public string SettingsFile => Path.Combine(LocalAppDataDir, "settings.json");
     public string UsageCacheFile => Path.Combine(LocalAppDataDir, "usage-cache.json");
     public string LogsDir => Path.Combine(LocalAppDataDir, "logs");
+
+    // Aggiornamenti
+    public string UpdatesDir => Path.Combine(LocalAppDataDir, "updates");
+    public string UpdateAuthFile => Path.Combine(LocalAppDataDir, "updates-auth.json");
 }
