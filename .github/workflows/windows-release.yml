@@ -8,9 +8,10 @@ on:
 permissions:
   contents: write
 
-# I push ravvicinati restano in coda invece di annullare un rilascio gia' in corso.
+# I push ravvicinati restano in coda invece di annullare un rilascio gia' in corso. Il gruppo dipende dal ref: un avvio
+# manuale da un altro branch (il cui job viene poi saltato) non deve prendere il posto di un rilascio di main in attesa.
 concurrency:
-  group: windows-release-main
+  group: windows-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

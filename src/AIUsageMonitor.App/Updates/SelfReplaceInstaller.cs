@@ -35,12 +35,15 @@ public sealed class SelfReplaceInstaller : IUpdateInstaller
         };
     }
 
-    public InstallationKind DetectInstallation()
+    public InstallationKind DetectInstallation(bool probeWritable)
     {
         var path = Environment.ProcessPath;
         if (!BuildInfo.IsSingleFile || string.IsNullOrEmpty(path)) return InstallationKind.Development;
         if (!OperatingSystem.IsWindows() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
             return InstallationKind.UnsupportedPlatform;
+        // All'avvio niente file sonda accanto all'exe: con "Accesso controllato alle cartelle" e l'exe sul Desktop o in
+        // Documenti Windows Security mostrerebbe un avviso a ogni accesso, anche a chi non usa gli aggiornamenti.
+        if (!probeWritable) return InstallationKind.Supported;
         var directory = Path.GetDirectoryName(path);
         try
         {
@@ -79,6 +82,8 @@ public sealed class SelfReplaceInstaller : IUpdateInstaller
         ExecutableSwapResult swap;
         try
         {
+            // Replace arriva sempre alla fine (sostituzione o ripristino): UpdateService.Dispose aspetta questo task
+            // prima di lasciar uscire il processo, cosi' un "Esci" a meta' non lascia il percorso dell'exe vuoto.
             swap = ExecutableSwap.Replace(target, staged.Path, staged.Sha256, staged.Size);
         }
         catch (UpdateException)
@@ -89,6 +94,13 @@ public sealed class SelfReplaceInstaller : IUpdateInstaller
         {
             _logError("Updater: sostituzione dell'eseguibile non riuscita", ex);
             throw new UpdateException("UPDATES_INSTALL", UpdateMessages.InstallReplaceFailed);
+        }
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // L'app si sta chiudendo per scelta dell'utente (Esci, fine sessione) mentre la sostituzione era in corso: la
+            // nuova versione resta al suo posto e partira' al prossimo avvio, senza riaprire l'app contro la sua scelta.
+            _logInfo($"Updater: eseguibile sostituito con la versione {staged.Version}; l'app si sta chiudendo, nessun riavvio");
+            return;
         }
         _logInfo($"Updater: eseguibile sostituito con la versione {staged.Version}, avvio della nuova versione");
 

@@ -92,8 +92,13 @@ public sealed record CredentialProcessResult(CredentialProcessOutcome Outcome, i
 /// </summary>
 public interface IUpdateInstaller
 {
-    /// <summary>Tipo di installazione dell'eseguibile corrente; puo' fare IO leggero (prova di scrittura nella cartella).</summary>
-    InstallationKind DetectInstallation();
+    /// <summary>
+    /// Tipo di installazione dell'eseguibile corrente. Con <paramref name="probeWritable"/> false non scrive nulla su disco
+    /// e una cartella non ancora verificata vale <see cref="InstallationKind.Supported"/>: la prova di scrittura nella
+    /// cartella dell'exe (che con "Accesso controllato alle cartelle" genera un avviso di Windows Security) si fa solo
+    /// quando c'e' una versione da installare o l'utente ha chiesto download/installazione.
+    /// </summary>
+    InstallationKind DetectInstallation(bool probeWritable);
 
     /// <summary>
     /// Sostituisce l'eseguibile corrente con <paramref name="staged"/> e avvia la nuova versione. Al ritorno la nuova

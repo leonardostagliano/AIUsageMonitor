@@ -192,16 +192,17 @@ public sealed class AppServices : IDisposable
     }
 
     /// <summary>
-    /// Avvia conferma e updater senza mai far fallire l'avvio: gli aggiornamenti sono opzionali. La conferma si abbona
-    /// per prima, cosi' non perde il primo stato; il servizio parte su un thread del pool perche' legge la sessione
-    /// salvata (file + DPAPI) e l'avvio non deve aspettarlo.
+    /// Avvia conferma e updater senza mai far fallire l'avvio: gli aggiornamenti sono opzionali. Tutto su un thread del
+    /// pool, perche' gia' la prima lettura dello stato carica la sessione salvata (file + DPAPI) e l'avvio non deve
+    /// aspettarla. La conferma si abbona per prima, cosi' non perde il primo stato; i suoi ascoltatori (tray, finestra)
+    /// passano comunque dal thread UI con UiDispatcher.
     /// </summary>
     private void StartUpdates()
     {
-        try { UpdatePrompt.Start(); }
-        catch (Exception ex) { Log.Error("Updater: avvio della conferma di aggiornamento non riuscito", ex); }
         _ = Task.Run(async () =>
         {
+            try { UpdatePrompt.Start(); }
+            catch (Exception ex) { Log.Error("Updater: avvio della conferma di aggiornamento non riuscito", ex); }
             try { await Updates.StartAsync().ConfigureAwait(false); }
             catch (Exception ex) { Log.Error("Updater: avvio non riuscito", ex); }
         });

@@ -22,6 +22,9 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
     public static readonly TimeSpan FirstCheckDelay = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan ObsoleteCleanupDelay = TimeSpan.FromSeconds(30);
 
+    /// <summary>Quanto Dispose aspetta una sostituzione dell'exe gia' partita (copia verificata + due rename).</summary>
+    public static readonly TimeSpan InstallShutdownTimeout = TimeSpan.FromSeconds(30);
+
     private const string ReleasesPath = "/releases?per_page=100&page=1";
     private const string PartialSuffix = ".part";
     private const int MaxCleanupEntries = 200;
@@ -52,6 +55,7 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
     private ReleaseCandidate? _candidate;
     private StagedUpdate? _staged;
     private CancellationTokenSource? _active;
+    private Task? _installing;
     private Task<UpdateStatus>? _checking;
     private Task<UpdateStatus>? _authenticating;
     private ITimer? _checkTimer;
@@ -223,9 +227,11 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
         }
     }
 
-    public Task<UpdateStatus> DownloadAsync() => GuardAsync(DownloadCoreAsync, "download");
+    // Task.Run: prima del primo await download e installazione rileggono la sessione e fanno la prova di scrittura nella
+    // cartella dell'exe, IO che non deve girare sul thread UI da cui arrivano i comandi.
+    public Task<UpdateStatus> DownloadAsync() => GuardAsync(() => Task.Run(DownloadCoreAsync), "download");
 
-    public Task<UpdateStatus> InstallAsync() => GuardAsync(InstallCoreAsync, "install");
+    public Task<UpdateStatus> InstallAsync() => GuardAsync(() => Task.Run(InstallCoreAsync), "install");
 
     /// <summary>Elimina la sessione GitHub salvata dall'app (rifiutato durante un'operazione in corso).</summary>
     public Task<UpdateStatus> DisconnectAsync()
@@ -281,6 +287,7 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
     public void Dispose()
     {
         CancellationTokenSource? active;
+        Task? installing = null;
         string? staged = null;
         lock (_gate)
         {
@@ -292,9 +299,21 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
             active = _active;
             // L'installazione puo' avere ancora bisogno del file: durante Installing non si elimina.
             if (_status.Phase != UpdatePhase.Installing) staged = TakeStagedLocked();
+            else installing = _installing;
             CommitLocked(_status); // CanDownload/CanInstall tornano false; nessun evento dopo Dispose
         }
         CancelQuietly(active);
+        // Chiusura dell'app (Esci, fine sessione) durante la sostituzione dell'exe: il processo non deve terminare tra i
+        // due rename, o al percorso dell'exe non resterebbe nulla. La cancellazione ferma l'installer prima dello scambio;
+        // se lo scambio e' gia' partito lo si lascia finire (o ripristinare), con un tetto.
+        if (installing is not null)
+        {
+            try
+            {
+                if (!installing.Wait(InstallShutdownTimeout)) LogInfo("Updates: closing while the executable swap is still running");
+            }
+            catch (Exception) { /* l'esito e' gia' nel log dell'installer */ }
+        }
         DeleteQuietly(staged);
     }
 
@@ -431,6 +450,9 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
             }
             else
             {
+                // C'e' una versione da proporre: solo ora si verifica che la cartella dell'exe sia scrivibile, cosi' la
+                // proposta (tray, notifica) non offre un'installazione che non potrebbe riuscire.
+                installation = DetectInstallation(probeWritable: true);
                 var suffix = installation switch
                 {
                     InstallationKind.Development => UpdateMessages.SuffixDevelopment,
@@ -449,6 +471,7 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
                     var staged = _staged is not null;
                     return s with
                     {
+                        Installation = installation,
                         Phase = staged ? UpdatePhase.Downloaded : UpdatePhase.Available,
                         CheckedAt = checkedAt,
                         Release = latest.View,
@@ -474,7 +497,7 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
     private async Task<UpdateStatus> DownloadCoreAsync()
     {
         EnsureLoaded();
-        var installation = DetectInstallation();
+        var installation = DetectInstallation(probeWritable: true);
         var operation = new CancellationTokenSource();
         ReleaseCandidate? selected = null;
         UpdateStatus? snapshot = null;
@@ -594,8 +617,11 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
     private async Task<UpdateStatus> InstallCoreAsync()
     {
         EnsureLoaded();
-        var installation = DetectInstallation();
+        var installation = DetectInstallation(probeWritable: true);
         var operation = new CancellationTokenSource();
+        // Completato alla fine dell'operazione (finally qui sotto): Dispose lo aspetta durante Installing. Assegnato nello
+        // stesso lock che porta la fase a Installing, cosi' Dispose non puo' vedere la fase senza il task da aspettare.
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         StagedUpdate? staged = null;
         UpdateStatus? snapshot = null;
         bool notify;
@@ -606,6 +632,7 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
             {
                 staged = _staged;
                 _active = operation;
+                _installing = finished.Task;
                 snapshot = CommitLocked(_status with { Phase = UpdatePhase.Installing, ErrorCode = null, Message = UpdateMessages.FinalVerification });
             }
             notify = !_disposed;
@@ -651,6 +678,7 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
         finally
         {
             ReleaseActive(operation);
+            finished.TrySetResult();
         }
     }
 
@@ -867,7 +895,8 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
         if (_loaded) return;
         var autoCheck = ReadAutoCheck();
         var credential = ReadCredential();
-        var installation = DetectInstallation();
+        // Senza prova di scrittura: il caricamento avviene a ogni avvio, anche per chi non usa gli aggiornamenti.
+        var installation = DetectInstallation(probeWritable: false);
         lock (_gate)
         {
             if (_loaded) return;
@@ -904,9 +933,9 @@ public sealed partial class UpdateService : IUpdateCommands, IDisposable
         }
     }
 
-    private InstallationKind DetectInstallation()
+    private InstallationKind DetectInstallation(bool probeWritable)
     {
-        try { return _options.Installer.DetectInstallation(); }
+        try { return _options.Installer.DetectInstallation(probeWritable); }
         catch (Exception ex)
         {
             // Se non si riesce a verificare la cartella dell'eseguibile, niente sostituzione automatica.

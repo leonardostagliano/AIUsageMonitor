@@ -196,12 +196,17 @@ senza accesso non c'è niente da controllare né da scaricare.
    `--updated <pid>`, poi si chiude. La nuova istanza aspetta che la precedente sia uscita prima di
    prendere il mutex di istanza singola e mostra la notifica "AIUsageMonitor aggiornato". Avvio
    automatico, pin sulla barra e notifiche restano validi perché il percorso non cambia; impostazioni,
-   hook e cache non vengono toccati. Se un passo fallisce l'exe precedente torna al suo posto. I file
-   `.old-*` vengono eliminati all'avvio successivo.
+   hook e cache non vengono toccati. Se un passo fallisce l'exe precedente torna al suo posto. Se
+   chiudi l'app (Esci, fine sessione) mentre la sostituzione è in corso, l'app aspetta che finisca e
+   non si riapre: la nuova versione parte al prossimo avvio. I file `.old-*` vengono eliminati
+   all'avvio successivo.
 
 L'installazione integrata richiede una cartella dell'eseguibile scrivibile dall'utente: da una
 cartella protetta (es. `Program Files`) o da `dotnet run` l'app segnala comunque la nuova versione,
-ma va scaricata dalla pagina della release e sostituita a mano. `AIUsageMonitor.exe --updates` apre
+ma va scaricata dalla pagina della release e sostituita a mano. La prova di scrittura (un file
+temporaneo accanto all'exe) si fa solo quando c'è una versione da installare o quando scarichi o
+installi, mai all'avvio: con *Accesso controllato alle cartelle* di Windows attivo e l'exe sul
+Desktop o in Documenti, Windows Security può segnalarla in quei momenti. `AIUsageMonitor.exe --updates` apre
 le impostazioni già sul gruppo AGGIORNAMENTI.
 
 ## Dove finiscono i file

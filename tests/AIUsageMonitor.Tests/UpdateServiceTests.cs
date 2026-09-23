@@ -899,14 +899,18 @@ public sealed class UpdateServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Dispose_keeps_the_staged_download_while_installing()
+    public async Task Dispose_waits_for_a_running_swap_and_keeps_the_staged_download()
     {
+        // "Esci" durante l'installazione: lo scambio gia' partito non si ferma a meta', Dispose lo aspetta.
         var installing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var proceed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _installer.Handler = async (_, _) =>
+        var swapped = false;
+        var cancelled = false;
+        _installer.Handler = async (_, cancellationToken) =>
         {
             installing.SetResult();
-            await proceed.Task;
+            await Task.Delay(300, CancellationToken.None);
+            cancelled = cancellationToken.IsCancellationRequested;
+            swapped = true;
         };
         var service = await DownloadedServiceAsync();
         var install = service.InstallAsync();
@@ -914,11 +918,49 @@ public sealed class UpdateServiceTests : IDisposable
         var staged = _installer.Installed.Single().Path;
 
         service.Dispose();
-        Assert.True(File.Exists(staged));
 
-        proceed.SetResult();
+        Assert.True(swapped);
+        Assert.True(cancelled);
+        Assert.True(File.Exists(staged));
         await install;
         Assert.True(File.Exists(staged));
+    }
+
+    // ---- Prova di scrittura nella cartella dell'eseguibile ----
+
+    [Fact]
+    public async Task Loading_never_probes_the_executable_folder()
+    {
+        _installer.Kind = InstallationKind.ReadOnlyLocation;
+        Serve([Release("0.9.0")]);
+        var service = MakeService();
+
+        Assert.Equal(InstallationKind.Supported, service.Status.Installation);
+        await service.StartAsync();
+        await service.CheckAsync();
+
+        Assert.NotEmpty(_installer.Probes);
+        Assert.DoesNotContain(true, _installer.Probes);
+        Assert.Equal(UpdatePhase.UpToDate, service.Status.Phase);
+    }
+
+    [Fact]
+    public async Task An_available_release_probes_the_folder_before_it_is_offered()
+    {
+        _installer.Kind = InstallationKind.ReadOnlyLocation;
+        Serve([Release("1.1.0")]);
+        var service = MakeService();
+        var prompt = new UpdatePromptController(service);
+        prompt.Start();
+
+        var status = await service.CheckAsync();
+
+        Assert.Equal(true, _installer.Probes[^1]);
+        Assert.Equal(InstallationKind.ReadOnlyLocation, status.Installation);
+        Assert.Equal(UpdateMessages.Available("1.1.0", UpdateMessages.SuffixReadOnlyLocation), status.Message);
+        Assert.False(status.CanDownload);
+        Assert.Null(prompt.State.Version);
+        prompt.Dispose();
     }
 
     // ---- Supporto ----
@@ -1124,7 +1166,15 @@ public sealed class UpdateServiceTests : IDisposable
         public Func<StagedUpdate, CancellationToken, Task> Handler { get; set; } = (_, _) => Task.CompletedTask;
         public List<StagedUpdate> Installed { get; } = [];
 
-        public InstallationKind DetectInstallation() => Kind;
+        /// <summary>Un valore per chiamata: true se e' stata chiesta la prova di scrittura.</summary>
+        public List<bool> Probes { get; } = [];
+
+        // Come SelfReplaceInstaller: senza prova di scrittura una cartella non verificata vale Supported.
+        public InstallationKind DetectInstallation(bool probeWritable)
+        {
+            lock (Probes) Probes.Add(probeWritable);
+            return !probeWritable && Kind == InstallationKind.ReadOnlyLocation ? InstallationKind.Supported : Kind;
+        }
 
         public Task InstallAsync(StagedUpdate staged, CancellationToken cancellationToken)
         {
