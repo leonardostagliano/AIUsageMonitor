@@ -8,7 +8,7 @@
        padding compresi), cosi' la finestra e il notch restano coerenti. La barra del titolo la scurisce DWM in
        OnSourceInitialized (DarkTitleBar), il tetto all'altezza lo mette ApplyWorkAreaCap con l'area di lavoro del
        monitor reale: su schermi bassi la ScrollViewer mostra la barra invece di far tagliare il contenuto. -->
-  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+  <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel Margin="18,16,18,14">
 
       <GroupBox Header="AGENTI">
@@ -65,6 +65,60 @@
           <Separator/>
           <CheckBox Content="Da Claude Code" IsChecked="{Binding NotifyClaude}"/>
           <CheckBox Content="Da Codex" IsChecked="{Binding NotifyCodex}"/>
+        </StackPanel>
+      </GroupBox>
+
+      <!-- Stato e comandi dal vivo di UpdateService (UpdatesViewModel, proprieta' Updates): non passano da Salva/Annulla.
+           Solo "Controlla automaticamente" e' una preferenza della bozza, salvata insieme alle altre. -->
+      <GroupBox x:Name="UpdatesGroup" Header="AGGIORNAMENTI">
+        <StackPanel>
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+            <Label Content="Versione corrente"/>
+            <TextBlock Grid.Column="1" Text="{Binding Updates.VersionText, Mode=OneWay}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            <Label Grid.Row="1" Content="Account GitHub"/>
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Updates.AccountText, Mode=OneWay}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            <Label Grid.Row="2" Content="Ultimo controllo"/>
+            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Updates.LastCheckText, Mode=OneWay}" VerticalAlignment="Center"/>
+            <Label Grid.Row="3" Content="Stato"/>
+            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Updates.PhaseText, Mode=OneWay}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+          </Grid>
+
+          <!-- Messaggio dello stato: grigio di norma, Amber nella fase Error (due TextBlock per non introdurre stili
+               locali). Gli errori sono Amber come i messaggi di stato del notch: Red sulla card (#2D2D31) si ferma a
+               4.1:1, sotto il minimo 4.5:1 del testo normale. -->
+          <TextBlock Text="{Binding Updates.Message, Mode=OneWay}" Visibility="{Binding Updates.MessageVisibility, Mode=OneWay}"
+                     Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+          <TextBlock Text="{Binding Updates.Message, Mode=OneWay}" Visibility="{Binding Updates.ErrorMessageVisibility, Mode=OneWay}"
+                     Foreground="{StaticResource Amber}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+          <TextBlock Text="{Binding Updates.CommandError, Mode=OneWay}" Visibility="{Binding Updates.CommandErrorVisibility, Mode=OneWay}"
+                     Foreground="{StaticResource Amber}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+          <StackPanel Visibility="{Binding Updates.ProgressVisibility, Mode=OneWay}" Margin="0,8,0,0">
+            <ProgressBar Minimum="0" Maximum="100" Value="{Binding Updates.ProgressValue, Mode=OneWay}"/>
+            <TextBlock Text="{Binding Updates.ProgressText, Mode=OneWay}" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0,4,0,0"/>
+          </StackPanel>
+
+          <WrapPanel Margin="0,8,0,0">
+            <Button Content="Collega GitHub e controlla" Command="{Binding Updates.ConnectCommand}" Style="{StaticResource PrimaryButton}"/>
+            <Button Content="Controlla ora" Command="{Binding Updates.CheckCommand}" Visibility="{Binding Updates.CheckVisibility, Mode=OneWay}"/>
+            <Button Content="Scarica" Command="{Binding Updates.DownloadCommand}"/>
+            <Button Content="Installa e riavvia" Command="{Binding Updates.InstallCommand}"/>
+            <Button Content="Annulla collegamento" Command="{Binding Updates.CancelAuthenticationCommand}"
+                    Visibility="{Binding Updates.CancelAuthenticationVisibility, Mode=OneWay}"/>
+            <Button Content="Scollega account" Command="{Binding Updates.DisconnectCommand}" Visibility="{Binding Updates.DisconnectVisibility, Mode=OneWay}"/>
+            <Button Content="Apri release" Command="{Binding Updates.OpenReleaseCommand}"
+                    ToolTip="Apre nel browser la pagina GitHub della release proposta (o l'elenco delle release)."/>
+          </WrapPanel>
+
+          <Expander Header="{Binding Updates.NotesHeader, Mode=OneWay}" Visibility="{Binding Updates.NotesVisibility, Mode=OneWay}" Margin="0,6,0,0">
+            <TextBox Text="{Binding Updates.Notes, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="220"
+                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,4,0,0"/>
+          </Expander>
+
+          <CheckBox Content="Controlla automaticamente gli aggiornamenti" IsChecked="{Binding UpdatesAutoCheck}" Margin="0,8,0,4"
+                    ToolTip="Un controllo 15 secondi dopo l'avvio e poi ogni 6 ore, solo con un account GitHub collegato. La scelta vale dopo Salva."/>
         </StackPanel>
       </GroupBox>
 

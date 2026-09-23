@@ -6,6 +6,8 @@ using AIUsageMonitor.App.Notch;
 using AIUsageMonitor.App.Notifications;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
+using AIUsageMonitor.Core.Updates;
 using WinForms = System.Windows.Forms;
 
 namespace AIUsageMonitor.App.Tray;
@@ -22,12 +24,20 @@ public sealed class TrayIconController : IDisposable
     private readonly MenuItem _autoStart;
     private readonly MenuItem _hooksClaude;
     private readonly MenuItem _hooksCodex;
+    private readonly MenuItem _update;
+    private readonly Separator _updateSeparator;
     private readonly Action<string, string, NoticeKind> _notice;
+    private readonly Action<UpdatePromptState> _updatePromptChanged;
+    // Versioni gia' annunciate con una notifica in questo processo: una sola notifica per versione offerta.
+    private readonly HashSet<string> _announcedUpdates = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _singleClickTimer;
     private TrayIconRenderer.RenderedIcon? _rendered;
 
     /// <summary>Set by App.xaml.cs once the settings window exists (Task 7). Null-safe.</summary>
     public Action? OpenSettings { get; set; }
+
+    /// <summary>Apre la conferma "scarica e riavvia"; impostata da App.xaml.cs. Null-safe.</summary>
+    public Action? OpenUpdatePrompt { get; set; }
 
     public TrayIconController(AppServices services, INotchHost notch, AppNotificationSender notifications)
     {
@@ -40,6 +50,12 @@ public sealed class TrayIconController : IDisposable
         // e tooltip, quindi non le si assegna piu' nessuna ContextMenuStrip.
         _menuHost = new TrayMenuHost();
         _menu = new ContextMenu { Style = Resource<Style>("TrayContextMenu") };
+        // In cima, visibile solo quando c'e' una versione da offrire: etichetta e visibilita' le rilegge RefreshMenuState.
+        _update = Item("Aggiorna…", () => OpenUpdatePrompt?.Invoke());
+        _update.Visibility = Visibility.Collapsed;
+        _menu.Items.Add(_update);
+        _updateSeparator = new Separator { Style = Resource<Style>("TrayMenuSeparator"), Visibility = Visibility.Collapsed };
+        _menu.Items.Add(_updateSeparator);
         _menu.Items.Add(Item("Aggiorna ora", services.RefreshAll));
         _toggleNotch = Item("Nascondi notch", notch.ToggleVisible);
         _menu.Items.Add(_toggleNotch);
@@ -96,6 +112,9 @@ public sealed class TrayIconController : IDisposable
         // (menu tray e link "installa hook" nella card del notch), cosi' lo stesso click dice sempre la stessa cosa.
         _notice = (title, text, kind) => UiDispatcher.Post(() => ShowNotification(title, text, BalloonIcon(kind)));
         services.Notice += _notice;
+        // La conferma alza Changed da thread qualsiasi: l'annuncio passa dal thread UI come ogni altra notifica.
+        _updatePromptChanged = state => UiDispatcher.Post(() => AnnounceUpdate(state));
+        services.UpdatePrompt.Changed += _updatePromptChanged;
         UpdateIcon();
         _icon.Visible = true;
     }
@@ -151,6 +170,11 @@ public sealed class TrayIconController : IDisposable
     /// </summary>
     private void RefreshMenuState()
     {
+        var offered = Safe<string?>(() => _services.UpdatePrompt.State.Version, null, "UpdatePrompt.State");
+        var updateVisibility = offered is null ? Visibility.Collapsed : Visibility.Visible;
+        _update.Header = offered is null ? "Aggiorna…" : $"Aggiorna alla versione {offered}…";
+        _update.Visibility = updateVisibility;
+        _updateSeparator.Visibility = updateVisibility;
         _toggleNotch.Header = _notch.IsNotchVisible ? "Nascondi notch" : "Mostra notch";
         _autoStart.IsChecked = Safe(AutoStart.IsEnabled, false, "AutoStart.IsEnabled");
         _hooksClaude.Header = $"Claude Code — {StatusLabel(AgentKind.Claude)}";
@@ -170,6 +194,18 @@ public sealed class TrayIconController : IDisposable
         Core.Hooks.HookStatus.ConfigInvalid => "config non valida",
         _ => "installa"
     }, "stato non disponibile", $"HookStatus {agent}");
+
+    /// <summary>
+    /// Notifica Windows la prima volta che la conferma offre una versione, in questo processo; il click (argomento
+    /// <see cref="NotificationPayload.ShowUpdateLaunch"/>) apre la conferma. Dopo "Più tardi" la versione non viene
+    /// piu' offerta fino al riavvio, quindi non torna nemmeno la notifica.
+    /// </summary>
+    private void AnnounceUpdate(UpdatePromptState state)
+    {
+        if (state.Version is not { } version || !_announcedUpdates.Add(version)) return;
+        _notifications.Show("AIUsageMonitor · aggiornamento", $"È disponibile la versione {version}. Clicca per aggiornare.",
+            NotificationPayload.ShowUpdateLaunch);
+    }
 
     private void ToggleAutoStart()
     {
@@ -201,6 +237,7 @@ public sealed class TrayIconController : IDisposable
     public void Dispose()
     {
         _services.Notice -= _notice;
+        _services.UpdatePrompt.Changed -= _updatePromptChanged;
         _singleClickTimer.Stop();
         _icon.Visible = false;
         _icon.Dispose();

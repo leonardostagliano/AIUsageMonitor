@@ -1,10 +1,13 @@
 using System.IO;
 using System.Net.Http;
+using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Terminal;
+using AIUsageMonitor.App.Updates;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
 using AIUsageMonitor.Core.Settings;
+using AIUsageMonitor.Core.Updates;
 using AIUsageMonitor.Core.Usage;
 
 namespace AIUsageMonitor.App.Startup;
@@ -28,6 +31,18 @@ public sealed class AppServices : IDisposable
     public HookEventPump Pump { get; }
     public TerminalRegistry Terminals { get; }
 
+    /// <summary>Updater delle release GitHub: controllo, collegamento dell'account, download e installazione.</summary>
+    public UpdateService Updates { get; }
+
+    /// <summary>Conferma unica "scarica e riavvia" offerta dalla voce della tray e dalla notifica.</summary>
+    public UpdatePromptController UpdatePrompt { get; }
+
+    /// <summary>
+    /// Riporta in primo piano la finestra dell'app quando il login GitHub nel browser e' finito. La imposta App.xaml.cs
+    /// (la finestra Impostazioni, se aperta); viene chiamata sul thread UI e i suoi errori finiscono nel log.
+    /// </summary>
+    public Action? ReturnToApp { get; set; }
+
     /// <summary>Raised on a background thread whenever usage or sessions change. Marshal with UiDispatcher.</summary>
     public event Action? StateChanged;
 
@@ -39,6 +54,7 @@ public sealed class AppServices : IDisposable
     private readonly TerminalFocuser _focuser;
     private FileSystemWatcher? _codexWatcher;
     private Timer? _codexDebounce;
+    private readonly GitHubReleaseTransport _updateTransport;
 
     private AppServices(AppPaths paths)
     {
@@ -101,6 +117,37 @@ public sealed class AppServices : IDisposable
             StateChanged?.Invoke();
         };
         Settings.Changed += _ => { RefreshAll(); StateChanged?.Invoke(); };
+
+        // Updater: la sessione GitHub e' dell'app (cifrata con DPAPI), il login passa da Git Credential Manager e
+        // l'installazione sostituisce l'exe a file singolo. Qui si costruisce soltanto: la IO parte con Start().
+        _updateTransport = GitHubReleaseTransport.CreateDefault();
+        var protector = new DpapiSecretProtector();
+        var credentials = new UpdateCredentialStore(paths.UpdateAuthFile, protector);
+        Updates = new UpdateService(new UpdateServiceOptions
+        {
+            Transport = _updateTransport,
+            Credentials = credentials,
+            Login = new GitCredentialManagerLogin(credentials, protector, new CredentialProcessRunner(), paths.LocalAppDataDir),
+            Installer = new SelfReplaceInstaller(Log.Info, (message, ex) => Log.Error(message, ex)),
+            DownloadsDirectory = paths.UpdatesDir,
+            CurrentVersion = BuildInfo.CurrentVersion,
+            Variant = BuildInfo.Variant,
+            AutoCheck = () => Settings.Current.UpdatesAutoCheck,
+            Time = TimeProvider.System,
+            // La nuova versione e' partita e aspetta l'uscita di questo processo: Shutdown sul thread UI passa da
+            // OnExit, che rilascia il mutex di istanza singola. Application.Shutdown e' gia' differito (BeginInvoke),
+            // quindi il comando di installazione in corso fa in tempo a restituire il suo stato.
+            QuitForInstall = () => UiDispatcher.Post(() => System.Windows.Application.Current?.Shutdown()),
+            ReturnToApp = () => UiDispatcher.Post(BringAppToFront),
+            LogInfo = Log.Info,
+            LogError = (message, ex) => Log.Error(message, ex)
+        });
+        UpdatePrompt = new UpdatePromptController(Updates);
+        Settings.Changed += settings =>
+        {
+            try { Updates.PreferencesChanged(settings.UpdatesAutoCheck); }
+            catch (Exception ex) { Log.Error("Updater: preferenza del controllo automatico non applicata", ex); }
+        };
     }
 
     public static AppServices Create() => new(AppPaths.Default);
@@ -141,6 +188,29 @@ public sealed class AppServices : IDisposable
             _codexWatcher.Changed += (_, _) => _codexDebounce.Change(2000, Timeout.Infinite);
             _codexWatcher.Created += (_, _) => _codexDebounce.Change(2000, Timeout.Infinite);
         }
+        StartUpdates();
+    }
+
+    /// <summary>
+    /// Avvia conferma e updater senza mai far fallire l'avvio: gli aggiornamenti sono opzionali. La conferma si abbona
+    /// per prima, cosi' non perde il primo stato; il servizio parte su un thread del pool perche' legge la sessione
+    /// salvata (file + DPAPI) e l'avvio non deve aspettarlo.
+    /// </summary>
+    private void StartUpdates()
+    {
+        try { UpdatePrompt.Start(); }
+        catch (Exception ex) { Log.Error("Updater: avvio della conferma di aggiornamento non riuscito", ex); }
+        _ = Task.Run(async () =>
+        {
+            try { await Updates.StartAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Log.Error("Updater: avvio non riuscito", ex); }
+        });
+    }
+
+    private void BringAppToFront()
+    {
+        try { ReturnToApp?.Invoke(); }
+        catch (Exception ex) { Log.Error("Updater: ritorno all'app dopo il login non riuscito", ex); }
     }
 
     public void RefreshAll()
@@ -260,9 +330,19 @@ public sealed class AppServices : IDisposable
 
     public void Dispose()
     {
+        // Prima l'updater: annulla login e download in corso e smette di alzare eventi verso una UI che si chiude.
+        DisposeQuietly(UpdatePrompt, "UpdatePrompt");
+        DisposeQuietly(Updates, "UpdateService");
+        DisposeQuietly(_updateTransport, "GitHubReleaseTransport");
         _codexWatcher?.Dispose();
         _codexDebounce?.Dispose();
         Scheduler.Dispose();
         Pump.Dispose();
+    }
+
+    private void DisposeQuietly(IDisposable disposable, string what)
+    {
+        try { disposable.Dispose(); }
+        catch (Exception ex) { Log.Error($"{what} dispose failed", ex); }
     }
 }
