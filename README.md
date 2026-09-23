@@ -9,6 +9,9 @@ Due superfici: un'icona nella **tray** con menu e pallino di stato, e un **notch
 destro dello schermo, sempre in primo piano, collassato a una linguetta da 28 px con una riga per
 agente e che si espande al passaggio del mouse (clic sulla linguetta per fissarlo aperto).
 
+Si aggiorna da sola dalle [release GitHub](#aggiornamenti) di questo repository, per chi ha accesso
+alle release e collega il proprio account GitHub dalle impostazioni.
+
 Ispirata ad [AgentBar](https://github.com/scari/AgentBar) (macOS), riscritta da zero per Windows.
 
 > _Screenshot: `docs/screenshot.png` (da aggiungere)._
@@ -36,10 +39,14 @@ riscritte né azzerate.
 ## Requisiti
 
 - Windows 10 versione 2004 (build 10.0.19041.0) o successivo, oppure Windows 11, x64.
-- **.NET 10 Desktop Runtime** per la build framework-dependent (quella prodotta di default da
-  `scripts/publish.ps1`). La variante `-SelfContained` non richiede nulla ma pesa ~80 MB.
+- **.NET 10 Desktop Runtime** per la build framework-dependent (`AIUsageMonitor-<versione>-win-x64.exe`
+  nelle release, quella prodotta di default da `scripts/publish.ps1`). La variante self-contained
+  (`AIUsageMonitor-<versione>-win-x64-selfcontained.exe`, `-SelfContained`) non richiede nulla ma pesa
+  ~180 MB.
 - **Node.js** (già presente se usi Claude Code o Codex): serve solo per lo stato live, perché gli
   hook degli agenti eseguono uno script `.cjs`.
+- **Git for Windows** con Git Credential Manager (è nell'installer standard): serve solo per
+  collegare l'account GitHub dell'aggiornamento integrato.
 - .NET SDK 10 per compilare dai sorgenti.
 
 ## Come legge la quota
@@ -153,6 +160,55 @@ nell'eseguibile (lo riscrive solo quando il contenuto è cambiato). Se il file �
 scrivibile l'app parte lo stesso: annota l'errore nel log, tiene la versione precedente dello script
 e riprova al riavvio successivo.
 
+## Aggiornamenti
+
+Ogni push su `main` pubblica una release del repository (vedi [Rilasci](#rilasci)); l'app la trova,
+la scarica e si sostituisce da sola. Serve un account GitHub che **veda le release del repository**:
+senza accesso non c'è niente da controllare né da scaricare.
+
+1. **Collegamento.** In *Impostazioni → AGGIORNAMENTI* il pulsante **Collega GitHub e controlla**
+   avvia Git Credential Manager in modalità browser: GitHub chiede di scegliere l'account e, la prima
+   volta, di autorizzare Git Credential Manager. Ogni collegamento usa un namespace GCM nuovo, quindi
+   non riusa né modifica gli account salvati in Gestione credenziali di Windows. La sessione
+   restituita viene cifrata con DPAPI (utente Windows corrente) in
+   `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json`, ed è l'**unica** credenziale usata: mai PAT,
+   account di GitHub Desktop o credential helper di git. **Scollega account** la elimina.
+2. **Controllo.** Con un account collegato e *Controlla automaticamente gli aggiornamenti* attivo
+   (default, vale dopo *Salva*) l'app controlla 15 secondi dopo l'avvio e poi ogni 6 ore; **Controlla
+   ora** lo fa subito. Legge le 100 release più recenti e sceglie la versione SemVer stabile più alta
+   (non l'etichetta "Latest"), purché contenga esattamente l'eseguibile della **stessa variante**
+   in esecuzione (framework-dependent o self-contained, registrata nella build).
+3. **Proposta.** Quando c'è una versione nuova compare una notifica Windows (una volta per versione)
+   e in cima al menu della tray la voce **Aggiorna alla versione X…**. Entrambe aprono una conferma
+   con un solo consenso per scaricare e riavviare; **Più tardi** ignora quella versione fino al
+   riavvio dell'app. Dalle impostazioni gli stessi passi sono separati (**Scarica**, **Installa e
+   riavvia**) e **Apri release** mostra la pagina GitHub con le note.
+4. **Download verificato.** Prima di scaricare l'app rilegge la release scelta, per accorgersi di un
+   asset sostituito nel frattempo. Gli indirizzi ammessi sono solo l'API del repository, i download
+   delle sue release e le CDN degli asset di GitHub; i redirect vengono seguiti uno alla volta e
+   ricontrollati, e il token va solo ad `api.github.com`. Lo SHA-256 del file scaricato deve
+   coincidere con `SHA256SUMS.txt` della release e con il digest pubblicato da GitHub (se ci sono
+   entrambi devono coincidere anche fra loro); il file deve essere un eseguibile Windows e la versione
+   scritta nell'eseguibile deve essere quella della release.
+5. **Installazione.** L'eseguibile è un file singolo senza installer: l'app lo verifica di nuovo,
+   rinomina l'exe in esecuzione in `AIUsageMonitor.exe.old-<id>` (Windows permette di rinominare un
+   exe in uso, non di sovrascriverlo), mette la nuova versione **nello stesso percorso** e la avvia con
+   `--updated <pid>`, poi si chiude. La nuova istanza aspetta che la precedente sia uscita prima di
+   prendere il mutex di istanza singola e mostra la notifica "AIUsageMonitor aggiornato". Avvio
+   automatico, pin sulla barra e notifiche restano validi perché il percorso non cambia; impostazioni,
+   hook e cache non vengono toccati. Se un passo fallisce l'exe precedente torna al suo posto. Se
+   chiudi l'app (Esci, fine sessione) mentre la sostituzione è in corso, l'app aspetta che finisca e
+   non si riapre: la nuova versione parte al prossimo avvio. I file `.old-*` vengono eliminati
+   all'avvio successivo.
+
+L'installazione integrata richiede una cartella dell'eseguibile scrivibile dall'utente: da una
+cartella protetta (es. `Program Files`) o da `dotnet run` l'app segnala comunque la nuova versione,
+ma va scaricata dalla pagina della release e sostituita a mano. La prova di scrittura (un file
+temporaneo accanto all'exe) si fa solo quando c'è una versione da installare o quando scarichi o
+installi, mai all'avvio: con *Accesso controllato alle cartelle* di Windows attivo e l'exe sul
+Desktop o in Documenti, Windows Security può segnalarla in quei momenti. `AIUsageMonitor.exe --updates` apre
+le impostazioni già sul gruppo AGGIORNAMENTI.
+
 ## Dove finiscono i file
 
 | Percorso | Contenuto |
@@ -160,30 +216,56 @@ e riprova al riavvio successivo.
 | `%LOCALAPPDATA%\AIUsageMonitor\settings.json` | impostazioni dell'app |
 | `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json` | ultimo snapshot di quota per agente |
 | `%LOCALAPPDATA%\AIUsageMonitor\logs\app-<data>.log` | log (7 giorni, livello Info) |
+| `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json` | sessione GitHub dell'updater, cifrata con DPAPI |
+| `%LOCALAPPDATA%\AIUsageMonitor\updates\` | nuova versione scaricata in attesa di installazione (i file obsoleti o più vecchi di 7 giorni vengono eliminati) |
+| `<cartella dell'exe>\AIUsageMonitor.exe.old-<id>` | versione precedente dopo un aggiornamento, eliminata all'avvio successivo |
 | `%USERPROFILE%\.aiusagemonitor\hook.cjs` | script hook installato |
 | `%USERPROFILE%\.aiusagemonitor\events.jsonl` | eventi degli agenti (ruotato a 5 MB) |
 | `%USERPROFILE%\.aiusagemonitor\backups\` | backup dei file di configurazione prima di ogni modifica |
 
 Impostazioni disponibili: agenti attivi e intervallo di refresh, monitor e offset verticale del
-notch, ritardo di chiusura, modalità compatta, quali notifiche mostrare e per quali agenti, avvio
-automatico (valore `AIUsageMonitor` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+notch, ritardo di chiusura, modalità compatta, quali notifiche mostrare e per quali agenti, controllo
+automatico degli aggiornamenti, avvio automatico (valore `AIUsageMonitor` in
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 
 ## Build, test, publish
 
 ```powershell
 dotnet build AIUsageMonitor.slnx
 dotnet test AIUsageMonitor.slnx          # test del Core
-node --test tests/hook/hook.test.cjs     # test dello script hook
+node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs   # test dello script hook e dei rilasci
 dotnet run --project src/AIUsageMonitor.App
 
 pwsh scripts/publish.ps1                     # -> publish/AIUsageMonitor.exe (serve il .NET 10 Desktop Runtime)
-pwsh scripts/publish.ps1 -SelfContained -Output publish-sc   # eseguibile autonomo (~80 MB)
+pwsh scripts/publish.ps1 -SelfContained -Output publish-sc   # eseguibile autonomo (~180 MB)
+pwsh scripts/publish.ps1 -Version 0.2.0      # stessa build con la versione indicata, come fa la CI
 
 dotnet run --project tools/MakeIcon       # rigenera src/AIUsageMonitor.App/Assets/app.ico
 ```
 
+Per la build framework-dependent lo script usa `--no-self-contained`: con l'SDK .NET 10 e
+`PublishSingleFile`, `--self-contained false` produce comunque un eseguibile self-contained.
+
 L'app è a istanza singola (mutex `Local\AIUsageMonitor`): un secondo avvio fissa aperto il notch
 dell'istanza già in esecuzione invece di aprirne un'altra.
+
+### Rilasci
+
+Le build locali non pubblicano nulla. `.github/workflows/windows-release.yml` gira a ogni push su
+`main` (e a mano con *Run workflow*) su un runner Windows:
+
+1. `node scripts/windows-release.mjs prepare` calcola la versione: parte dall'ultima release
+   pubblicata (o dalla `<Version>` di `src/AIUsageMonitor.App/AIUsageMonitor.App.csproj` se è più
+   alta) e la incrementa secondo i conventional commit arrivati da allora: `feat:` → minor, `!` o
+   `BREAKING CHANGE:` → major, tutto il resto → patch. Un commit già contenuto in una release non ne
+   crea un'altra.
+2. Test .NET e Node, poi `dotnet publish -p:Version=<versione>` delle due varianti single-file
+   win-x64 e uno smoke test che controlla header, versione scritta nell'eseguibile e variante.
+3. `node scripts/windows-release.mjs publish` crea la release `v<versione>` in bozza con
+   `AIUsageMonitor-<versione>-win-x64.exe`, `AIUsageMonitor-<versione>-win-x64-selfcontained.exe` e
+   `SHA256SUMS.txt`, verifica gli upload e solo allora la pubblica come *Latest*.
+
+La versione vive nei tag e nelle release: il workflow non fa commit né push sul repository.
 
 ## Limiti noti
 
@@ -200,8 +282,10 @@ dell'istanza già in esecuzione invece di aprirne un'altra.
 ## Privacy
 
 L'app **legge soltanto file locali** (credenziali Claude, sessioni Codex, configurazioni hook,
-eventi) e fa **una sola chiamata di rete**: l'endpoint usage di Anthropic, con il token OAuth già
-presente sulla macchina. Nessun prompt, nessun contenuto di conversazione e nessun token viene
+eventi) e per la quota fa **una sola chiamata di rete**: l'endpoint usage di Anthropic, con il token
+OAuth già presente sulla macchina. L'unica altra rete è quella dell'updater, e solo dopo che hai
+collegato un account GitHub: l'API release di questo repository e il download dei suoi asset, con la
+sessione creata dall'app (mai scritta nei log né mostrata). Nessun prompt, nessun contenuto di conversazione e nessun token viene
 inviato, registrato o mostrato da nessuna parte: gli eventi tracciati sono nomi di evento,
 identificativo di sessione, cartella di lavoro, un messaggio breve dell'agente e, sugli eventi di
 avvio e di prompt, qualche indizio sul terminale che ospita la sessione (ppid, pane di Herdr,

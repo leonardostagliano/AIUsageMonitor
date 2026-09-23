@@ -17,14 +17,21 @@ public sealed class AppNotificationSender : IDisposable
     private readonly string _assetDirectory;
     private readonly FileLogger _log;
     private readonly Action _activate;
+    private readonly Action? _showUpdate;
     private readonly bool _activationRegistered;
     private Uri? _logo;
 
-    public AppNotificationSender(string localAppDataDirectory, FileLogger log, Action activate)
+    /// <param name="activate">Click su una notifica delle sessioni (<see cref="NotificationPayload.ShowNotchLaunch"/>).</param>
+    /// <param name="showUpdate">
+    /// Click sulla notifica "aggiornamento disponibile" (<see cref="NotificationPayload.ShowUpdateLaunch"/>). Passata al
+    /// costruttore e non dopo: un'attivazione da una notifica vecchia puo' arrivare appena ci si registra.
+    /// </param>
+    public AppNotificationSender(string localAppDataDirectory, FileLogger log, Action activate, Action? showUpdate = null)
     {
         _assetDirectory = Path.Combine(localAppDataDirectory, "notifications");
         _log = log;
         _activate = activate;
+        _showUpdate = showUpdate;
         // Register the COM callback before sending any toast, including when launched by an old notification.
         try
         {
@@ -38,16 +45,17 @@ public sealed class AppNotificationSender : IDisposable
         }
     }
 
-    public void Show(string title, string text)
+    /// <param name="launch">Argomento restituito da Windows al click (vedi <see cref="OnActivated"/>).</param>
+    public void Show(string title, string text, string launch = NotificationPayload.ShowNotchLaunch)
     {
         try
         {
             _logo ??= ExportLogo();
             var document = new XmlDocument();
-            document.LoadXml(NotificationPayload.Create(title, text, _logo));
+            document.LoadXml(NotificationPayload.Create(title, text, _logo, launch));
             var toast = new ToastNotification(document)
             {
-                Group = "sessions",
+                Group = launch == NotificationPayload.ShowUpdateLaunch ? "updates" : "sessions",
                 ExpirationTime = DateTimeOffset.Now.AddHours(24)
             };
             toast.Failed += (_, args) => _log.Error("Windows notification failed", args.ErrorCode);
@@ -84,11 +92,22 @@ public sealed class AppNotificationSender : IDisposable
         return new Uri(path);
     }
 
+    /// <summary>
+    /// Arriva su un thread COM: ogni azione passa dal thread UI. Solo gli argomenti che l'app scrive vengono eseguiti;
+    /// uno sconosciuto (notifica di una versione futura, argomento alterato) viene ignorato senza finire nel log.
+    /// </summary>
     private void OnActivated(ToastNotificationActivatedEventArgsCompat args)
     {
-        if (args.Argument != "show-notch") return;
-        _log.Info("Windows notification activated: show-notch");
-        UiDispatcher.Post(_activate);
+        Action? action = args.Argument switch
+        {
+            NotificationPayload.ShowNotchLaunch => _activate,
+            NotificationPayload.ShowUpdateLaunch => _showUpdate,
+            _ => null
+        };
+        if (action is null) return;
+        // Qui l'argomento e' per forza una delle due costanti qui sopra: nessun dato esterno nel log.
+        _log.Info($"Windows notification activated: {args.Argument}");
+        UiDispatcher.Post(action);
     }
 
     public void Dispose()

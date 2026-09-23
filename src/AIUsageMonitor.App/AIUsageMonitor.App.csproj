@@ -25,4 +25,9 @@
     <ProjectReference Include="..\AIUsageMonitor.Core\AIUsageMonitor.Core.csproj" />
     <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- L'updater scarica sempre la stessa variante dell'exe in esecuzione: la build registra se e' self-contained
+         (dotnet publish con self-contained true). Letto a runtime da BuildInfo. -->
+    <AssemblyMetadata Include="AIUsageMonitor.SelfContained" Value="$(SelfContained)" />
+  </ItemGroup>
 </Project>

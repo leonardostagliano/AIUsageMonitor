@@ -4,13 +4,14 @@ using System.Windows.Input;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
 using AIUsageMonitor.App.Startup;
+using AIUsageMonitor.App.Updates;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Models;
 using AIUsageMonitor.Core.Settings;
 
 namespace AIUsageMonitor.App.Settings;
 
-public sealed class SettingsViewModel : ObservableObject
+public sealed class SettingsViewModel : ObservableObject, IDisposable
 {
     private readonly AppServices _services;
     private AppSettings _draft;
@@ -35,10 +36,14 @@ public sealed class SettingsViewModel : ObservableObject
         RemoveCodexHooksCommand = new RelayCommand(() => Remove(AgentKind.Codex));
         OpenEventsFolderCommand = new RelayCommand(() => OpenFolder(services.Paths.MonitorDir));
         OpenLogsFolderCommand = new RelayCommand(() => OpenFolder(services.Paths.LogsDir));
+        Updates = new UpdatesViewModel(services.Updates, services.Log);
         RefreshHookStatus();
     }
 
     public event Action? Saved;
+
+    /// <summary>Gruppo AGGIORNAMENTI: stato e comandi dal vivo, fuori dalla bozza (solo la preferenza passa da Salva).</summary>
+    public UpdatesViewModel Updates { get; }
 
     public IReadOnlyList<string> Monitors { get; }
     public ICommand SaveCommand { get; }
@@ -63,6 +68,7 @@ public sealed class SettingsViewModel : ObservableObject
     public bool NotifyError { get => _draft.NotifyError; set { _draft.NotifyError = value; Raise(); } }
     public bool NotifyClaude { get => _draft.NotifyClaude; set { _draft.NotifyClaude = value; Raise(); } }
     public bool NotifyCodex { get => _draft.NotifyCodex; set { _draft.NotifyCodex = value; Raise(); } }
+    public bool UpdatesAutoCheck { get => _draft.UpdatesAutoCheck; set { _draft.UpdatesAutoCheck = value; Raise(); } }
     public bool AutoStartEnabled { get => _autoStart; set => Set(ref _autoStart, value); }
     public string ClaudeHookStatus { get => _claudeHookStatus; private set => Set(ref _claudeHookStatus, value); }
     public string CodexHookStatus { get => _codexHookStatus; private set => Set(ref _codexHookStatus, value); }
@@ -110,6 +116,8 @@ public sealed class SettingsViewModel : ObservableObject
         HookStatus.ConfigInvalid => $"Attenzione: {report.Detail}",
         _ => report.Detail
     };
+
+    public void Dispose() => Updates.Dispose();
 
     private static void OpenFolder(string path)
     {
