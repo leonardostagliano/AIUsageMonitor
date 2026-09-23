@@ -9,8 +9,9 @@ public class CostCalculatorTests
     private static readonly PriceRates OpusRates = new(0.000004m, 0.00002m, 0.0000002m, 0.000005m, 0.000008m);
 
     private static ModelPrice Price(string id, PriceRates rates, IReadOnlyDictionary<long, PriceRates>? bands = null,
-        VariantPrices? priority = null, IReadOnlyDictionary<string, decimal>? multipliers = null, decimal webSearch = 0m) =>
-        new(id, new VariantPrices(rates, bands ?? new Dictionary<long, PriceRates>()), priority, null,
+        VariantPrices? priority = null, IReadOnlyDictionary<string, decimal>? multipliers = null, decimal webSearch = 0m,
+        VariantPrices? flex = null) =>
+        new(id, new VariantPrices(rates, bands ?? new Dictionary<long, PriceRates>()), priority, flex,
             multipliers ?? new Dictionary<string, decimal>(), webSearch, null);
 
     private static PriceCatalog Catalog(params ModelPrice[] prices) =>
@@ -71,6 +72,20 @@ public class CostCalculatorTests
     }
 
     [Fact]
+    public void Flex_uses_its_own_rates_and_falls_back_to_the_standard_price_without_them()
+    {
+        var tokens = new LedgerTokens(1_000_000, 0, 0, 0, 0);
+
+        Assert.Equal(4m, CostCalculator.Usd(Key("m", PriceTier.Flex), tokens, Price("m", OpusRates)));
+
+        var flexBands = new Dictionary<long, PriceRates> { [272_000] = OpusRates with { Input = 0.000003m } };
+        var withFlex = Price("m", OpusRates, flex: new VariantPrices(OpusRates with { Input = 0.000002m }, flexBands));
+        Assert.Equal(2m, CostCalculator.Usd(Key("m", PriceTier.Flex), tokens, withFlex));
+        Assert.Equal(3m, CostCalculator.Usd(Key("m", PriceTier.Flex, band: 272_000), tokens, withFlex));
+        Assert.Equal(4m, CostCalculator.Usd(Key("m"), tokens, withFlex));
+    }
+
+    [Fact]
     public void Unpriced_and_unknown_models_are_listed_but_add_nothing()
     {
         var catalog = Catalog(Price("claude-opus-5-5", OpusRates));
@@ -112,8 +127,13 @@ public class CostCalculatorTests
 
     [Theory]
     [InlineData("0.004", "< 0,01 €")]
+    [InlineData("0.01", "0,01 €")]
     [InlineData("3.214", "3,21 €")]
     [InlineData("99.5", "99,50 €")]
+    [InlineData("99.994", "99,99 €")]
+    [InlineData("99.995", "100 €")]
+    [InlineData("99.996", "100 €")]
+    [InlineData("100", "100 €")]
     [InlineData("1234.4", "1.234 €")]
     public void Amount_uses_Italian_formatting(string eur, string expected) =>
         Assert.Equal(expected, CostFormatter.Amount(decimal.Parse(eur, System.Globalization.CultureInfo.InvariantCulture)));
@@ -131,5 +151,6 @@ public class CostCalculatorTests
         Assert.Equal("costo n/d", CostFormatter.Short(none));
         Assert.Equal("< 0,01 €", CostFormatter.Short(tiny));
         Assert.Equal(["m ≈ 3,21 €", "codex-auto-review: prezzo non disponibile"], CostFormatter.ModelLines(partial));
+        Assert.Equal(["m < 0,01 €"], CostFormatter.ModelLines(tiny));
     }
 }
