@@ -3,7 +3,8 @@
 App Windows sempre attiva che mostra in un unico punto, per Claude Code e OpenAI Codex:
 
 - la **quota consumata** nelle finestre di rate limit (percentuale e orario di reset);
-- lo **stato live delle sessioni** aperte (al lavoro, attende input, finito, errore).
+- lo **stato live delle sessioni** aperte (al lavoro, attende input, finito, errore);
+- il **costo API equivalente** in euro di ogni sessione, ai prezzi di listino di Anthropic e OpenAI.
 
 Due superfici: un'icona nella **tray** con menu e pallino di stato, e un **notch laterale** sul bordo
 destro dello schermo, sempre in primo piano, collassato a una linguetta da 28 px con una riga per
@@ -68,6 +69,11 @@ cartella (debounce 2 s) più un controllo periodico ogni 30 s.
 L'ultimo snapshot valido è messo in cache in `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json`, così
 all'avvio le barre sono già popolate (marcate "non aggiornate") finché non arriva il primo refresh.
 
+**Aggiornamento a comando.** Il pulsante ⟳ nell'intestazione di ogni card aggiorna subito la quota di quell'agente e
+ricalcola token e costi di tutte le sue sessioni, anche di quelle ferme; l'icona gira finché non ha finito (al massimo
+15 s) e il pulsante resta attenuato per 10 s prima di accettare un nuovo click. "Aggiorna ora" nel menu della tray fa lo
+stesso per tutti gli agenti attivi.
+
 ## Come funziona lo stato live (hook)
 
 Gli agenti non espongono il loro stato: lo ricaviamo dai loro hook.
@@ -99,6 +105,35 @@ La lista espandibile dei workflow mostra solo gli agenti **in corso**, con model
 dal transcript e token ↑ input/↓ output. Gli agenti conclusi escono dalla lista e dal riepilogo attivo.
 Se modello o token non sono ancora disponibili viene mostrato "in attesa"; i totali della sessione
 e quelli dei singoli workflow rimangono distinti.
+
+## Costi
+
+Accanto ai token di ogni sessione e di ogni agente di workflow il notch mostra il **costo API equivalente**: quanto
+costerebbero quei token ai prezzi di listino pubblicati da Anthropic e OpenAI, convertiti in euro. Con un piano in
+abbonamento (Max, Pro) **non è la spesa reale**. La card di ogni agente riporta il totale delle sessioni presenti nel
+notch, compresi tutti i loro agenti; il tooltip mostra il dettaglio per modello, la data del listino e il tasso usato.
+
+- **Conteggio.** I token sono divisi per modello, per variante di prezzo (fast mode di Claude, priority e flex di
+  OpenAI) e per fascia di contesto (prompt oltre 200k o 272k token), separando input, output, cache letta e cache
+  scritta a 5 minuti o a 1 ora: Claude Code scrive solo cache a 1 ora, che costa il 60% in più. Per Codex il costo
+  segue il modello in vigore a ogni richiesta, anche quando cambia a metà thread. Le ricerche web di Claude si pagano a
+  parte.
+- **Listino.** Il listino [LiteLLM](https://github.com/BerriAI/litellm) (`model_prices_and_context_window.json`, ogni
+  voce cita la pagina prezzi del vendor) viene scaricato al massimo una volta al giorno e salvato in
+  `prices-cache.json`; fino al primo download vale la copia imbarcata nell'exe. Un file `prices-override.json` nella
+  stessa cartella, con lo stesso formato per modello di LiteLLM, aggiunge o corregge prezzi:
+
+  ```json
+  { "codex-auto-review": { "input_cost_per_token": 1e-7, "output_cost_per_token": 5e-7 } }
+  ```
+
+- **Cambio.** Tasso di riferimento BCE (dollari per euro), scaricato una volta al giorno; senza rete vale l'ultimo
+  scaricato, poi il tasso di riserva delle impostazioni (default 1 € = 1,14 $).
+- **Modelli senza prezzo** (per esempio `codex-auto-review`, che nessun listino pubblica): il costo mostrato è un
+  minimo, `≥ 1,20 €`, e il tooltip dice quale modello manca; se nessun modello ha un prezzo compare `costo n/d`.
+
+Dalle impostazioni (gruppo COSTI) si nascondono i costi — e con loro ogni download di listino e tasso — e si imposta il
+tasso di riserva.
 
 ### Codex: approvazione degli hook
 
@@ -215,6 +250,9 @@ le impostazioni già sul gruppo AGGIORNAMENTI.
 |---|---|
 | `%LOCALAPPDATA%\AIUsageMonitor\settings.json` | impostazioni dell'app |
 | `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json` | ultimo snapshot di quota per agente |
+| `%LOCALAPPDATA%\AIUsageMonitor\prices-cache.json` | listino prezzi LiteLLM scaricato (solo modelli Anthropic e OpenAI) |
+| `%LOCALAPPDATA%\AIUsageMonitor\prices-override.json` | prezzi aggiunti o corretti a mano (facoltativo) |
+| `%LOCALAPPDATA%\AIUsageMonitor\exchange-rate.json` | ultimo tasso di riferimento BCE |
 | `%LOCALAPPDATA%\AIUsageMonitor\logs\app-<data>.log` | log (7 giorni, livello Info) |
 | `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json` | sessione GitHub dell'updater, cifrata con DPAPI |
 | `%LOCALAPPDATA%\AIUsageMonitor\updates\` | nuova versione scaricata in attesa di installazione (i file obsoleti o più vecchi di 7 giorni vengono eliminati) |
@@ -225,8 +263,8 @@ le impostazioni già sul gruppo AGGIORNAMENTI.
 
 Impostazioni disponibili: agenti attivi e intervallo di refresh, monitor e offset verticale del
 notch, ritardo di chiusura, modalità compatta, quali notifiche mostrare e per quali agenti, controllo
-automatico degli aggiornamenti, avvio automatico (valore `AIUsageMonitor` in
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+automatico degli aggiornamenti, costi (mostra o nascondi, tasso di riserva), avvio automatico (valore
+`AIUsageMonitor` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 
 ## Build, test, publish
 
@@ -241,6 +279,7 @@ pwsh scripts/publish.ps1 -SelfContained -Output publish-sc   # eseguibile autono
 pwsh scripts/publish.ps1 -Version 0.2.0      # stessa build con la versione indicata, come fa la CI
 
 dotnet run --project tools/MakeIcon       # rigenera src/AIUsageMonitor.App/Assets/app.ico
+dotnet run --project src/AIUsageMonitor.Probe -- --update-price-snapshot   # rigenera la copia del listino imbarcata
 ```
 
 Per la build framework-dependent lo script usa `--no-self-contained`: con l'SDK .NET 10 e
@@ -283,7 +322,9 @@ La versione vive nei tag e nelle release: il workflow non fa commit né push sul
 
 L'app **legge soltanto file locali** (credenziali Claude, sessioni Codex, configurazioni hook,
 eventi) e per la quota fa **una sola chiamata di rete**: l'endpoint usage di Anthropic, con il token
-OAuth già presente sulla macchina. L'unica altra rete è quella dell'updater, e solo dopo che hai
+OAuth già presente sulla macchina. Con i costi attivi (default) fa anche due richieste anonime, al massimo una volta al
+giorno e senza inviare alcun dato: il listino prezzi LiteLLM da `raw.githubusercontent.com` e il tasso di riferimento
+da `www.ecb.europa.eu`. L'unica altra rete è quella dell'updater, e solo dopo che hai
 collegato un account GitHub: l'API release di questo repository e il download dei suoi asset, con la
 sessione creata dall'app (mai scritta nei log né mostrata). Nessun prompt, nessun contenuto di conversazione e nessun token viene
 inviato, registrato o mostrato da nessuna parte: gli eventi tracciati sono nomi di evento,
