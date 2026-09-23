@@ -103,6 +103,17 @@ public sealed class CodexTokenCounter
     }
 
     /// <summary>
+    /// The rollout file of <paramref name="threadId"/>, through the same cached lookup the totals use. True with a null
+    /// path when no recent rollout belongs to the thread; false when the scan could not settle the question.
+    /// </summary>
+    public bool TryResolveRollout(string threadId, out string? path)
+    {
+        path = null;
+        if (string.IsNullOrWhiteSpace(threadId)) return true;
+        return TryResolvePath(threadId, out path);
+    }
+
+    /// <summary>
     /// Cumulative token usage of <paramref name="threadId"/>. Returns false when the totals could not be read at all
     /// (the rollout is locked, vanished mid-read, or the sessions directory could not be enumerated):
     /// <paramref name="tokens"/> is then the last total read for that thread — zero when there is none — and the
