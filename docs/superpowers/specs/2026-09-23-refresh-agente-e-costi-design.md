@@ -82,8 +82,8 @@ models.dev non ha la cache a 1 ora né i moltiplicatori; OpenRouter è il listin
   `RefreshNow` resta per i chiamanti che non aspettano (debounce Codex).
 - `HookEventPump.RefreshTokensNowAsync(AgentKind)` → `Task`: sul thread del pump (stesso `_gate`), rilegge token e
   costi di tutte le sessioni dell'agente, non silenzioso. Non tocca `_lastTokenRefresh`.
-- `AppServices.RefreshAgentAsync(AgentKind)`: combina i due con il timeout di 15 s, avvia il punto 3 senza
-  attenderlo, non solleva mai (gli errori vanno nel log).
+- `AppServices.RefreshAgentAsync(AgentKind)`: combina i due, avvia il punto 3 senza attenderlo, non solleva mai
+  (gli errori vanno nel log); timeout di 15 s e cooldown li applica `ManualRefreshGate` (Core).
 - `AgentCardViewModel`: `RefreshCommand` (CanExecute falso durante refresh e cooldown), `IsRefreshing`,
   `RefreshTooltip`. Cooldown con un `DispatcherTimer`; lo stato è per card e non sopravvive a un `Rebuild`, che è
   accettabile.
@@ -204,8 +204,8 @@ sì e alcune no: l'importo è un minimo (`≥`).
 2. `%LOCALAPPDATA%\AIUsageMonitor\prices-cache.json`: l'ultimo download valido, già filtrato e ridotto ai campi
    usati, con `ETag`, data di download e URL.
 3. Copia imbarcata nell'exe (`src/AIUsageMonitor.Core/Pricing/prices-snapshot.json`, `EmbeddedResource`), stesso
-   formato della cache, rigenerata con `node scripts/update-price-snapshot.mjs`. Garantisce i costi al primo avvio e
-   senza rete.
+   formato della cache, rigenerata con `dotnet run --project src/AIUsageMonitor.Probe -- --update-price-snapshot`, che
+   riusa lo stesso filtro della cache. Garantisce i costi al primo avvio e senza rete.
 
 **Download** (`PriceListService`):
 
@@ -239,8 +239,9 @@ AgentCardViewModel / SessionRowViewModel / SubagentRowViewModel ◄── CostCa
 ```
 
 - `ITokenSource` riceve due membri con implementazione di default `null`, come `SubagentModels`:
-  `SessionLedger(SessionState)` e `SubagentLedgers(SessionState)`. Non fanno IO: restituiscono il registro calcolato
-  dalla lettura appena fatta da `SessionTokens` / `SubagentTokens`.
+  `SessionLedger(SessionState)` e `SubagentLedgers(SessionState)`. Per Claude non fanno IO (il registro viene dalla
+  lettura appena fatta da `SessionTokens` / `SubagentTokens`); per Codex leggono il rollout in avanti in modo
+  incrementale.
 - `SessionState.Ledger` e `SubagentState.Ledger` (default `null`); `SessionTracker.UpdateTokens` e
   `UpdateTokensSilently` accettano i registri come parametri opzionali.
 - `PricingChanged` è collegato a `AppServices.StateChanged`, così un nuovo listino o tasso ridisegna le card.
@@ -323,7 +324,7 @@ Tutti senza rete (`FakeHttpMessageHandler`, `ManualTimeProvider`, `TempDir` esis
   per un agente disabilitato, non lascia task appesi alla chiusura; `RefreshTokensNowAsync` legge anche le sessioni
   Idle e solleva `Changed`.
 - **Tracker:** un registro che cambia solleva `Changed`, uno uguale no.
-- Gli script Node (`scripts/update-price-snapshot.mjs`) hanno un test in `node --test` sulla funzione di filtro.
+- Il comando `--update-price-snapshot` del Probe riusa `LiteLlmPriceParser.Trim`, già coperto dai test del listino.
 
 ## 10. Rischi e punti aperti
 
