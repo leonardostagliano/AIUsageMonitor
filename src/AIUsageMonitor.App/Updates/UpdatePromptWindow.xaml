@@ -1,0 +1,32 @@
+<Window x:Class="AIUsageMonitor.App.Updates.UpdatePromptWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AIUsageMonitor · Aggiornamento" Width="440" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen" Background="{StaticResource WindowBackground}"
+        FontFamily="Segoe UI Variable, Segoe UI" FontSize="12" Foreground="{StaticResource TextPrimary}">
+  <!-- Stessa pelle delle Impostazioni: stili impliciti scuri di Assets/Controls.xaml, barra del titolo scurita da DWM in
+       OnSourceInitialized. Il testo di errore usa Amber come i messaggi di stato del notch (Red non raggiunge 4.5:1
+       sulle card delle Impostazioni, e le due finestre devono dire "errore" con lo stesso colore). -->
+  <StackPanel Margin="18,16,18,14">
+    <TextBlock Text="Aggiornamento disponibile" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
+    <TextBlock Text="{Binding Lead, Mode=OneWay}" TextWrapping="Wrap"/>
+    <TextBlock Text="{Binding Note, Mode=OneWay}" Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+    <StackPanel Visibility="{Binding ProgressVisibility, Mode=OneWay}" Margin="0,14,0,0">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding PercentText, Mode=OneWay}" Foreground="{StaticResource TextMuted}" Margin="8,0,0,0"/>
+        <TextBlock Text="{Binding ProgressLabel, Mode=OneWay}" TextTrimming="CharacterEllipsis"/>
+      </DockPanel>
+      <ProgressBar Margin="0,6,0,0" Minimum="0" Maximum="100" Value="{Binding ProgressValue, Mode=OneWay}"
+                   IsIndeterminate="{Binding IsIndeterminate, Mode=OneWay}"/>
+    </StackPanel>
+
+    <TextBlock Text="{Binding Error, Mode=OneWay}" Visibility="{Binding ErrorVisibility, Mode=OneWay}" Foreground="{StaticResource Amber}"
+               TextWrapping="Wrap" Margin="0,12,0,0"/>
+
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button Content="Più tardi" Command="{Binding LaterCommand}" IsCancel="True"/>
+      <Button Content="{Binding ConfirmLabel, Mode=OneWay}" Command="{Binding ConfirmCommand}" Style="{StaticResource PrimaryButton}" Margin="0,2,0,2"/>
+    </StackPanel>
+  </StackPanel>
+</Window>

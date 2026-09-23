@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Startup;
 using WinForms = System.Windows.Forms;
@@ -18,21 +19,52 @@ public partial class SettingsWindow : Window
         vm.Saved += Close;
         DataContext = vm;
         SizeChanged += (_, _) => KeepInsideWorkArea();
-        Closed += (_, _) => _instance = null;
+        Closed += (_, _) =>
+        {
+            _instance = null;
+            // Stacca il gruppo aggiornamenti da UpdateService.Changed: il servizio vive quanto l'app, la finestra no.
+            vm.Dispose();
+        };
     }
 
-    public static void ShowSingleton(AppServices services)
+    /// <param name="showUpdates">Scorre al gruppo AGGIORNAMENTI (argomento --updates, notifica di una release passata).</param>
+    public static void ShowSingleton(AppServices services, bool showUpdates = false)
     {
         if (_instance is null)
         {
-            _instance = new SettingsWindow(services);
-            _instance.Show();
+            var window = new SettingsWindow(services);
+            _instance = window;
+            // Dopo Loaded la ScrollViewer ha misure e tetto all'altezza definitivi: prima non saprebbe dove scorrere.
+            if (showUpdates) window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(() => window.ScrollToUpdates(), DispatcherPriority.Loaded);
+            window.Show();
         }
         else
         {
             if (_instance.WindowState == WindowState.Minimized) _instance.WindowState = WindowState.Normal;
             _instance.Activate();
+            if (showUpdates) _instance.ScrollToUpdates();
         }
+    }
+
+    /// <summary>
+    /// Riporta in primo piano la finestra, se aperta, quando il login GitHub nel browser e' finito. Il browser ha il
+    /// primo piano e Windows puo' limitarsi a far lampeggiare il pulsante nella barra: Topmost acceso e spento la porta
+    /// comunque sopra, senza lasciarla fissa in cima.
+    /// </summary>
+    public static void BringToFrontIfOpen()
+    {
+        if (_instance is not { } window) return;
+        if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+        window.Activate();
+        window.Topmost = true;
+        window.Topmost = false;
+    }
+
+    /// <summary>Porta l'intestazione del gruppo AGGIORNAMENTI in cima all'area visibile (o il piu' in alto possibile).</summary>
+    private void ScrollToUpdates()
+    {
+        var height = Math.Max(1, Scroll.ViewportHeight);
+        UpdatesGroup.BringIntoView(new Rect(0, 0, Math.Max(1, UpdatesGroup.ActualWidth), height));
     }
 
     protected override void OnSourceInitialized(EventArgs e)

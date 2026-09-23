@@ -36,6 +36,37 @@ public sealed class NotificationPayloadTests
         Assert.Equal("AIUsageMonitor", (string?)image.Attribute("alt"));
     }
 
+    [Fact]
+    public void Create_without_launch_argument_keeps_the_existing_payload()
+    {
+        var logo = LogoUri();
+
+        var implicitLaunch = NotificationPayload.Create("title", "body", logo);
+        var explicitLaunch = NotificationPayload.Create("title", "body", logo, "show-notch");
+
+        Assert.Equal(explicitLaunch, implicitLaunch);
+        Assert.Equal(NotificationPayload.ShowNotchLaunch, (string?)XDocument.Parse(implicitLaunch).Root!.Attribute("launch"));
+    }
+
+    [Fact]
+    public void Create_uses_the_given_launch_argument_and_escapes_it()
+    {
+        var update = XDocument.Parse(NotificationPayload.Create("title", "body", LogoUri(), NotificationPayload.ShowUpdateLaunch));
+        Assert.Equal("show-update", (string?)update.Root!.Attribute("launch"));
+
+        const string odd = "a&b <c> \"d\"";
+        var escaped = XDocument.Parse(NotificationPayload.Create("title", "body", LogoUri(), odd));
+        Assert.Equal(odd, (string?)escaped.Root!.Attribute("launch"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Create_rejects_an_empty_launch_argument(string launch)
+    {
+        Assert.Throws<ArgumentException>(() => NotificationPayload.Create("title", "body", LogoUri(), launch));
+    }
+
     private static Uri LogoUri() =>
         new("file:///C:/Program%20Files/AI%23Usage%20Monitor/logo%20%26%20mark.png");
 }
