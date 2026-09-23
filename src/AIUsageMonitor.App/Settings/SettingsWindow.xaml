@@ -68,6 +68,27 @@
         </StackPanel>
       </GroupBox>
 
+      <GroupBox Header="COSTI">
+        <StackPanel>
+          <CheckBox Content="Mostra costi (prezzi API di listino)" IsChecked="{Binding ShowCosts}"
+                    ToolTip="Costo API equivalente in euro accanto ai token: listino LiteLLM (prezzi pubblicati da Anthropic e OpenAI) e tasso di riferimento BCE. Con un abbonamento non è la spesa reale. Spento, l'app non scarica né listino né tasso."/>
+          <Grid Margin="0,4,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Label Content="Tasso di riserva: 1 € ="/>
+            <!-- Testo, non double: FallbackRateInput accetta "1,14" e "1.14" (il convertitore di WPF in it-IT leggeva
+                 "1.14" come 114). PropertyChanged: l'errore e lo stato di Salva seguono ogni tasto. -->
+            <TextBox Grid.Column="1" MinWidth="60" Text="{Binding UsdPerEurText, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="Usato solo quando il tasso BCE non è disponibile (tra 0,5 e 2). Virgola o punto per i decimali."/>
+            <Label Grid.Column="2" Content="$"/>
+          </Grid>
+          <TextBlock Text="{Binding UsdPerEurError}" Visibility="{Binding UsdPerEurErrorVisibility}"
+                     Foreground="{StaticResource Amber}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+          <TextBlock Text="{Binding PricingStatus}" Foreground="{StaticResource TextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,4"/>
+          <Button Content="Apri cartella dati" Command="{Binding OpenDataFolderCommand}" HorizontalAlignment="Left"
+                  ToolTip="Qui puoi creare prices-override.json per aggiungere o correggere il prezzo di un modello."/>
+        </StackPanel>
+      </GroupBox>
+
       <!-- Stato e comandi dal vivo di UpdateService (UpdatesViewModel, proprieta' Updates): non passano da Salva/Annulla.
            Solo "Controlla automaticamente" e' una preferenza della bozza, salvata insieme alle altre. -->
       <GroupBox x:Name="UpdatesGroup" Header="AGGIORNAMENTI">

@@ -35,7 +35,8 @@ public sealed class ClaudeTranscriptTokenCounter
     /// Duplicate lines of one response are adjacent, so the bound is only a safety net; once it is hit the oldest
     /// requests are forgotten and a very late duplicate would be counted again, which is preferable to a map that
     /// grows for the whole life of the app. 2 000 leaves more than 3× headroom over the busiest transcript measured
-    /// (582 distinct request ids), and each entry now carries four longs on top of the 28-character id.
+    /// (582 distinct request ids), and each entry now carries the usage, the 1 h cache share, the web searches and the
+    /// price key on top of the 28-character id.
     /// </summary>
     public int MaxSeenRequestIds { get; init; } = 2_000;
 
@@ -125,6 +126,13 @@ public sealed class ClaudeTranscriptTokenCounter
     public long OffsetOf(string transcriptPath) =>
         _states.TryGetValue(transcriptPath, out var state) ? state.Offset : 0;
 
+    /// <summary>
+    /// Usage of <paramref name="transcriptPath"/> split by model and price variant, for everything <see cref="Read"/>
+    /// has consumed so far (no IO). Its <see cref="UsageLedger.ToTokenUsage"/> always equals the total Read returns.
+    /// </summary>
+    public UsageLedger LedgerOf(string transcriptPath) =>
+        _states.TryGetValue(transcriptPath, out var state) ? state.Ledger.ToLedger() : UsageLedger.Empty;
+
     /// <summary>Drops the state of a transcript (its session is gone), so its ids and offset stop costing memory.</summary>
     public void Forget(string transcriptPath) => _states.Remove(transcriptPath);
 
@@ -159,11 +167,17 @@ public sealed class ClaudeTranscriptTokenCounter
                 Long(usage, "output_tokens"),
                 Long(usage, "cache_read_input_tokens"),
                 Long(usage, "cache_creation_input_tokens"));
+            var write1h = Nested(usage, "cache_creation", "ephemeral_1h_input_tokens");
+            var webSearches = Nested(usage, "server_tool_use", "web_search_requests");
+            var key = KeyOf(message, usage, counted);
 
             // A line without requestId cannot be deduped and adds whole.
             if (requestId is null)
             {
                 state.Total += counted;
+                var whole1h = Math.Min(counted.CacheWrite, write1h);
+                state.Ledger.Add(key, new LedgerTokens(counted.Input, counted.Output, counted.CacheRead,
+                    counted.CacheWrite - whole1h, whole1h, webSearches));
                 return;
             }
 
@@ -172,16 +186,31 @@ public sealed class ClaudeTranscriptTokenCounter
             // ones. A first line carrying the id but no usage at all returned above without remembering anything, so
             // the real numbers of the lines that follow it are still added in full.
             var before = state.Counted(requestId);
-            state.Total += new TokenUsage(
-                Math.Max(0, counted.Input - before.Input),
-                Math.Max(0, counted.Output - before.Output),
-                Math.Max(0, counted.CacheRead - before.CacheRead),
-                Math.Max(0, counted.CacheWrite - before.CacheWrite));
-            state.Remember(requestId, new TokenUsage(
-                Math.Max(counted.Input, before.Input),
-                Math.Max(counted.Output, before.Output),
-                Math.Max(counted.CacheRead, before.CacheRead),
-                Math.Max(counted.CacheWrite, before.CacheWrite)), MaxSeenRequestIds);
+            var previous = before?.Usage ?? TokenUsage.Zero;
+            var delta = new TokenUsage(
+                Math.Max(0, counted.Input - previous.Input),
+                Math.Max(0, counted.Output - previous.Output),
+                Math.Max(0, counted.CacheRead - previous.CacheRead),
+                Math.Max(0, counted.CacheWrite - previous.CacheWrite));
+            state.Total += delta;
+
+            // The key is fixed by the first line of the request: model, speed and prompt size do not change inside
+            // one response, and a later line must not move tokens already counted to another price.
+            var priceKey = before?.Key ?? key;
+            var delta1h = Math.Min(delta.CacheWrite, Math.Max(0, write1h - (before?.CacheWrite1h ?? 0)));
+            var deltaWeb = Math.Max(0, webSearches - (before?.WebSearches ?? 0));
+            state.Ledger.Add(priceKey, new LedgerTokens(delta.Input, delta.Output, delta.CacheRead,
+                delta.CacheWrite - delta1h, delta1h, deltaWeb));
+
+            state.Remember(requestId, new CountedRequest(
+                new TokenUsage(
+                    Math.Max(counted.Input, previous.Input),
+                    Math.Max(counted.Output, previous.Output),
+                    Math.Max(counted.CacheRead, previous.CacheRead),
+                    Math.Max(counted.CacheWrite, previous.CacheWrite)),
+                Math.Max(write1h, before?.CacheWrite1h ?? 0),
+                Math.Max(webSearches, before?.WebSearches ?? 0),
+                priceKey), MaxSeenRequestIds);
         }
         catch (JsonException)
         {
@@ -194,35 +223,60 @@ public sealed class ClaudeTranscriptTokenCounter
             ? number
             : 0;
 
+    /// <summary>A number inside a nested object of <c>usage</c> (<c>cache_creation</c>, <c>server_tool_use</c>), 0 when absent.</summary>
+    private static long Nested(JsonElement usage, string objectName, string property) =>
+        usage.TryGetProperty(objectName, out var nested) && nested.ValueKind == JsonValueKind.Object ? Long(nested, property) : 0;
+
+    /// <summary>The price key of one line: model, fast mode, restricted geography and long-context band of its prompt.</summary>
+    private static UsageKey KeyOf(JsonElement message, JsonElement usage, TokenUsage counted)
+    {
+        var model = message.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() ?? "" : "";
+        var tier = usage.TryGetProperty("speed", out var speed) && speed.ValueKind == JsonValueKind.String
+                   && string.Equals(speed.GetString(), "fast", StringComparison.OrdinalIgnoreCase)
+            ? PriceTier.Fast
+            : PriceTier.Standard;
+        var geo = usage.TryGetProperty("inference_geo", out var g) && g.ValueKind == JsonValueKind.String ? g.GetString() : null;
+        if (string.IsNullOrWhiteSpace(geo) || geo.Equals("not_available", StringComparison.OrdinalIgnoreCase)
+            || geo.Equals("global", StringComparison.OrdinalIgnoreCase)) geo = null;
+        var prompt = counted.Input + counted.CacheRead + counted.CacheWrite;
+        return new UsageKey(model, tier, geo?.ToLowerInvariant(), PricingThresholds.BandFor(prompt));
+    }
+
+    /// <summary>What one request has contributed so far: the usage, the 1 h share of its cache writes, its web searches and its price key.</summary>
+    private sealed record CountedRequest(TokenUsage Usage, long CacheWrite1h, long WebSearches, UsageKey Key);
+
     /// <summary>Per-transcript state: where the reading stopped, what each response contributed, and the total.</summary>
     private sealed class TranscriptState
     {
-        private readonly Dictionary<string, TokenUsage> _counted = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, CountedRequest> _counted = new(StringComparer.Ordinal);
         private readonly Queue<string> _order = new();
 
         public long Offset { get; set; }
 
         public TokenUsage Total { get; set; } = TokenUsage.Zero;
 
+        /// <summary>The same usage as <see cref="Total"/>, split by model and price variant.</summary>
+        public UsageLedgerBuilder Ledger { get; } = new();
+
         public void Reset()
         {
             Offset = 0;
             Total = TokenUsage.Zero;
+            Ledger.Clear();
             _counted.Clear();
             _order.Clear();
         }
 
-        /// <summary>Usage already added to the total for <paramref name="requestId"/> (zero when never seen).</summary>
-        public TokenUsage Counted(string requestId) =>
-            _counted.TryGetValue(requestId, out var usage) ? usage : TokenUsage.Zero;
+        /// <summary>What <paramref name="requestId"/> has already contributed (null when never seen).</summary>
+        public CountedRequest? Counted(string requestId) => _counted.TryGetValue(requestId, out var counted) ? counted : null;
 
         /// <summary>Stores what <paramref name="requestId"/> has contributed, evicting the oldest past the bound.</summary>
-        public void Remember(string requestId, TokenUsage usage, int limit)
+        public void Remember(string requestId, CountedRequest counted, int limit)
         {
             // Eviction order is first-seen: the repeated lines of one response are adjacent, so re-enqueueing an id
             // on every one of them would only make the queue grow without changing which requests survive.
             if (!_counted.ContainsKey(requestId)) _order.Enqueue(requestId);
-            _counted[requestId] = usage;
+            _counted[requestId] = counted;
             while (_order.Count > limit && _order.TryDequeue(out var oldest)) _counted.Remove(oldest);
         }
     }

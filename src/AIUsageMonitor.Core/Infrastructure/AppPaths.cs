@@ -35,6 +35,11 @@ public sealed class AppPaths
     public string UsageCacheFile => Path.Combine(LocalAppDataDir, "usage-cache.json");
     public string LogsDir => Path.Combine(LocalAppDataDir, "logs");
 
+    // Costi: listino prezzi scaricato, override manuale, tasso BCE
+    public string PricesCacheFile => Path.Combine(LocalAppDataDir, "prices-cache.json");
+    public string PricesOverrideFile => Path.Combine(LocalAppDataDir, "prices-override.json");
+    public string ExchangeRateFile => Path.Combine(LocalAppDataDir, "exchange-rate.json");
+
     // Aggiornamenti
     public string UpdatesDir => Path.Combine(LocalAppDataDir, "updates");
     public string UpdateAuthFile => Path.Combine(LocalAppDataDir, "updates-auth.json");

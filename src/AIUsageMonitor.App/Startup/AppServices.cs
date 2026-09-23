@@ -6,6 +6,7 @@ using AIUsageMonitor.App.Updates;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Pricing;
 using AIUsageMonitor.Core.Settings;
 using AIUsageMonitor.Core.Updates;
 using AIUsageMonitor.Core.Usage;
@@ -36,6 +37,9 @@ public sealed class AppServices : IDisposable
 
     /// <summary>Conferma unica "scarica e riavvia" offerta dalla voce della tray e dalla notifica.</summary>
     public UpdatePromptController UpdatePrompt { get; }
+
+    /// <summary>Listino prezzi LiteLLM e tasso BCE per il costo API equivalente (spec refresh e costi, sezione 5).</summary>
+    public PricingService Pricing { get; }
 
     /// <summary>
     /// Riporta in primo piano la finestra dell'app quando il login GitHub nel browser e' finito. La imposta App.xaml.cs
@@ -77,6 +81,33 @@ public sealed class AppServices : IDisposable
                 _ => null
             };
         }) { OnError = ex => Log.Error("UsageScheduler", ex) };
+
+        // Client dedicato: listino e tasso sono GET anonime verso GitHub e BCE, mai con le intestazioni della quota.
+        var pricingHttp = new HttpClient();
+        var userAgent = $"AIUsageMonitor/{BuildInfo.CurrentVersion}";
+        Pricing = new PricingService(
+            new PriceListService(new PriceListServiceOptions
+            {
+                CacheFile = paths.PricesCacheFile,
+                OverrideFile = paths.PricesOverrideFile,
+                Http = pricingHttp,
+                UserAgent = userAgent,
+                LogInfo = Log.Info,
+                LogError = (message, ex) => Log.Error(message, ex)
+            }),
+            new ExchangeRateService(new ExchangeRateServiceOptions
+            {
+                CacheFile = paths.ExchangeRateFile,
+                Http = pricingHttp,
+                FallbackUsdPerEur = () => (decimal)Settings.Current.UsdPerEur,
+                UserAgent = userAgent,
+                LogInfo = Log.Info,
+                LogError = (message, ex) => Log.Error(message, ex)
+            }),
+            () => Settings.Current.ShowCosts,
+            TimeProvider.System,
+            (message, ex) => Log.Error(message, ex));
+        Pricing.Changed += () => StateChanged?.Invoke();
 
         // Un solo resolver per tutta la vita dell'app: mantiene la cache degli hit e dei miss (60 s).
         var resolver = new CodexSessionResolver(paths.CodexSessionsDir, Clock);
@@ -188,6 +219,12 @@ public sealed class AppServices : IDisposable
             _codexWatcher.Changed += (_, _) => _codexDebounce.Change(2000, Timeout.Infinite);
             _codexWatcher.Created += (_, _) => _codexDebounce.Change(2000, Timeout.Infinite);
         }
+        // Listino e tasso: lettura delle copie locali e primo controllo dopo 20 s, tutto fuori dal thread UI.
+        _ = Task.Run(() =>
+        {
+            try { Pricing.Start(); }
+            catch (Exception ex) { Log.Error("Prezzi: avvio non riuscito", ex); }
+        });
         StartUpdates();
     }
 
@@ -214,11 +251,36 @@ public sealed class AppServices : IDisposable
         catch (Exception ex) { Log.Error("Updater: ritorno all'app dopo il login non riuscito", ex); }
     }
 
+    /// <summary>"Aggiorna ora" della tray e salvataggio delle impostazioni: lo stesso refresh del ⟳ per ogni agente attivo.</summary>
     public void RefreshAll()
     {
-        Scheduler.RefreshNow(AgentKind.Claude);
-        Scheduler.RefreshNow(AgentKind.Codex);
+        foreach (var agent in EnabledAgents()) _ = RefreshAgentAsync(agent);
     }
+
+    /// <summary>
+    /// Refresh a comando di un agente (pulsante ⟳ della card): la quota subito e i token/costi di tutte le sue sessioni,
+    /// comprese quelle ferme. Listino e tasso si aggiornano solo se hanno piu' di 24 ore, senza essere attesi. Non
+    /// solleva mai: gli errori finiscono nel log.
+    /// </summary>
+    public async Task RefreshAgentAsync(AgentKind agent)
+    {
+        _ = Pricing.RefreshIfStaleAsync();
+        try
+        {
+            await Task.WhenAll(Scheduler.RefreshNowAsync(agent), Pump.RefreshTokensNowAsync(agent)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // App in chiusura.
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Refresh {agent}", ex);
+        }
+    }
+
+    /// <summary>Listino e tasso correnti, oppure null quando l'utente ha nascosto i costi.</summary>
+    public PricingSnapshot? CurrentPricing() => Settings.Current.ShowCosts ? Pricing.Current : null;
 
     public HookStatusReport HookStatus(AgentKind agent)
     {
@@ -335,6 +397,7 @@ public sealed class AppServices : IDisposable
         DisposeQuietly(UpdatePrompt, "UpdatePrompt");
         DisposeQuietly(Updates, "UpdateService");
         DisposeQuietly(_updateTransport, "GitHubReleaseTransport");
+        DisposeQuietly(Pricing, "PricingService");
         _codexWatcher?.Dispose();
         _codexDebounce?.Dispose();
         Scheduler.Dispose();

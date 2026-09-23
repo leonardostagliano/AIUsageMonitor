@@ -149,10 +149,44 @@
           <Border DockPanel.Dock="Right" CornerRadius="4" Background="{StaticResource Badge}" Padding="6,1" Visibility="{Binding PlanVisibility}" VerticalAlignment="Center">
             <TextBlock Text="{Binding PlanLabel}" FontSize="10" Foreground="{StaticResource TextMuted}"/>
           </Border>
+          <!-- Refresh a comando dell'agente. FlatRowButton marca il click Handled, quindi non fissa/sblocca il notch;
+               il comando e' sempre abilitato (un Button disabilitato lascerebbe passare il click al pannello). -->
+          <Button DockPanel.Dock="Right" Style="{StaticResource FlatRowButton}" Command="{Binding RefreshCommand}"
+                  ToolTip="{Binding RefreshTooltip}" Opacity="{Binding RefreshOpacity}" Margin="0,0,6,0" Padding="2"
+                  VerticalAlignment="Center" AutomationProperties.Name="Aggiorna">
+            <Path Data="{StaticResource RefreshIcon}" Stroke="{StaticResource TextMuted}" StrokeThickness="1.6"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                  Width="12" Height="12" Stretch="Uniform" RenderTransformOrigin="0.5,0.5">
+              <Path.RenderTransform>
+                <RotateTransform/>
+              </Path.RenderTransform>
+              <Path.Style>
+                <Style TargetType="Path">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsRefreshing}" Value="True">
+                      <DataTrigger.EnterActions>
+                        <BeginStoryboard x:Name="RefreshSpin">
+                          <Storyboard RepeatBehavior="Forever">
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                             From="0" To="360" Duration="0:0:0.9"/>
+                          </Storyboard>
+                        </BeginStoryboard>
+                      </DataTrigger.EnterActions>
+                      <DataTrigger.ExitActions>
+                        <StopStoryboard BeginStoryboardName="RefreshSpin"/>
+                      </DataTrigger.ExitActions>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Path.Style>
+            </Path>
+          </Button>
           <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
         </DockPanel>
         <ItemsControl ItemsSource="{Binding Windows}" ItemTemplate="{StaticResource WindowRowTemplate}"/>
         <TextBlock Text="{Binding ExtraUsage}" Foreground="{StaticResource TextMuted}" FontSize="11" Visibility="{Binding ExtraVisibility}"/>
+        <TextBlock Text="{Binding CostText}" ToolTip="{Binding CostTooltip}" Foreground="{StaticResource TextMuted}" FontSize="11"
+                   Visibility="{Binding CostVisibility}" Margin="0,2,0,0"/>
         <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource Amber}" FontSize="11" TextWrapping="Wrap" Visibility="{Binding StatusVisibility}" Margin="0,2,0,0"/>
         <TextBlock FontSize="11" Margin="0,4,0,0" Visibility="{Binding HookWarningVisibility}">
           <Run Text="Stato live non attivo: " Foreground="{StaticResource TextMuted}"/><Hyperlink Command="{Binding InstallHooksCommand}" Foreground="{StaticResource Amber}" TextDecorations="None">installa hook</Hyperlink>

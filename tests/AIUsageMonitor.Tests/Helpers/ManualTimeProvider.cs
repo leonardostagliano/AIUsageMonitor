@@ -9,6 +9,7 @@ public sealed class ManualTimeProvider : TimeProvider
     private readonly object _gate = new();
     private readonly List<ManualTimer> _timers = [];
     private DateTimeOffset _now;
+    private TimeSpan _wallOffset;
     private long _sequence;
 
     public ManualTimeProvider() : this(new DateTimeOffset(2026, 9, 23, 10, 0, 0, TimeSpan.Zero)) { }
@@ -17,7 +18,16 @@ public sealed class ManualTimeProvider : TimeProvider
 
     public override DateTimeOffset GetUtcNow()
     {
-        lock (_gate) return _now;
+        lock (_gate) return _now + _wallOffset;
+    }
+
+    /// <summary>
+    /// Sposta solo l'orologio di parete (un cambio d'ora a mano, una correzione NTP): timestamp monotono e timer restano
+    /// dove sono.
+    /// </summary>
+    public void ShiftWallClock(TimeSpan by)
+    {
+        lock (_gate) _wallOffset += by;
     }
 
     public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;

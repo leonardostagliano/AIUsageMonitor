@@ -1,0 +1,51 @@
+{
+  "sample_spec": { "input_cost_per_token": 0, "output_cost_per_token": 0, "mode": "chat" },
+  "claude-opus-5-5": {
+    "cache_creation_input_token_cost": 0.000005, "cache_creation_input_token_cost_above_1hr": 0.000008,
+    "cache_read_input_token_cost": 2e-7, "input_cost_per_token": 0.000004, "output_cost_per_token": 0.00002,
+    "litellm_provider": "anthropic", "max_tokens": 128000, "mode": "chat",
+    "search_context_cost_per_query": { "search_context_size_high": 0.01, "search_context_size_low": 0.01, "search_context_size_medium": 0.01 },
+    "provider_specific_entry": { "fast": 2 }, "supports_fast_mode": true,
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+  },
+  "claude-fable-5-1": {
+    "cache_creation_input_token_cost": 0.0000125, "cache_creation_input_token_cost_above_1hr": 0.00002,
+    "cache_read_input_token_cost": 2.5e-7, "input_cost_per_token": 0.00001, "output_cost_per_token": 0.00005,
+    "litellm_provider": "anthropic", "mode": "chat", "provider_specific_entry": { "us": 1.1 },
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+  },
+  "claude-sonnet-4-5": {
+    "cache_creation_input_token_cost": 0.00000375, "cache_creation_input_token_cost_above_1hr": 0.000006,
+    "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.000012, "cache_read_input_token_cost": 3e-7,
+    "input_cost_per_token": 0.000003, "input_cost_per_token_above_200k_tokens": 0.000006,
+    "output_cost_per_token_above_200k_tokens": 0.0000225, "cache_creation_input_token_cost_above_200k_tokens": 0.0000075,
+    "cache_read_input_token_cost_above_200k_tokens": 6e-7, "litellm_provider": "anthropic", "mode": "chat",
+    "output_cost_per_token": 0.000015
+  },
+  "claude-haiku-4-5-20251001": {
+    "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000005, "litellm_provider": "anthropic", "mode": "chat"
+  },
+  "claude-weird": {
+    "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002, "input_cost_per_token_above_128k_tokens": 0.000009,
+    "litellm_provider": "anthropic", "mode": "chat"
+  },
+  "gpt-6-luna": {
+    "cache_creation_input_token_cost": 1.25e-7, "cache_creation_input_token_cost_above_272k_tokens": 2.5e-7,
+    "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-7, "cache_creation_input_token_cost_above_272k_tokens_priority": 5e-7,
+    "cache_creation_input_token_cost_flex": 6.25e-8, "cache_creation_input_token_cost_priority": 2.5e-7,
+    "cache_read_input_token_cost": 1e-8, "cache_read_input_token_cost_above_272k_tokens": 2e-8,
+    "cache_read_input_token_cost_above_272k_tokens_flex": 1e-8, "cache_read_input_token_cost_above_272k_tokens_priority": 4e-8,
+    "cache_read_input_token_cost_batches": 5e-9, "cache_read_input_token_cost_flex": 5e-9, "cache_read_input_token_cost_priority": 2e-8,
+    "input_cost_per_token": 1e-7, "input_cost_per_token_above_272k_tokens": 2e-7, "input_cost_per_token_above_272k_tokens_flex": 1e-7,
+    "input_cost_per_token_above_272k_tokens_priority": 4e-7, "input_cost_per_token_batches": 5e-8, "input_cost_per_token_flex": 5e-8,
+    "input_cost_per_token_priority": 2e-7, "litellm_provider": "openai", "mode": "chat",
+    "output_cost_per_token": 5e-7, "output_cost_per_token_above_272k_tokens": 7.5e-7, "output_cost_per_token_above_272k_tokens_flex": 3.75e-7,
+    "output_cost_per_token_above_272k_tokens_priority": 0.0000015, "output_cost_per_token_batches": 2.5e-7,
+    "output_cost_per_token_flex": 2.5e-7, "output_cost_per_token_priority": 0.000001,
+    "search_context_cost_per_query": { "search_context_size_high": 0.01, "search_context_size_low": 0.01, "search_context_size_medium": 0.01 },
+    "source": "https://developers.openai.com/api/docs/pricing"
+  },
+  "gpt-image-1.5": { "input_cost_per_token": 0.000005, "output_cost_per_token": 0.00004, "litellm_provider": "openai", "mode": "image_generation" },
+  "gemini-9-pro": { "input_cost_per_token": 0.000002, "output_cost_per_token": 0.000012, "litellm_provider": "gemini", "mode": "chat" },
+  "openai-no-price": { "litellm_provider": "openai", "mode": "chat" }
+}
