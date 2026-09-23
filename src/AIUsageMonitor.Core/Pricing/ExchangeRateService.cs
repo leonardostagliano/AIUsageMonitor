@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
@@ -24,6 +25,10 @@ public sealed class ExchangeRateServiceOptions
     public Uri SourceUrl { get; init; } = DefaultSourceUrl;
     public TimeSpan MaxAge { get; init; } = TimeSpan.FromHours(24);
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>Largest response body accepted; the real file is a few kilobytes.</summary>
+    public long MaxBytes { get; init; } = 1024 * 1024;
+
     public string UserAgent { get; init; } = "AIUsageMonitor";
     public Action<string>? LogInfo { get; init; }
     public Action<string, Exception?>? LogError { get; init; }
@@ -36,6 +41,10 @@ public sealed class ExchangeRateServiceOptions
 public sealed class ExchangeRateService
 {
     public const decimal DefaultUsdPerEur = 1.14m;
+
+    // EUR/USD has always stayed within 0.82–1.60: a value outside this much wider range is a malformed file, not a rate.
+    private const decimal MinPlausibleUsdPerEur = 0.1m;
+    private const decimal MaxPlausibleUsdPerEur = 10m;
 
     private readonly ExchangeRateServiceOptions _options;
     private readonly SemaphoreSlim _downloading = new(1, 1);
@@ -59,7 +68,18 @@ public sealed class ExchangeRateService
         try
         {
             if (File.Exists(_options.CacheFile))
-                _cache = JsonSerializer.Deserialize<CachedRate>(File.ReadAllText(_options.CacheFile)) is { UsdPerEur: > 0 } cached ? cached : null;
+            {
+                var cached = JsonSerializer.Deserialize<CachedRate>(File.ReadAllText(_options.CacheFile));
+                if (cached is not null && IsPlausible(cached.UsdPerEur) && cached.EcbDate != default)
+                {
+                    _cache = cached;
+                }
+                else
+                {
+                    _cache = null;
+                    Report("Tasso BCE: cache non valida, verrà riscaricata", null);
+                }
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
@@ -71,27 +91,19 @@ public sealed class ExchangeRateService
     public async Task RefreshIfStaleAsync(CancellationToken cancellationToken = default)
     {
         if (!IsStale) return;
-        if (!await _downloading.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return;
+        // A zero timeout never blocks, so the token adds nothing to the wait; checking it first keeps a cancelled call quiet.
+        if (cancellationToken.IsCancellationRequested || !_downloading.Wait(0)) return;
         try
         {
             if (!IsStale) return;
-            using var request = new HttpRequestMessage(HttpMethod.Get, _options.SourceUrl);
-            request.Headers.TryAddWithoutValidation("User-Agent", _options.UserAgent);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(_options.Timeout);
-            using var response = await _options.Http.SendAsync(request, timeout.Token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) throw new HttpRequestException($"HTTP {(int)response.StatusCode}");
-            var xml = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
-            if (!TryParse(xml, out var rate, out var date)) throw new InvalidDataException("file BCE senza tasso USD");
+            var (rate, date) = await DownloadAsync(cancellationToken).ConfigureAwait(false);
 
+            // The rate is good even when the cache cannot be written: use it now, the file only saves a download at the next start.
             var fresh = new CachedRate(rate, date, _options.Time.GetUtcNow());
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_options.CacheFile))!);
-            var tmp = _options.CacheFile + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(fresh));
-            File.Move(tmp, _options.CacheFile, overwrite: true);
             _cache = fresh;
             _lastError = null;
-            _options.LogInfo?.Invoke(string.Create(CultureInfo.InvariantCulture, $"Tasso BCE aggiornato: 1 EUR = {rate} USD ({date:yyyy-MM-dd})"));
+            Info(string.Create(CultureInfo.InvariantCulture, $"Tasso BCE aggiornato: 1 EUR = {rate} USD ({date:yyyy-MM-dd})"));
+            Save(fresh);
             RaiseChanged();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -100,7 +112,8 @@ public sealed class ExchangeRateService
         }
         catch (Exception ex)
         {
-            _lastError = ex is TaskCanceledException ? "timeout" : ex.Message;
+            // The caller did not cancel (filter above), so a cancellation here is the timeout.
+            _lastError = ex is OperationCanceledException ? "timeout" : ex.Message;
             Report("Tasso BCE: download non riuscito", ex);
             RaiseChanged();
         }
@@ -110,7 +123,10 @@ public sealed class ExchangeRateService
         }
     }
 
-    /// <summary>Reads the USD rate and its date from <c>eurofxref-daily.xml</c>. DTDs are refused.</summary>
+    /// <summary>
+    /// Reads the USD rate and its date from <c>eurofxref-daily.xml</c>. DTDs are refused, and so is a rate written with a
+    /// thousands separator or outside 0.1–10 (a malformed file, not a rate).
+    /// </summary>
     public static bool TryParse(string xml, out decimal usdPerEur, out DateOnly date)
     {
         usdPerEur = 0m;
@@ -122,7 +138,7 @@ public sealed class ExchangeRateService
             var usd = cubes.FirstOrDefault(e => (string?)e.Attribute("currency") == "USD");
             var dated = cubes.FirstOrDefault(e => e.Attribute("time") is not null);
             if (usd is null || dated is null) return false;
-            if (!decimal.TryParse((string?)usd.Attribute("rate"), NumberStyles.Number, CultureInfo.InvariantCulture, out usdPerEur) || usdPerEur <= 0) return false;
+            if (!decimal.TryParse((string?)usd.Attribute("rate"), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out usdPerEur) || !IsPlausible(usdPerEur)) return false;
             return DateOnly.TryParseExact((string?)dated.Attribute("time"), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
         }
         catch (XmlException)
@@ -130,6 +146,48 @@ public sealed class ExchangeRateService
             return false;
         }
     }
+
+    private async Task<(decimal Rate, DateOnly Date)> DownloadAsync(CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, _options.SourceUrl);
+        request.Headers.TryAddWithoutValidation("User-Agent", _options.UserAgent);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_options.Timeout);
+        using var response = await _options.Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"HTTP {(int)response.StatusCode}");
+
+        await using var body = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[16 * 1024];
+        int read;
+        while ((read = await body.ReadAsync(chunk, timeout.Token).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > _options.MaxBytes) throw new InvalidDataException("file BCE oltre il limite di dimensione");
+            buffer.Write(chunk, 0, read);
+        }
+        buffer.Position = 0;
+        using var text = new StreamReader(buffer, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        if (!TryParse(text.ReadToEnd(), out var rate, out var date)) throw new InvalidDataException("file BCE senza tasso USD");
+        return (rate, date);
+    }
+
+    private void Save(CachedRate fresh)
+    {
+        var tmp = _options.CacheFile + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_options.CacheFile))!);
+            File.WriteAllText(tmp, JsonSerializer.Serialize(fresh));
+            File.Move(tmp, _options.CacheFile, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Report("Tasso BCE: cache non scrivibile, il tasso scaricato resta in memoria", ex);
+            try { File.Delete(tmp); } catch { /* best effort */ }
+        }
+    }
+
+    private static bool IsPlausible(decimal usdPerEur) => usdPerEur is >= MinPlausibleUsdPerEur and <= MaxPlausibleUsdPerEur;
 
     private decimal Fallback()
     {
@@ -157,6 +215,11 @@ public sealed class ExchangeRateService
     private void Report(string message, Exception? ex)
     {
         try { _options.LogError?.Invoke(message, ex); } catch { /* a broken logger must not break the rate */ }
+    }
+
+    private void Info(string message)
+    {
+        try { _options.LogInfo?.Invoke(message); } catch { /* a broken logger must not turn a good rate into an error */ }
     }
 
     private sealed record CachedRate(decimal UsdPerEur, DateOnly EcbDate, DateTimeOffset FetchedAt);
