@@ -141,13 +141,21 @@ dai test).
 
 - Il modello in vigore è l'ultimo `turn_context.payload.model` o `thread_settings_applied.thread_settings.model` visto
   prima del `token_count`; stessa regola per `service_tier`.
+- La crescita letta prima che il rollout nomini un modello resta in sospeso e passa sotto il primo modello nominato:
+  un subagente forkato scrive il totale ereditato prima del primo `turn_context` (8 rollout locali di luglio, dal 63%
+  al 99,5% del loro consumo). Finché nessun modello compare, resta sotto un modello vuoto, quindi non prezzata.
 - Ogni `token_count` con `info.total_token_usage` contribuisce la **differenza** rispetto al totale precedente dello
   stesso rollout. Gli eventi ripetuti con lo stesso totale danno zero. Il primo evento contribuisce il suo totale
-  intero, anche quando il thread è stato ripreso e parte con un totale ereditato. Così la somma delle voci coincide
-  sempre con il totale mostrato. Verificato il 2026-09-23 su 60 rollout locali: in 58 su 59 la somma dei
-  `last_token_usage` coincide con il totale finale; il caso che non torna è un thread ripreso, che la differenza tra
-  totali copre.
-- Differenze negative (totale che scende) non si sottraggono: il totale riparte da quel valore.
+  intero, anche quando il thread è stato ripreso e parte con un totale ereditato. Verificato il 2026-09-23 su 60
+  rollout locali: in 58 su 59 la somma dei `last_token_usage` coincide con il totale finale; il caso che non torna è
+  un thread ripreso, che la differenza tra totali copre.
+- Un totale che scende (input o output sotto il precedente) è una **ripartenza** e conta per intero, come il primo
+  evento. Codex azzera il totale cumulativo quando risveglia un thread subagente per un nuovo task: su 390 rollout
+  locali (2026-09-23) ci sono 18 cali in 14 rollout, tutti subito dopo un `task_started`, e in tutti il nuovo totale
+  coincide con il `last_token_usage` dell'evento. Così il registro contiene tutto il consumo del rollout.
+- **Divario con il totale mostrato.** `CodexTokenCounter` legge solo l'ultimo totale: per un thread con ripartenze
+  mostra solo i token dall'ultima ripartenza, mentre il registro li somma tutti (fino a 35 volte tanto nei rollout
+  locali). Senza ripartenze la somma delle voci coincide con il totale mostrato. Punto aperto (sezione 10).
 - Suddivisione: `CacheRead = cached_input_tokens`, `Input = input_tokens − cached_input_tokens`,
   `CacheWrite5m = cache_write_input_tokens` (OpenAI non distingue la durata), `Output = output_tokens`. I token di
   ragionamento sono già dentro `output_tokens` e si pagano come output.
@@ -327,3 +335,6 @@ Tutti senza rete (`FakeHttpMessageHandler`, `ManualTimeProvider`, `TempDir` esis
   log lo segnala.
 - **Endpoint quota Claude** sotto refresh ripetuti: il cooldown di 10 s più il ciclo periodico lo limitano; un 429
   viene mostrato come oggi ("non aggiornato").
+- **Totale Codex dei subagenti risvegliati** (5.3): `CodexTokenCounter` mostra solo i token dall'ultima ripartenza del
+  totale cumulativo, il registro tutto il consumo. Da decidere dove si collegano i registri alle righe: mostrare come
+  totale `ledger.ToTokenUsage()` quando il registro esiste, oppure accettare e spiegare il divario.

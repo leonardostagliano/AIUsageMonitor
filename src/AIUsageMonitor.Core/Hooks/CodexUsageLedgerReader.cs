@@ -13,8 +13,15 @@ namespace AIUsageMonitor.Core.Hooks;
 /// totals but not for the cost: a thread can change model mid-way (4 of 60 local rollouts did on 2026-09-23). Here
 /// every <c>token_count</c> contributes its growth over the previous total of the same rollout, under the model in
 /// force at that point. Growth rather than <c>last_token_usage</c>: repeated events add nothing, and a resumed thread,
-/// whose first total is inherited, still sums exactly to the total the counter shows. The size of the request's own
-/// prompt (<c>last_token_usage.input_tokens</c>) decides only the long-context band.
+/// whose first total is inherited, is counted whole. The size of the request's own prompt
+/// (<c>last_token_usage.input_tokens</c>) decides only the long-context band.
+/// <para>
+/// The cumulative total is not monotonic: Codex restarts it from zero when it wakes a subagent thread for a new task
+/// (all 18 drops in 390 local rollouts on 2026-09-23 followed a <c>task_started</c>, and each new total equalled that
+/// request's <c>last_token_usage</c>). A total that goes down is therefore a new count, taken whole like the first
+/// one, so the ledger keeps everything the rollout consumed. <see cref="CodexTokenCounter"/>, which reads only the
+/// newest total, shows just the part since the last restart for these threads.
+/// </para>
 /// </remarks>
 /// <remarks>Not thread-safe: the pump does all its IO on one thread.</remarks>
 public sealed class CodexUsageLedgerReader
@@ -29,7 +36,7 @@ public sealed class CodexUsageLedgerReader
 
         try
         {
-            if (!File.Exists(rolloutPath)) return state.Ledger.ToLedger();
+            if (!File.Exists(rolloutPath)) return state.ToLedger();
 
             // Codex (Rust std::fs) keeps the live rollout open with share ReadWrite|Delete: open it the same way.
             using var stream = new FileStream(rolloutPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -61,7 +68,7 @@ public sealed class CodexUsageLedgerReader
             // Keep the last known ledger: the next sweep will try again.
         }
 
-        return state.Ledger.ToLedger();
+        return state.ToLedger();
     }
 
     /// <summary>Drops the state of a rollout whose session is gone.</summary>
@@ -105,7 +112,7 @@ public sealed class CodexUsageLedgerReader
 
     private static void ApplySettings(RolloutState state, JsonElement settings)
     {
-        if (String(settings, "model") is { Length: > 0 } model) state.Model = model;
+        if (String(settings, "model") is { Length: > 0 } model) state.SetModel(model);
         if (String(settings, "service_tier") is { Length: > 0 } tier) state.Tier = TierOf(tier);
     }
 
@@ -124,7 +131,10 @@ public sealed class CodexUsageLedgerReader
 
         var current = new Totals(Long(total, "input_tokens"), Long(total, "cached_input_tokens"),
             Long(total, "cache_write_input_tokens"), Long(total, "output_tokens"));
-        var previous = state.LastTotal ?? Totals.Zero;
+        // A total below the previous one is a restart (see the class remarks): counted whole, like the first event.
+        var previous = state.LastTotal is { } last && current.Input >= last.Input && current.Output >= last.Output
+            ? last
+            : Totals.Zero;
         state.LastTotal = current;
 
         var input = Math.Max(0, current.Input - previous.Input);
@@ -132,12 +142,13 @@ public sealed class CodexUsageLedgerReader
         var cacheWrite = Math.Max(0, current.CacheWrite - previous.CacheWrite);
         var output = Math.Max(0, current.Output - previous.Output);
 
-        var prompt = info.TryGetProperty("last_token_usage", out var last) && last.ValueKind == JsonValueKind.Object
-            ? Long(last, "input_tokens")
+        var prompt = info.TryGetProperty("last_token_usage", out var request) && request.ValueKind == JsonValueKind.Object
+            ? Long(request, "input_tokens")
             : input;
         var key = new UsageKey(state.Model ?? "", state.Tier, null, PricingThresholds.BandFor(prompt));
         // input_tokens includes the cached share, exactly as CodexTokenCounter maps it onto TokenUsage.
-        state.Ledger.Add(key, new LedgerTokens(Math.Max(0, input - cached), output, cached, cacheWrite, 0));
+        var tokens = new LedgerTokens(Math.Max(0, input - cached), output, cached, cacheWrite, 0);
+        (state.Model is null ? state.Pending : state.Ledger).Add(key, tokens);
     }
 
     private static string? String(JsonElement element, string property) =>
@@ -156,10 +167,30 @@ public sealed class CodexUsageLedgerReader
     private sealed class RolloutState
     {
         public long Offset { get; set; }
-        public string? Model { get; set; }
+        public string? Model { get; private set; }
         public PriceTier Tier { get; set; } = PriceTier.Standard;
         public Totals? LastTotal { get; set; }
         public UsageLedgerBuilder Ledger { get; } = new();
+
+        /// <summary>
+        /// Growth counted before the rollout named any model, under an empty model. A forked subagent writes its
+        /// inherited total (often most of its usage) before its first turn_context: that growth moves under the first
+        /// model the rollout names instead of staying unpriced.
+        /// </summary>
+        public UsageLedgerBuilder Pending { get; } = new();
+
+        public void SetModel(string model)
+        {
+            if (Model is null)
+            {
+                foreach (var entry in Pending.ToLedger().Entries) Ledger.Add(entry.Key with { Model = model }, entry.Tokens);
+                Pending.Clear();
+            }
+            Model = model;
+        }
+
+        /// <summary>The priced entries plus, until a model is named, the pending growth under an empty model.</summary>
+        public UsageLedger ToLedger() => Ledger.ToLedger() + Pending.ToLedger();
 
         public void Reset()
         {
@@ -168,6 +199,7 @@ public sealed class CodexUsageLedgerReader
             Tier = PriceTier.Standard;
             LastTotal = null;
             Ledger.Clear();
+            Pending.Clear();
         }
     }
 }

@@ -30,19 +30,45 @@ public class CodexUsageLedgerReaderTests
         ["total_tokens"] = input + output
     };
 
-    private static string TokenCount(long input, long cached, long output, long? lastInput = null, long cacheWrite = 0)
+    private static string TokenCount(long input, long cached, long output, long? lastInput = null, long cacheWrite = 0) =>
+        TokenCountOf(Usage(input, cached, cacheWrite, output), lastInput is null ? null : Usage(lastInput.Value, 0, 0, 0));
+
+    /// <summary>The first token_count after Codex restarts a woken subagent's total: the total is that request alone.</summary>
+    private static string RestartedTokenCount(long input, long cached, long output) =>
+        TokenCountOf(Usage(input, cached, 0, output), Usage(input, cached, 0, output));
+
+    private static string TokenCountOf(Dictionary<string, long> total, Dictionary<string, long>? last)
     {
         var info = new Dictionary<string, object?>
         {
-            ["total_token_usage"] = Usage(input, cached, cacheWrite, output),
+            ["total_token_usage"] = total,
             ["model_context_window"] = 258400
         };
-        if (lastInput is not null) info["last_token_usage"] = Usage(lastInput.Value, 0, 0, 0);
+        if (last is not null) info["last_token_usage"] = last;
         return Json(new { timestamp = Ts, type = "event_msg", payload = new { type = "token_count", info, rate_limits = (object?)null } });
     }
 
     private static readonly string NullInfo =
         Json(new { timestamp = Ts, type = "event_msg", payload = new { type = "token_count", info = (object?)null, rate_limits = (object?)null } });
+
+    private static string Event(string type) =>
+        Json(new { timestamp = Ts, type = "event_msg", payload = new { type, turn_id = "t2" } });
+
+    private static string ForkedSessionMeta() =>
+        Json(new { timestamp = Ts, type = "session_meta", payload = new { id = "child", forked_from_id = "parent", cwd = "C:\\demo" } });
+
+    private static string Compacted() =>
+        Json(new { timestamp = Ts, type = "compacted", payload = new { message = "", replacement_history = Array.Empty<object>() } });
+
+    // Written by hand rather than with JsonSerializer, whose default encoder escapes every non-ASCII character: these
+    // lines must hold the raw multi-byte UTF-8 that Codex writes (Italian prompts, emoji, accented paths).
+    private static string RawTurnContext(string model, string jsonCwd) =>
+        "{\"timestamp\":\"" + Ts + "\",\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"t\",\"cwd\":\"" + jsonCwd
+        + "\",\"model\":\"" + model + "\"}}";
+
+    private static string RawUserMessage(string text) =>
+        "{\"timestamp\":\"" + Ts + "\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\","
+        + "\"content\":[{\"type\":\"input_text\",\"text\":\"" + text + "\"}]}}";
 
     private static string Join(params string[] lines) => string.Join("\n", lines) + "\n";
 
@@ -95,6 +121,21 @@ public class CodexUsageLedgerReaderTests
     }
 
     [Fact]
+    public void Without_last_token_usage_the_band_comes_from_the_input_growth()
+    {
+        using var dir = new TempDir();
+        // The second event grows by 50k: its band is 0, although the cumulative input (300k) is above 272k.
+        var file = dir.File("rollout-g.jsonl", Join(TurnContext("m"), TokenCount(250_000, 0, 10), TokenCount(300_000, 0, 20)));
+
+        var entries = new CodexUsageLedgerReader().Read(file).Entries;
+
+        Assert.Equal(
+            [new LedgerEntry(new UsageKey("m", PriceTier.Standard, null, 0), new LedgerTokens(50_000, 10, 0, 0, 0)),
+             new LedgerEntry(new UsageKey("m", PriceTier.Standard, null, 200_000), new LedgerTokens(250_000, 10, 0, 0, 0))],
+            entries);
+    }
+
+    [Fact]
     public void Thread_settings_set_the_model_and_the_priority_tier()
     {
         using var dir = new TempDir();
@@ -112,6 +153,60 @@ public class CodexUsageLedgerReaderTests
     }
 
     [Fact]
+    public void The_fast_service_tier_is_priced_as_priority()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("rollout-f.jsonl", Join(ThreadSettings("m", "fast"), TokenCount(100, 0, 10)));
+
+        Assert.Equal(PriceTier.Priority, Assert.Single(new CodexUsageLedgerReader().Read(file).Entries).Key.Tier);
+    }
+
+    [Fact]
+    public void The_model_can_come_from_session_meta()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("rollout-sm.jsonl", Join(
+            Json(new { timestamp = Ts, type = "session_meta", payload = new { id = "x", model = "m1" } }),
+            TokenCount(100, 0, 10)));
+
+        Assert.Equal("m1", Assert.Single(new CodexUsageLedgerReader().Read(file).Entries).Key.Model);
+    }
+
+    [Fact]
+    public void The_model_can_come_from_a_legacy_turn_context_event()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("rollout-lt.jsonl", Join(
+            Json(new { timestamp = Ts, type = "event_msg", payload = new { type = "turn_context", model = "m2" } }),
+            TokenCount(100, 0, 10)));
+
+        Assert.Equal("m2", Assert.Single(new CodexUsageLedgerReader().Read(file).Entries).Key.Model);
+    }
+
+    [Fact]
+    public void Growth_before_the_first_model_moves_under_the_first_model_the_rollout_names()
+    {
+        // Shaped like a forked subagent: its inherited total arrives before its first turn_context.
+        using var dir = new TempDir();
+        var file = dir.File("rollout-k.jsonl", Join(
+            ForkedSessionMeta(),
+            Compacted(),
+            TokenCount(34_723_453, 34_250_496, 48_154, lastInput: 0),
+            Event("task_started")));
+        var reader = new CodexUsageLedgerReader();
+
+        // Until a model is named, the growth is kept under an empty model rather than dropped.
+        var pending = Assert.Single(reader.Read(file).Entries);
+        Assert.Equal(new UsageKey("", PriceTier.Standard, null, 0), pending.Key);
+
+        File.AppendAllText(file, Join(TurnContext("gpt-6-sol"), TokenCount(34_800_000, 34_300_000, 49_000, lastInput: 76_547)));
+        var entry = Assert.Single(reader.Read(file).Entries);
+
+        Assert.Equal(new UsageKey("gpt-6-sol", PriceTier.Standard, null, 0), entry.Key);
+        Assert.Equal(new LedgerTokens(34_800_000 - 34_300_000, 49_000, 34_300_000, 0, 0), entry.Tokens);
+    }
+
+    [Fact]
     public void Cache_writes_are_priced_as_5_minute_writes()
     {
         using var dir = new TempDir();
@@ -121,7 +216,7 @@ public class CodexUsageLedgerReaderTests
     }
 
     [Fact]
-    public void Reads_are_incremental_and_a_total_that_goes_down_adds_nothing()
+    public void Reads_are_incremental_and_a_total_that_goes_down_is_a_restart_counted_whole()
     {
         using var dir = new TempDir();
         var file = dir.File("rollout-i.jsonl", Join(TurnContext("m"), TokenCount(100, 0, 10)));
@@ -132,7 +227,91 @@ public class CodexUsageLedgerReaderTests
         Assert.Equal(new LedgerTokens(250, 25, 0, 0, 0), Tokens(reader.Read(file), "m"));
 
         File.AppendAllText(file, Join(TokenCount(50, 0, 5), TokenCount(80, 0, 9)));
-        Assert.Equal(new LedgerTokens(280, 29, 0, 0, 0), Tokens(reader.Read(file), "m"));
+        Assert.Equal(new LedgerTokens(100 + 150 + 50 + 30, 10 + 15 + 5 + 4, 0, 0, 0), Tokens(reader.Read(file), "m"));
+    }
+
+    [Fact]
+    public void A_subagent_woken_for_a_new_task_keeps_the_usage_before_and_after_its_total_restarts()
+    {
+        // Shaped like a real rollout: Codex restarts the cumulative total from zero when it wakes a subagent thread
+        // for a new task, and the first total after task_started is that request's last_token_usage.
+        using var dir = new TempDir();
+        var file = dir.File("rollout-s.jsonl", Join(
+            TurnContext("gpt-6-sol"),
+            TokenCount(10_949_533, 10_664_704, 60_030, lastInput: 171_111),
+            Event("task_complete"),
+            Event("task_started"),
+            TurnContext("gpt-6-sol"),
+            RestartedTokenCount(171_531, 170_752, 350),
+            TokenCount(1_400_000, 1_300_000, 5_000, lastInput: 180_000)));
+
+        var entry = Assert.Single(new CodexUsageLedgerReader().Read(file).Entries);
+
+        Assert.Equal(new LedgerTokens(
+            Input: (10_949_533 - 10_664_704) + (1_400_000 - 1_300_000),
+            Output: 60_030 + 5_000,
+            CacheRead: 10_664_704 + 1_300_000,
+            CacheWrite5m: 0,
+            CacheWrite1h: 0), entry.Tokens);
+    }
+
+    [Fact]
+    public void A_half_written_last_line_is_left_for_the_next_read_and_counted_once()
+    {
+        using var dir = new TempDir();
+        var file = dir.File("rollout-h.jsonl", Join(TurnContext("m")) + TokenCount(100, 0, 10));
+        var reader = new CodexUsageLedgerReader();
+
+        Assert.True(reader.Read(file).IsEmpty);
+
+        File.AppendAllText(file, "\n");
+        Assert.Equal(new LedgerTokens(100, 10, 0, 0, 0), Tokens(reader.Read(file), "m"));
+        Assert.Equal(new LedgerTokens(100, 10, 0, 0, 0), Tokens(reader.Read(file), "m"));
+    }
+
+    [Fact]
+    public void Byte_offsets_stay_exact_after_multi_byte_text()
+    {
+        using var dir = new TempDir();
+        // 2 400 more bytes than UTF-16 characters: an offset kept in characters would land before the two token_count
+        // lines below and read them again, counting the older total as a restart.
+        var prompt = string.Concat(Enumerable.Repeat("perch\u00E9 \u00E8 gi\u00E0 cos\u00EC \U0001F600 ", 400));
+        var file = dir.File("rollout-u.jsonl", Join(
+            RawTurnContext("m", "C:\\\\Users\\\\citt\u00E0"),
+            RawUserMessage(prompt),
+            TokenCount(100, 0, 10),
+            TokenCount(200, 0, 20)));
+        Assert.True(new FileInfo(file).Length >= File.ReadAllText(file).Length + 2_400);
+        var reader = new CodexUsageLedgerReader();
+        reader.Read(file);
+
+        File.AppendAllText(file, Join(TokenCount(300, 0, 30)));
+        Assert.Equal(new LedgerTokens(300, 30, 0, 0, 0), Tokens(reader.Read(file), "m"));
+
+        File.AppendAllText(file, Join(RawUserMessage("ancora un po' di testo: \u00E8 cos\u00EC"), TokenCount(450, 0, 45)));
+        Assert.Equal(new LedgerTokens(450, 45, 0, 0, 0), Tokens(reader.Read(file), "m"));
+    }
+
+    [Fact]
+    public void Crlf_line_endings_give_the_same_ledger_read_whole_or_incrementally()
+    {
+        using var dir = new TempDir();
+        string[] head = [TurnContext("m"), TokenCount(100, 20, 10, lastInput: 100)];
+        string[] tail = [TurnContext("n"), TokenCount(300, 50, 30, lastInput: 200)];
+        static string Crlf(string[] lines) => string.Join("\r\n", lines) + "\r\n";
+        var expected = new CodexUsageLedgerReader().Read(dir.File("rollout-lf.jsonl", Join([.. head, .. tail])));
+        Assert.Equal(2, expected.Entries.Count);
+
+        var whole = new CodexUsageLedgerReader().Read(dir.File("rollout-crlf.jsonl", Crlf([.. head, .. tail])));
+
+        var file = dir.File("rollout-crlf-i.jsonl", Crlf(head));
+        var reader = new CodexUsageLedgerReader();
+        reader.Read(file);
+        File.AppendAllText(file, Crlf(tail));
+        var incremental = reader.Read(file);
+
+        Assert.Equal(expected, whole);
+        Assert.Equal(expected, incremental);
     }
 
     [Fact]
