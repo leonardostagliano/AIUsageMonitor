@@ -111,7 +111,11 @@ public sealed class PricingService : IDisposable
         {
             if (_cts.IsCancellationRequested || !_enabled()) return;
             var token = _cts.Token;
-            await Task.WhenAll(_prices.RefreshIfStaleAsync(token), _rates.RefreshIfStaleAsync(token)).ConfigureAwait(false);
+            // On a pool thread: the refresh button, the tray and a settings save call this on the UI thread, and a
+            // download runs synchronously up to its first real await (handler set-up, the system proxy lookup — WPAD
+            // included), which must not freeze the notch.
+            await Task.Run(() => Task.WhenAll(_prices.RefreshIfStaleAsync(token), _rates.RefreshIfStaleAsync(token)), token)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

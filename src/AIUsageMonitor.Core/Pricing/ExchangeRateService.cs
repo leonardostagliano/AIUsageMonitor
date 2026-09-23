@@ -61,7 +61,7 @@ public sealed class ExchangeRateService
 
     public event Action? Changed;
 
-    public bool IsStale => _cache is not { } cache || _options.Time.GetUtcNow() - cache.FetchedAt >= _options.MaxAge;
+    public bool IsStale => _cache is not { } cache || CacheAge.IsStale(cache.FetchedAt, _options.Time.GetUtcNow(), _options.MaxAge);
 
     public void LoadLocal()
     {

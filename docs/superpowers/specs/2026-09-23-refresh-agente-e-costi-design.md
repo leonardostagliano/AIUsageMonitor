@@ -245,11 +245,16 @@ sì e alcune no: l'importo è un minimo (`≥`).
 
 - URL `https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`.
 - Primo controllo 20 s dopo l'avvio, poi ogni 6 ore; scarica solo se la cache ha più di 24 ore o manca, con
-  `If-None-Match` (304 → rinnova solo la data della cache).
+  `If-None-Match` (304 → rinnova solo la data della cache). Una cache datata nel futuro (orologio avanti al momento
+  del download, file modificato) conta come vecchia, con 5 minuti di tolleranza: altrimenti bloccherebbe ogni download
+  fino a quella data. Stessa regola per il tasso (5.5).
 - Timeout 30 s, limite 20 MB, nessuna intestazione oltre allo `User-Agent` dell'app, nessun cookie o credenziale.
 - Un download che non produce almeno un modello Anthropic e uno OpenAI viene scartato e la cache precedente resta.
-- Solo con "Mostra costi" attivo. Fuori dal thread UI; gli errori vanno nel log e lo stato delle Impostazioni mostra
-  l'ultimo esito.
+- Il listino scaricato (o rinnovato da un 304) si usa subito e conta come fresco anche se `prices-cache.json` non si
+  riesce a scrivere: l'errore va nel log, e il download non si ripete a ogni click.
+- Solo con "Mostra costi" attivo. Fuori dal thread UI: `PricingService.RefreshIfStaleAsync` avvia i download su un
+  thread del pool, anche quando lo chiama il ⟳, la tray o il salvataggio delle impostazioni; gli errori vanno nel log e
+  lo stato delle Impostazioni mostra l'ultimo esito.
 
 ### 5.5 Cambio
 
@@ -324,6 +329,8 @@ Nuovo gruppo **COSTI**, tra NOTIFICHE e AGGIORNAMENTI:
 |---|---|
 | Listino irraggiungibile, 4xx/5xx, timeout, JSON non valido | Resta la cache (o la copia imbarcata); log; stato nelle Impostazioni. |
 | Listino valido ma senza modelli Anthropic o OpenAI | Scartato come sopra. |
+| `prices-cache.json` o `exchange-rate.json` non scrivibile | Il dato scaricato resta in memoria e conta come fresco; log. |
+| Prezzo negativo o implausibile nel listino | Campo ignorato; un costo che non sta in un `decimal` rende la voce non prezzata. |
 | BCE irraggiungibile o XML senza USD | Ultimo tasso in cache, poi il tasso di riserva; log. |
 | Modello non nel listino | Voce non prezzata: `≥` o `costo n/d`, modello nominato nel tooltip. |
 | `prices-override.json` malformato | Ignorato, log una volta per contenuto. |

@@ -56,6 +56,32 @@ public class PricingServiceTests
     }
 
     [Fact]
+    public async Task RefreshIfStaleAsync_downloads_off_the_calling_thread()
+    {
+        using var dir = new TempDir();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        // A handler that blocks: run on the caller's thread — the UI thread for the refresh button — it would block
+        // the call itself, the way a proxy lookup does before the first real await.
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            return Respond(request);
+        });
+        using var service = Service(dir, handler, new ManualTimeProvider());
+
+        var refresh = service.RefreshIfStaleAsync();
+
+        Assert.False(refresh.IsCompleted);
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+        release.Set();
+        await refresh.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(PriceListOrigin.Downloaded, service.Current.Catalog.Origin);
+        Assert.Equal(ExchangeRateOrigin.Ecb, service.Current.Rate.Origin);
+    }
+
+    [Fact]
     public async Task Start_loads_the_local_lists_checks_20_seconds_later_then_every_6_hours()
     {
         Assert.Equal(TimeSpan.FromSeconds(20), PricingService.FirstCheckDelay);

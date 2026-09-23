@@ -100,6 +100,73 @@ public class PriceListServiceTests
     }
 
     [Fact]
+    public async Task A_download_is_kept_in_memory_when_the_cache_file_cannot_be_written()
+    {
+        using var dir = new TempDir();
+        var time = new ManualTimeProvider();
+        dir.Sub("prices-cache.json"); // a folder where the cache file should go
+        var errors = new List<string>();
+        var handler = new FakeHttpMessageHandler(_ => Ok(FullList));
+        var service = Service(dir, handler, time, errors);
+        service.LoadLocal();
+
+        await service.RefreshIfStaleAsync();
+
+        Assert.Equal(PriceListOrigin.Downloaded, service.Current.Origin);
+        Assert.False(service.IsStale);
+        Assert.Null(service.LastError);
+        Assert.Contains("Listino prezzi: cache non scrivibile, il listino scaricato resta in memoria", errors);
+        Assert.False(File.Exists(Path.Combine(dir.Path, "prices-cache.json.tmp")));
+        // Fresh in memory: the next refresh downloads nothing.
+        await service.RefreshIfStaleAsync();
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task A_304_renews_the_list_in_memory_when_the_cache_file_cannot_be_written()
+    {
+        using var dir = new TempDir();
+        var time = new ManualTimeProvider();
+        var cacheFile = dir.File("prices-cache.json", ListFile(time.GetUtcNow().AddHours(-25),
+            """{"gpt-6-luna":{"input_cost_per_token":1e-7,"output_cost_per_token":5e-7,"litellm_provider":"openai"}}""", "\"v7\""));
+        var errors = new List<string>();
+        var handler = new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.NotModified));
+        var service = Service(dir, handler, time, errors);
+        service.LoadLocal();
+        File.Delete(cacheFile);
+        Directory.CreateDirectory(cacheFile);
+
+        await service.RefreshIfStaleAsync();
+
+        Assert.False(service.IsStale);
+        Assert.Equal(time.GetUtcNow(), service.Current.FetchedAt);
+        Assert.Null(service.LastError);
+        Assert.Contains("Listino prezzi: cache non scrivibile, il listino scaricato resta in memoria", errors);
+        await service.RefreshIfStaleAsync();
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task A_cache_dated_in_the_future_is_stale_and_downloaded_again()
+    {
+        using var dir = new TempDir();
+        var time = new ManualTimeProvider();
+        // Written while the clock was a month ahead (or edited by hand): it must not block downloads until then.
+        dir.File("prices-cache.json", ListFile(time.GetUtcNow().AddDays(30),
+            """{"gpt-6-luna":{"input_cost_per_token":1e-7,"output_cost_per_token":5e-7,"litellm_provider":"openai"}}"""));
+        var handler = new FakeHttpMessageHandler(_ => Ok(FullList));
+        var service = Service(dir, handler, time);
+        service.LoadLocal();
+
+        Assert.True(service.IsStale);
+        await service.RefreshIfStaleAsync();
+
+        Assert.Single(handler.Requests);
+        Assert.Equal(time.GetUtcNow(), service.Current.FetchedAt);
+        Assert.False(service.IsStale);
+    }
+
+    [Fact]
     public async Task A_stale_cache_is_revalidated_with_its_etag_and_a_304_renews_it()
     {
         using var dir = new TempDir();

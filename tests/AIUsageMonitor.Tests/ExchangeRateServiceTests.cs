@@ -301,6 +301,38 @@ public class ExchangeRateServiceTests
     }
 
     [Fact]
+    public async Task A_cache_dated_in_the_future_is_stale_and_downloaded_again()
+    {
+        using var dir = new TempDir();
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 23, 10, 0, 0, TimeSpan.Zero));
+        // Written while the clock was a month ahead (or edited by hand): it must not block downloads until then.
+        dir.File("exchange-rate.json", """{"UsdPerEur":1.2,"EcbDate":"2026-10-22","FetchedAt":"2026-10-23T10:00:00+00:00"}""");
+        var handler = new FakeHttpMessageHandler(_ => Ok(EcbXml));
+        var service = Service(dir, handler, time);
+        service.LoadLocal();
+
+        Assert.True(service.IsStale);
+        await service.RefreshIfStaleAsync();
+
+        Assert.Single(handler.Requests);
+        Assert.Equal(EcbRate, service.Current);
+        Assert.False(service.IsStale);
+    }
+
+    [Fact]
+    public void A_cache_a_few_minutes_ahead_is_still_fresh()
+    {
+        using var dir = new TempDir();
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 23, 10, 0, 0, TimeSpan.Zero));
+        // A small clock correction after the download.
+        dir.File("exchange-rate.json", """{"UsdPerEur":1.1411,"EcbDate":"2026-09-23","FetchedAt":"2026-09-23T10:04:00+00:00"}""");
+        var service = Service(dir, Offline(), time);
+        service.LoadLocal();
+
+        Assert.False(service.IsStale);
+    }
+
+    [Fact]
     public async Task A_downloaded_rate_is_used_even_when_the_cache_cannot_be_written()
     {
         using var dir = new TempDir();

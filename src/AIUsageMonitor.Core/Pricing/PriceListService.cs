@@ -65,7 +65,7 @@ public sealed class PriceListService
     {
         get
         {
-            lock (_gate) return _cache is null || _options.Time.GetUtcNow() - _cache.FetchedAt >= _options.MaxAge;
+            lock (_gate) return _cache is null || CacheAge.IsStale(_cache.FetchedAt, _options.Time.GetUtcNow(), _options.MaxAge);
         }
     }
 
@@ -152,11 +152,11 @@ public sealed class PriceListService
         if (response.StatusCode == HttpStatusCode.NotModified && cache is not null)
         {
             var renewed = cache with { FetchedAt = now };
-            WriteListFile(_options.CacheFile, renewed.FetchedAt, renewed.ETag, renewed.Source, renewed.Models);
             lock (_gate) _cache = renewed;
             _lastError = null;
             _options.LogInfo?.Invoke("Listino prezzi invariato (304)");
             Publish(renewed);
+            SaveCache(renewed);
             return;
         }
 
@@ -180,11 +180,28 @@ public sealed class PriceListService
             throw new InvalidDataException($"listino senza modelli Anthropic ({anthropic}) o OpenAI ({openai})");
 
         var fresh = new ListFile(now, response.Headers.ETag?.ToString(), _options.SourceUrl.ToString(), models, IsSnapshot: false);
-        WriteListFile(_options.CacheFile, fresh.FetchedAt, fresh.ETag, fresh.Source, fresh.Models);
         lock (_gate) _cache = fresh;
         _lastError = null;
         _options.LogInfo?.Invoke($"Listino prezzi aggiornato: {anthropic} modelli Anthropic, {openai} OpenAI");
         Publish(fresh);
+        SaveCache(fresh);
+    }
+
+    /// <summary>
+    /// Writes the cache file after the list is already in use, and only logs a failure (a read-only file, a stuck
+    /// .tmp, a full disk): the list stays fresh in memory. Throwing here would throw the download away and repeat it —
+    /// 2.8 MB — at every refresh click, settings save and 6 h check for as long as the file cannot be written.
+    /// </summary>
+    private void SaveCache(ListFile list)
+    {
+        try
+        {
+            WriteListFile(_options.CacheFile, list.FetchedAt, list.ETag, list.Source, list.Models);
+        }
+        catch (Exception ex)
+        {
+            Report("Listino prezzi: cache non scrivibile, il listino scaricato resta in memoria", ex);
+        }
     }
 
     private void Publish(ListFile? list)
