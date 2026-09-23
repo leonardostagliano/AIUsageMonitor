@@ -190,6 +190,29 @@ public sealed class HookEventPump : IDisposable
     }
 
     /// <summary>
+    /// Refresh a comando: re-reads the tokens of EVERY session of <paramref name="agent"/> — the Idle ones too, which
+    /// the periodic pass skips — on a pool thread under the pump lock, raising Changed for what moved. Never faults.
+    /// </summary>
+    public Task RefreshTokensNowAsync(AgentKind agent)
+    {
+        if (TokenSource is null) return Task.CompletedTask;
+        return Task.Run(() =>
+        {
+            lock (_gate)
+            {
+                try
+                {
+                    foreach (var session in _tracker.Sessions.Where(s => s.Agent == agent)) RefreshTokens(session);
+                }
+                catch (Exception ex)
+                {
+                    Report(ex);
+                }
+            }
+        });
+    }
+
+    /// <summary>
     /// Applies a batch of events, announcing the live Codex child threads immediately before the Stop that would
     /// otherwise be applied with no subagent in sight. Codex does not emit SubagentStart for its children, so a Stop
     /// applied before the scan takes the session to Idle and toasts "Turno completato" while a child is still
