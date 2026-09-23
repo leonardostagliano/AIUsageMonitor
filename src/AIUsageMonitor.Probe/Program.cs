@@ -28,6 +28,13 @@ if (args.Contains("--update-price-snapshot"))
     http.DefaultRequestHeaders.UserAgent.ParseAdd("AIUsageMonitor");
     using var list = JsonDocument.Parse(await http.GetStringAsync(PriceListServiceOptions.DefaultSourceUrl));
     var models = LiteLlmPriceParser.Trim(list.RootElement, out var anthropic, out var openai);
+    if (anthropic == 0 || openai == 0)
+    {
+        // Lo stesso controllo del download dell'app: un listino così non va imbarcato.
+        Console.Error.WriteLine($"listino senza modelli Anthropic ({anthropic}) o OpenAI ({openai}): snapshot non scritto");
+        Environment.ExitCode = 1;
+        return;
+    }
     PriceListService.WriteListFile(target, DateTimeOffset.UtcNow, null, PriceListServiceOptions.DefaultSourceUrl.ToString(), models);
     Console.WriteLine($"{target}: {anthropic} modelli Anthropic, {openai} OpenAI");
     return;

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -32,7 +33,11 @@ public sealed class PriceListService
 {
     public const string SnapshotResourceName = "prices-snapshot.json";
 
-    private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = false };
+    // Indented and without escaping '+' in fetchedAt: a regenerated snapshot must give a readable diff.
+    private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    // A hand-written override may repeat a key by mistake: refused at any depth, as a JsonException.
+    private static readonly JsonDocumentOptions OverrideJson = new() { AllowDuplicateProperties = false };
 
     private readonly PriceListServiceOptions _options;
     private readonly SemaphoreSlim _downloading = new(1, 1);
@@ -83,7 +88,8 @@ public sealed class PriceListService
     public async Task RefreshIfStaleAsync(CancellationToken cancellationToken = default)
     {
         if (!IsStale) return;
-        if (!await _downloading.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return;
+        // A zero timeout never blocks, so the token adds nothing to the wait; checking it first keeps a cancelled call quiet.
+        if (cancellationToken.IsCancellationRequested || !_downloading.Wait(0)) return;
         try
         {
             if (IsStale) await DownloadAsync(cancellationToken).ConfigureAwait(false);
@@ -116,8 +122,16 @@ public sealed class PriceListService
         };
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         var tmp = path + ".tmp";
-        File.WriteAllText(tmp, document.ToJsonString(WriteOptions));
-        File.Move(tmp, path, overwrite: true);
+        try
+        {
+            File.WriteAllText(tmp, document.ToJsonString(WriteOptions));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+            throw;
+        }
     }
 
     private async Task DownloadAsync(CancellationToken cancellationToken)
@@ -129,8 +143,9 @@ public sealed class PriceListService
         request.Headers.TryAddWithoutValidation("User-Agent", _options.UserAgent);
         if (cache?.ETag is { Length: > 0 } etag) request.Headers.TryAddWithoutValidation("If-None-Match", etag);
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(_options.Timeout);
+        // On the injected clock, like the cache age.
+        using var deadline = new CancellationTokenSource(_options.Timeout, _options.Time);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         using var response = await _options.Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
         var now = _options.Time.GetUtcNow();
 
@@ -174,9 +189,9 @@ public sealed class PriceListService
 
     private void Publish(ListFile? list)
     {
-        var merged = list?.Models.DeepClone().AsObject() ?? new JsonObject();
-        var overrideActive = ApplyOverride(merged);
-        using var document = JsonDocument.Parse(merged.ToJsonString());
+        var models = list?.Models ?? new JsonObject();
+        var patched = ApplyOverride(models);
+        using var document = JsonDocument.Parse((patched ?? models).ToJsonString());
         var parsed = LiteLlmPriceParser.Parse(document.RootElement);
         foreach (var threshold in parsed.UnknownThresholds)
         {
@@ -186,51 +201,59 @@ public sealed class PriceListService
         }
 
         var origin = list is null ? PriceListOrigin.None : list.IsSnapshot ? PriceListOrigin.Snapshot : PriceListOrigin.Downloaded;
-        _current = new PriceCatalog(parsed.Models, origin, list?.FetchedAt, overrideActive);
+        _current = new PriceCatalog(parsed.Models, origin, list?.FetchedAt, patched is not null);
         RaiseChanged();
     }
 
-    /// <summary>Applies prices-override.json field by field; false when there is none or it is unreadable.</summary>
-    private bool ApplyOverride(JsonObject merged)
+    /// <summary>
+    /// A copy of <paramref name="models"/> with prices-override.json applied field by field (unknown ids added); null
+    /// when there is none or it is unreadable. <paramref name="models"/> is never changed, so a file that fails halfway
+    /// leaves no entry of it applied.
+    /// </summary>
+    private JsonObject? ApplyOverride(JsonObject models)
     {
         string text;
         try
         {
-            if (!File.Exists(_options.OverrideFile)) return false;
+            if (!File.Exists(_options.OverrideFile)) return null;
             text = File.ReadAllText(_options.OverrideFile);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Report("prices-override.json non leggibile", ex);
-            return false;
+            return null;
         }
 
         try
         {
-            if (JsonNode.Parse(text) is not JsonObject overrides)
+            if (JsonNode.Parse(text, documentOptions: OverrideJson) is not JsonObject overrides)
                 throw new JsonException("prices-override.json deve essere un oggetto: id modello → campi di prezzo");
+            var patched = models.DeepClone().AsObject();
             foreach (var (id, value) in overrides)
             {
                 if (value is not JsonObject fields) continue;
-                if (merged[id] is not JsonObject target)
+                if (patched[id] is not JsonObject target)
                 {
                     target = new JsonObject();
-                    merged[id] = target;
+                    patched[id] = target;
                 }
                 foreach (var (name, field) in fields) target[name] = field?.DeepClone();
             }
-            _loggedOverride = null;
-            return true;
+            lock (_gate) _loggedOverride = null;
+            return patched;
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
         {
-            // Logged once per content: LoadLocal runs at every download, the same broken file must not flood the log.
-            if (_loggedOverride != text)
+            // Logged once per content: Publish applies the override at every load and every download, the same broken
+            // file must not flood the log. ArgumentException: a key written twice, should a JsonObject meet one.
+            bool first;
+            lock (_gate)
             {
+                first = _loggedOverride != text;
                 _loggedOverride = text;
-                Report("prices-override.json non valido: ignorato", ex);
             }
-            return false;
+            if (first) Report("prices-override.json non valido: ignorato", ex);
+            return null;
         }
     }
 
@@ -241,7 +264,7 @@ public sealed class PriceListService
             using var stream = _options.Snapshot();
             return stream is null ? null : Parse(JsonNode.Parse(stream), isSnapshot: true);
         }
-        catch (Exception ex) when (ex is JsonException or IOException or FormatException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or IOException or FormatException or InvalidOperationException or ArgumentException)
         {
             Report("Listino prezzi: copia imbarcata non leggibile", ex);
             return null;
@@ -254,16 +277,22 @@ public sealed class PriceListService
         {
             return File.Exists(path) ? Parse(JsonNode.Parse(File.ReadAllText(path)), isSnapshot: false) : null;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or FormatException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or FormatException or InvalidOperationException or ArgumentException)
         {
             Report("Listino prezzi: cache non leggibile, verrà riscaricata", ex);
             return null;
         }
     }
 
+    /// <summary>
+    /// A list file, read through its first two levels: a key written twice there (a damaged file: <see cref="WriteListFile"/>
+    /// never writes one) throws ArgumentException now, in the reader, rather than later while the override is merged in.
+    /// </summary>
     private static ListFile? Parse(JsonNode? node, bool isSnapshot)
     {
         if (node is not JsonObject root || root["models"] is not JsonObject models) return null;
+        foreach (var (_, entry) in models)
+            if (entry is JsonObject fields) _ = fields.Count;
         var fetchedAt = DateTimeOffset.Parse((string?)root["fetchedAt"] ?? throw new FormatException("fetchedAt mancante"), CultureInfo.InvariantCulture);
         return new ListFile(fetchedAt, (string?)root["etag"], (string?)root["source"] ?? "", models.DeepClone().AsObject(), isSnapshot);
     }
@@ -284,7 +313,8 @@ public sealed class PriceListService
 
     private static string Describe(Exception ex) => ex switch
     {
-        TaskCanceledException => "timeout",
+        // The caller did not cancel (RefreshIfStaleAsync filters that out), so a cancellation is the timeout.
+        OperationCanceledException => "timeout",
         JsonException => "risposta non valida",
         _ => ex.Message
     };
