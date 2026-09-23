@@ -90,8 +90,10 @@ public static partial class ReleaseCatalog
     /// </summary>
     public static string ChecksumFor(string manifest, string assetName)
     {
-        var matching = manifest.Split('\n')
-            .Select(line => ChecksumLine().Match(line.Trim()))
+        // Come trim() di JavaScript: anche il BOM (U+FEFF, che char.IsWhiteSpace non considera spazio) va tolto, o la
+        // prima riga di un manifest salvato con BOM non corrisponderebbe mai.
+        var matching = (manifest ?? "").Split('\n')
+            .Select(line => ChecksumLine().Match(line.Trim().Trim('\uFEFF').Trim()))
             .Where(m => m.Success && m.Groups[2].Value == assetName)
             .ToList();
         if (matching.Count != 1) throw new UpdateException("UPDATES_CHECKSUM", UpdateMessages.ChecksumNotUnique);
@@ -118,18 +120,36 @@ public static partial class ReleaseCatalog
     private static long? PositiveId(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var id) && id > 0 ? id : null;
 
-    private static string? String(JsonElement obj, string name) =>
-        obj.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    /// <summary>
+    /// Stringa JSON, o null se manca, non e' una stringa o non e' decodificabile: JsonDocument accetta un surrogato
+    /// isolato scritto come escape (<c>"\ud800"</c>) e <see cref="JsonElement.GetString"/> lancerebbe
+    /// InvalidOperationException, un'eccezione che nessun chiamante classifica.
+    /// </summary>
+    private static string? String(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String) return null;
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
-    /// <summary>Toglie i caratteri di controllo (tranne tab, a capo e ritorno carrello) e tronca.</summary>
+    /// <summary>Toglie i caratteri di controllo (tranne tab, a capo e ritorno carrello) e tronca senza spezzare una coppia surrogata.</summary>
     private static string Text(string? value, int max)
     {
         if (string.IsNullOrEmpty(value)) return "";
         var clean = ControlChars().Replace(value, "");
-        return clean.Length > max ? clean[..max] : clean;
+        if (clean.Length <= max) return clean;
+        var end = char.IsHighSurrogate(clean[max - 1]) ? max - 1 : max;
+        return clean[..end];
     }
 
-    [GeneratedRegex(@"\Asha256:[a-fA-F0-9]{64}\z", RegexOptions.CultureInvariant)]
+    // Prefisso senza distinzione di maiuscole come /^sha256:[a-f0-9]{64}$/i di ChessAdvisor.
+    [GeneratedRegex(@"\Asha256:[a-f0-9]{64}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DigestPattern();
 
     [GeneratedRegex(@"\A([a-fA-F0-9]{64})\s+\*?(.+)\z", RegexOptions.CultureInvariant)]
