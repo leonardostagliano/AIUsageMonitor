@@ -82,8 +82,8 @@ models.dev non ha la cache a 1 ora né i moltiplicatori; OpenRouter è il listin
   `RefreshNow` resta per i chiamanti che non aspettano (debounce Codex).
 - `HookEventPump.RefreshTokensNowAsync(AgentKind)` → `Task`: sul thread del pump (stesso `_gate`), rilegge token e
   costi di tutte le sessioni dell'agente, non silenzioso. Non tocca `_lastTokenRefresh`.
-- `AppServices.RefreshAgentAsync(AgentKind)`: combina i due, avvia il punto 3 senza attenderlo, non solleva mai;
-  timeout di 15 s e cooldown li applica `ManualRefreshGate` (Core).
+- `AppServices.RefreshAgentAsync(AgentKind)`: combina i due, avvia il punto 3 senza attenderlo, non solleva mai
+  (gli errori vanno nel log); timeout di 15 s e cooldown li applica `ManualRefreshGate` (Core).
 - `AgentCardViewModel`: `RefreshCommand` (CanExecute falso durante refresh e cooldown), `IsRefreshing`,
   `RefreshTooltip`. Cooldown con un `DispatcherTimer`; lo stato è per card e non sopravvive a un `Rebuild`, che è
   accettabile.

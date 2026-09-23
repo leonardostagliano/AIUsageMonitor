@@ -69,10 +69,11 @@ cartella (debounce 2 s) più un controllo periodico ogni 30 s.
 L'ultimo snapshot valido è messo in cache in `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json`, così
 all'avvio le barre sono già popolate (marcate "non aggiornate") finché non arriva il primo refresh.
 
-**Aggiornamento a comando.** Il pulsante ⟳ nell'intestazione di ogni card aggiorna subito la quota di quell'agente e
-ricalcola token e costi di tutte le sue sessioni, anche di quelle ferme; l'icona gira finché non ha finito (al massimo
-15 s) e il pulsante resta attenuato per 10 s prima di accettare un nuovo click. "Aggiorna ora" nel menu della tray fa lo
-stesso per tutti gli agenti attivi.
+**Aggiornamento a comando.** Il pulsante ⟳ nell'intestazione di ogni card aggiorna subito la quota
+di quell'agente e ricalcola token e costi di tutte le sue sessioni, anche di quelle ferme; l'icona
+gira finché non ha finito (al massimo 15 s) e il pulsante resta attenuato per 10 s prima di
+accettare un nuovo click. "Aggiorna ora" nel menu della tray fa lo stesso per tutti gli agenti
+attivi.
 
 ## Come funziona lo stato live (hook)
 
@@ -106,35 +107,6 @@ dal transcript e token ↑ input/↓ output. Gli agenti conclusi escono dalla li
 Se modello o token non sono ancora disponibili viene mostrato "in attesa"; i totali della sessione
 e quelli dei singoli workflow rimangono distinti.
 
-## Costi
-
-Accanto ai token di ogni sessione e di ogni agente di workflow il notch mostra il **costo API equivalente**: quanto
-costerebbero quei token ai prezzi di listino pubblicati da Anthropic e OpenAI, convertiti in euro. Con un piano in
-abbonamento (Max, Pro) **non è la spesa reale**. La card di ogni agente riporta il totale delle sessioni presenti nel
-notch, compresi tutti i loro agenti; il tooltip mostra il dettaglio per modello, la data del listino e il tasso usato.
-
-- **Conteggio.** I token sono divisi per modello, per variante di prezzo (fast mode di Claude, priority e flex di
-  OpenAI) e per fascia di contesto (prompt oltre 200k o 272k token), separando input, output, cache letta e cache
-  scritta a 5 minuti o a 1 ora: Claude Code scrive solo cache a 1 ora, che costa il 60% in più. Per Codex il costo
-  segue il modello in vigore a ogni richiesta, anche quando cambia a metà thread. Le ricerche web di Claude si pagano a
-  parte.
-- **Listino.** Il listino [LiteLLM](https://github.com/BerriAI/litellm) (`model_prices_and_context_window.json`, ogni
-  voce cita la pagina prezzi del vendor) viene scaricato al massimo una volta al giorno e salvato in
-  `prices-cache.json`; fino al primo download vale la copia imbarcata nell'exe. Un file `prices-override.json` nella
-  stessa cartella, con lo stesso formato per modello di LiteLLM, aggiunge o corregge prezzi:
-
-  ```json
-  { "codex-auto-review": { "input_cost_per_token": 1e-7, "output_cost_per_token": 5e-7 } }
-  ```
-
-- **Cambio.** Tasso di riferimento BCE (dollari per euro), scaricato una volta al giorno; senza rete vale l'ultimo
-  scaricato, poi il tasso di riserva delle impostazioni (default 1 € = 1,14 $).
-- **Modelli senza prezzo** (per esempio `codex-auto-review`, che nessun listino pubblica): il costo mostrato è un
-  minimo, `≥ 1,20 €`, e il tooltip dice quale modello manca; se nessun modello ha un prezzo compare `costo n/d`.
-
-Dalle impostazioni (gruppo COSTI) si nascondono i costi — e con loro ogni download di listino e tasso — e si imposta il
-tasso di riserva.
-
 ### Codex: approvazione degli hook
 
 Codex esegue un gruppo di hook **solo dopo che l'utente lo ha approvato**: in `~/.codex/config.toml`
@@ -149,6 +121,38 @@ indici dei gruppi aggiunti dopo, che vanno riapprovati con `/hooks`.
 
 Se in `config.toml` gli hook sono disabilitati (`hooks = false`) l'app lo segnala senza modificare
 il file.
+
+## Costi
+
+Accanto ai token di ogni sessione e di ogni agente di workflow il notch mostra il **costo API
+equivalente**: quanto costerebbero quei token ai prezzi di listino pubblicati da Anthropic e OpenAI,
+convertiti in euro. Con un piano in abbonamento (Max, Pro) **non è la spesa reale**. La card di ogni
+agente riporta il totale delle sessioni presenti nel notch, compresi tutti i loro agenti; il tooltip
+mostra il dettaglio per modello, la data del listino e il tasso usato.
+
+- **Conteggio.** I token sono divisi per modello, per variante di prezzo (fast mode di Claude,
+  priority e flex di OpenAI) e per fascia di contesto (prompt oltre 200k o 272k token), separando
+  input, output, cache letta e cache scritta a 5 minuti o a 1 ora: Claude Code scrive solo cache a 1
+  ora, che costa il 60% in più. Per Codex il costo segue il modello in vigore a ogni richiesta,
+  anche quando cambia a metà thread. Le ricerche web di Claude si pagano a parte.
+- **Listino.** Il listino [LiteLLM](https://github.com/BerriAI/litellm)
+  (`model_prices_and_context_window.json`, ogni voce cita la pagina prezzi del vendor) viene
+  scaricato al massimo una volta al giorno e salvato in `prices-cache.json`; fino al primo download
+  vale la copia imbarcata nell'exe. Un file `prices-override.json` nella stessa cartella, con lo
+  stesso formato per modello di LiteLLM, aggiunge o corregge prezzi:
+
+  ```json
+  { "codex-auto-review": { "input_cost_per_token": 1e-7, "output_cost_per_token": 5e-7 } }
+  ```
+
+- **Cambio.** Tasso di riferimento BCE (dollari per euro), scaricato una volta al giorno; senza rete
+  vale l'ultimo scaricato, poi il tasso di riserva delle impostazioni (default 1 € = 1,14 $).
+- **Modelli senza prezzo** (per esempio `codex-auto-review`, che nessun listino pubblica): il costo
+  mostrato è un minimo, `≥ 1,20 €`, e il tooltip dice quale modello manca; se nessun modello ha un
+  prezzo compare `costo n/d`.
+
+Dalle impostazioni (gruppo COSTI) si nascondono i costi — e con loro ogni download di listino e
+tasso — e si imposta il tasso di riserva.
 
 ## Vai al terminale
 
@@ -322,18 +326,19 @@ La versione vive nei tag e nelle release: il workflow non fa commit né push sul
 
 L'app **legge soltanto file locali** (credenziali Claude, sessioni Codex, configurazioni hook,
 eventi) e per la quota fa **una sola chiamata di rete**: l'endpoint usage di Anthropic, con il token
-OAuth già presente sulla macchina. Con i costi attivi (default) fa anche due richieste anonime, al massimo una volta al
-giorno e senza inviare alcun dato: il listino prezzi LiteLLM da `raw.githubusercontent.com` e il tasso di riferimento
-da `www.ecb.europa.eu`. L'unica altra rete è quella dell'updater, e solo dopo che hai
-collegato un account GitHub: l'API release di questo repository e il download dei suoi asset, con la
-sessione creata dall'app (mai scritta nei log né mostrata). Nessun prompt, nessun contenuto di conversazione e nessun token viene
-inviato, registrato o mostrato da nessuna parte: gli eventi tracciati sono nomi di evento,
-identificativo di sessione, cartella di lavoro, un messaggio breve dell'agente e, sugli eventi di
-avvio e di prompt, qualche indizio sul terminale che ospita la sessione (ppid, pane di Herdr,
-`WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID`), che serve solo al click "vai al terminale" e non lascia
-mai la macchina. Non c'è telemetria.
+OAuth già presente sulla macchina. Con i costi attivi (default) fa anche due richieste anonime, al
+massimo una volta al giorno e senza inviare alcun dato: il listino prezzi LiteLLM da
+`raw.githubusercontent.com` e il tasso di riferimento da `www.ecb.europa.eu`. L'unica altra rete è
+quella dell'updater, e solo dopo che hai collegato un account GitHub: l'API release di questo
+repository e il download dei suoi asset, con la sessione creata dall'app (mai scritta nei log né
+mostrata). Nessun prompt, nessun contenuto di conversazione e nessun token viene inviato, registrato
+o mostrato da nessuna parte: gli eventi tracciati sono nomi di evento, identificativo di sessione,
+cartella di lavoro, un messaggio breve dell'agente e, sugli eventi di avvio e di prompt, qualche
+indizio sul terminale che ospita la sessione (ppid, pane di Herdr, `WT_SESSION`, `TERM_PROGRAM`,
+`VSCODE_PID`), che serve solo al click "vai al terminale" e non lascia mai la macchina. Non c'è
+telemetria.
 
 ## Licenza
 
-MIT — vedi [LICENSE](LICENSE). Note su icone e ispirazione in
+MIT — vedi [LICENSE](LICENSE). Note su icone, listino prezzi e ispirazione in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
