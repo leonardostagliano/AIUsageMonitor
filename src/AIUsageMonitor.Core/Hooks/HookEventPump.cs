@@ -270,8 +270,10 @@ public sealed class HookEventPump : IDisposable
             var sessionTokens = TokenSource.SessionTokens(session);
             var subagentTokens = TokenSource.SubagentTokens(session);
             var subagentModels = TokenSource.SubagentModels(session);
-            if (silent) _tracker.UpdateTokensSilently(session.Agent, session.SessionId, sessionTokens, subagentTokens, subagentModels);
-            else _tracker.UpdateTokens(session.Agent, session.SessionId, sessionTokens, subagentTokens, subagentModels);
+            var sessionLedger = TokenSource.SessionLedger(session);
+            var subagentLedgers = TokenSource.SubagentLedgers(session);
+            if (silent) _tracker.UpdateTokensSilently(session.Agent, session.SessionId, sessionTokens, subagentTokens, subagentModels, sessionLedger, subagentLedgers);
+            else _tracker.UpdateTokens(session.Agent, session.SessionId, sessionTokens, subagentTokens, subagentModels, sessionLedger, subagentLedgers);
         }
         catch (Exception ex)
         {

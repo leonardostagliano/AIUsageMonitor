@@ -19,4 +19,13 @@ public interface ITokenSource
 
     /// <summary>Model name per subagent id, when the source can determine it.</summary>
     IReadOnlyDictionary<string, string>? SubagentModels(SessionState session) => null;
+
+    /// <summary>
+    /// Usage of the session itself split by model and price variant (what the cost is computed from), or null when it
+    /// cannot be determined. Called right after <see cref="SessionTokens"/>, on the pump thread; it may do IO.
+    /// </summary>
+    UsageLedger? SessionLedger(SessionState session) => null;
+
+    /// <summary>Ledger per subagent id (only the ids it knows about), or null. Called right after <see cref="SubagentTokens"/>.</summary>
+    IReadOnlyDictionary<string, UsageLedger>? SubagentLedgers(SessionState session) => null;
 }

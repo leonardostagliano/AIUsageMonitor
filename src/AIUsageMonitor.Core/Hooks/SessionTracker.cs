@@ -278,13 +278,15 @@ public sealed class SessionTracker
     /// could not be read must never blank a row. Changed fires once, as <see cref="SessionChangeKind.Updated"/> with
     /// the current phase as the previous one, only when at least one total really moved — the counters run every few
     /// seconds and an unconditional event would repaint the notch (and re-evaluate the toasts) for nothing.
+    /// The ledgers follow the same rules: null keeps the stored one, an equal one is not a change.
     /// Returns null when nothing changed or the session is unknown.
     /// </summary>
     public SessionChange? UpdateTokens(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens,
-        IReadOnlyDictionary<string, string>? subagentModels = null)
+        IReadOnlyDictionary<string, string>? subagentModels = null, UsageLedger? sessionLedger = null,
+        IReadOnlyDictionary<string, UsageLedger>? subagentLedgers = null)
     {
         SessionChange? change;
-        lock (_gate) change = UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens, subagentModels);
+        lock (_gate) change = UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens, subagentModels, sessionLedger, subagentLedgers);
         if (change is not null) Raise(change);
         return change;
     }
@@ -295,13 +297,15 @@ public sealed class SessionTracker
     /// for a session whose event history was replayed rather than lived through.
     /// </summary>
     public void UpdateTokensSilently(AgentKind agent, string sessionId, TokenUsage? sessionTokens, IReadOnlyDictionary<string, TokenUsage>? subagentTokens,
-        IReadOnlyDictionary<string, string>? subagentModels = null)
+        IReadOnlyDictionary<string, string>? subagentModels = null, UsageLedger? sessionLedger = null,
+        IReadOnlyDictionary<string, UsageLedger>? subagentLedgers = null)
     {
-        lock (_gate) UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens, subagentModels);
+        lock (_gate) UpdateTokensCore(agent, sessionId, sessionTokens, subagentTokens, subagentModels, sessionLedger, subagentLedgers);
     }
 
     private SessionChange? UpdateTokensCore(AgentKind agent, string sessionId, TokenUsage? sessionTokens,
-        IReadOnlyDictionary<string, TokenUsage>? subagentTokens, IReadOnlyDictionary<string, string>? subagentModels)
+        IReadOnlyDictionary<string, TokenUsage>? subagentTokens, IReadOnlyDictionary<string, string>? subagentModels,
+        UsageLedger? sessionLedger, IReadOnlyDictionary<string, UsageLedger>? subagentLedgers)
     {
         var key = (agent, sessionId);
         if (!_sessions.TryGetValue(key, out var session)) return null;
@@ -349,11 +353,34 @@ public sealed class SessionTracker
             }
         }
 
+        var ledger = session.Ledger;
+        if (sessionLedger is not null && !sessionLedger.Equals(ledger))
+        {
+            ledger = sessionLedger;
+            changed = true;
+        }
+
+        if (subagentLedgers is { Count: > 0 } && session.Subagents is { Count: > 0 } ledgerKnown)
+        {
+            List<SubagentState>? updatedList = null;
+            for (var i = 0; i < ledgerKnown.Count; i++)
+            {
+                if (!subagentLedgers.TryGetValue(ledgerKnown[i].AgentId, out var subLedger) || subLedger.Equals(ledgerKnown[i].Ledger)) continue;
+                updatedList ??= [.. subagents!];
+                updatedList[i] = updatedList[i] with { Ledger = subLedger };
+            }
+            if (updatedList is not null)
+            {
+                subagents = updatedList;
+                changed = true;
+            }
+        }
+
         if (!changed) return null;
 
         // LastEventAt is deliberately left alone: a token refresh is not session activity, and pushing it forward
         // would keep a dead session out of the 12 h stale sweep forever.
-        var updated = session with { Tokens = tokens, Subagents = subagents };
+        var updated = session with { Tokens = tokens, Subagents = subagents, Ledger = ledger };
         _sessions[key] = updated;
         return new SessionChange(SessionChangeKind.Updated, updated, session.Phase);
     }
