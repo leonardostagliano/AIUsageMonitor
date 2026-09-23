@@ -148,7 +148,7 @@
 
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
         <Button Content="Annulla" Click="Cancel_Click" IsCancel="True"/>
-        <Button Content="Salva" Command="{Binding SaveCommand}" IsDefault="True" Style="{StaticResource PrimaryButton}" Margin="0,2,0,2"/>
+        <Button Content="Salva" Click="Save_Click" Command="{Binding SaveCommand}" IsDefault="True" Style="{StaticResource PrimaryButton}" Margin="0,2,0,2"/>
       </StackPanel>
     </StackPanel>
   </ScrollViewer>
