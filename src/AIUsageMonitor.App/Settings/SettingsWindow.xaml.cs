@@ -1,4 +1,6 @@
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -125,4 +127,9 @@ public partial class SettingsWindow : Window
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => Close();
+
+    // Click arriva prima del SaveCommand. Con Invio il pulsante IsDefault non prende il focus, quindi un binding
+    // LostFocus (il tasso di riserva) non avrebbe ancora scritto nella bozza: lo si forza qui, prima del salvataggio.
+    private void Save_Click(object sender, RoutedEventArgs e) =>
+        (Keyboard.FocusedElement as TextBox)?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
 }

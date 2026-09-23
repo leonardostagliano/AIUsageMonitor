@@ -18,6 +18,8 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     private bool _autoStart;
     private string _claudeHookStatus = "";
     private string _codexHookStatus = "";
+    private string _pricingStatus = "";
+    private readonly Action _pricingChanged;
 
     public SettingsViewModel(AppServices services)
     {
@@ -37,6 +39,11 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
         OpenEventsFolderCommand = new RelayCommand(() => OpenFolder(services.Paths.MonitorDir));
         OpenLogsFolderCommand = new RelayCommand(() => OpenFolder(services.Paths.LogsDir));
         Updates = new UpdatesViewModel(services.Updates, services.Log);
+        OpenDataFolderCommand = new RelayCommand(() => OpenFolder(services.Paths.LocalAppDataDir));
+        // Stato dal vivo di listino e tasso (non passa da Salva): si aggiorna quando finisce un download.
+        _pricingChanged = () => UiDispatcher.Post(RefreshPricingStatus);
+        services.Pricing.Changed += _pricingChanged;
+        RefreshPricingStatus();
         RefreshHookStatus();
     }
 
@@ -53,6 +60,7 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     public ICommand RemoveCodexHooksCommand { get; }
     public ICommand OpenEventsFolderCommand { get; }
     public ICommand OpenLogsFolderCommand { get; }
+    public ICommand OpenDataFolderCommand { get; }
 
     public bool ClaudeEnabled { get => _draft.ClaudeEnabled; set { _draft.ClaudeEnabled = value; Raise(); } }
     public bool CodexEnabled { get => _draft.CodexEnabled; set { _draft.CodexEnabled = value; Raise(); } }
@@ -69,6 +77,9 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     public bool NotifyClaude { get => _draft.NotifyClaude; set { _draft.NotifyClaude = value; Raise(); } }
     public bool NotifyCodex { get => _draft.NotifyCodex; set { _draft.NotifyCodex = value; Raise(); } }
     public bool UpdatesAutoCheck { get => _draft.UpdatesAutoCheck; set { _draft.UpdatesAutoCheck = value; Raise(); } }
+    public bool ShowCosts { get => _draft.ShowCosts; set { _draft.ShowCosts = value; Raise(); } }
+    public double UsdPerEur { get => _draft.UsdPerEur; set { _draft.UsdPerEur = value; Raise(); } }
+    public string PricingStatus { get => _pricingStatus; private set => Set(ref _pricingStatus, value); }
     public bool AutoStartEnabled { get => _autoStart; set => Set(ref _autoStart, value); }
     public string ClaudeHookStatus { get => _claudeHookStatus; private set => Set(ref _claudeHookStatus, value); }
     public string CodexHookStatus { get => _codexHookStatus; private set => Set(ref _codexHookStatus, value); }
@@ -117,7 +128,19 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
         _ => report.Detail
     };
 
-    public void Dispose() => Updates.Dispose();
+    private void RefreshPricingStatus()
+    {
+        var pricing = _services.Pricing.Current;
+        var lines = new List<string> { pricing.CatalogLine(), pricing.RateLine() };
+        if (_services.Pricing.LastError is { } error) lines.Add($"Ultimo errore: {error}");
+        PricingStatus = string.Join("\n", lines);
+    }
+
+    public void Dispose()
+    {
+        _services.Pricing.Changed -= _pricingChanged;
+        Updates.Dispose();
+    }
 
     private static void OpenFolder(string path)
     {
