@@ -215,7 +215,7 @@ La riga della sessione mostra anche il numero dei subagenti e la somma dei loro 
 - `NotifyIcon` WinForms (assembly `System.Windows.Forms` referenziato dal progetto WPF con `UseWindowsForms`). Nessun pacchetto aggiuntivo.
 - Icona: glifo bianco dell'app in 16/32 px con un pallino in basso a destra disegnato a runtime (GDI+) nel colore dello stato aggregato peggiore tra gli agenti; tooltip con riepilogo "Claude 5h 48% · Codex 7g 90%".
 - Click sinistro: fissa aperto il notch (toggle). Doppio click: apre le impostazioni.
-- Menu destro: Aggiorna ora · Mostra/Nascondi notch · Installa hook (sottomenu Claude/Codex con stato) · Avvio automatico (check) · Impostazioni… · Esci.
+- Menu destro: [Aggiorna alla versione X… — solo quando c'è un aggiornamento da proporre, vedi 15] · Aggiorna ora · Mostra/Nascondi notch · Installa hook (sottomenu Claude/Codex con stato) · Avvio automatico (check) · Impostazioni… · Esci.
 
 ### 8.2 Notch
 
@@ -236,6 +236,7 @@ Finestra WPF standard con sezioni:
 - Notch: monitor, offset verticale, ritardo di chiusura, dimensione (normale/compatta).
 - Hook: stato per agente, pulsanti Installa/Rimuovi, percorso del file eventi, pulsante "Apri cartella".
 - Notifiche: attiva per evento (attende input, finito, errore) e per agente.
+- Aggiornamenti: versione e variante in esecuzione, account GitHub collegato, ultimo controllo, stato e messaggio, avanzamento del download; pulsanti Collega GitHub e controlla · Controlla ora · Scarica · Installa e riavvia · Annulla collegamento · Scollega account · Apri release; note della release; controllo automatico (vedi 15).
 - Sistema: avvio automatico con Windows, apri cartella log.
 
 Le impostazioni vivono in `%LOCALAPPDATA%\AIUsageMonitor\settings.json` e si applicano senza riavvio.
@@ -244,14 +245,14 @@ Le impostazioni vivono in `%LOCALAPPDATA%\AIUsageMonitor\settings.json` e si app
 
 - `NotifyIcon.ShowBalloonTip` (Windows le mostra come toast native). Titolo "<Agente> · <sessione>", testo = messaggio dell'evento o "Turno completato" / "Errore API".
 - Emesse su transizione a `NeedsInput`, `Idle` (solo da `Working`, cioè turno completato) ed `Error`, con dedupe per (sessione, fase, messaggio) e finestra minima di 3 s tra toast dello stesso agente.
-- Click sulla toast: fissa aperto il notch.
+- Click sulla toast: fissa aperto il notch (argomento di attivazione `show-notch`). La toast "aggiornamento disponibile" usa `show-update` e apre la conferma di aggiornamento (15.4); argomenti sconosciuti vengono ignorati.
 
 ## 10. Sistema
 
 - Istanza singola tramite mutex `Local\AIUsageMonitor`; un secondo avvio fissa aperto il notch dell'istanza attiva (segnale via `EventWaitHandle`).
 - Avvio automatico: valore `AIUsageMonitor` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` con il percorso dell'exe corrente.
 - Log su file `%LOCALAPPDATA%\AIUsageMonitor\logs\app-<yyyyMMdd>.log`, 7 giorni conservati, livello Info; mai token né contenuti dei prompt.
-- Publish: `dotnet publish src/AIUsageMonitor.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true` produce un exe singolo che richiede il runtime .NET 10 Desktop. Variante `--self-contained true` documentata nel README.
+- Publish: `dotnet publish src/AIUsageMonitor.App -c Release -r win-x64 --no-self-contained -p:PublishSingleFile=true` produce un exe singolo che richiede il runtime .NET 10 Desktop (con l'SDK .NET 10, `--self-contained false` insieme a `PublishSingleFile` produce invece un exe self-contained). Variante `--self-contained true` documentata nel README. La build registra la variante nella `AssemblyMetadata` `AIUsageMonitor.SelfContained`, letta dall'updater.
 
 ## 11. Gestione errori
 
@@ -264,6 +265,9 @@ Le impostazioni vivono in `%LOCALAPPDATA%\AIUsageMonitor\settings.json` e si app
 | File di configurazione hook non parsabile | installer si ferma, nessuna scrittura, messaggio con percorso del file |
 | JSONL corrotto o riga incompleta | riga ignorata, parsing continua |
 | Eccezione non gestita | loggata, app resta attiva; il timer riparte al ciclo successivo |
+| Updater: account non collegato, sessione illeggibile o rifiutata (401/403 SSO/OAuth, 404) | nessun controllo automatico; nel gruppo Aggiornamenti un messaggio con il rimedio e l'account collegato |
+| Updater: rete assente, rate limit, release non valida, checksum non corrispondente | fase Errore con messaggio, nessun file lasciato in `updates\`; il controllo automatico riprova dopo 6 ore |
+| Updater: sostituzione dell'exe o avvio della nuova versione non riusciti | l'exe precedente torna al suo posto, l'app resta aperta con il messaggio d'errore |
 
 ## 12. Test
 
@@ -275,6 +279,8 @@ xUnit su `Core`, fixture reali sanificate in `tests/Fixtures/`:
 - `HookInstallerTests`: su un `settings.json` con hook preesistenti (Herdr, KB, toast) installa una sola volta, non duplica alla seconda esecuzione, rimuove solo le proprie voci, crea il backup, non scrive se il JSON è invalido. Stesso set per `hooks.json` Codex.
 - `HookEventReaderTests`: lettura incrementale, righe incomplete, rotazione.
 - `hook.cjs`: test Node minimale (`node --test`) con stdin simulato per Claude e Codex.
+- Updater: `UpdateSourceTests`, `ReleaseCatalogTests`, `UpdateUrlPolicyTests`, `GitHubReleaseTransportTests` (handler HTTP finto: redirect, header, classificazione errori, limiti, download con hash), `UpdateCredentialStoreTests`, `GitCredentialManagerLoginTests` (processo GCM finto e reale su `/bin/sh` fuori da Windows), `ExecutableSwapTests`, `UpdateServiceTests` e `UpdatePromptControllerTests` (tempo manuale con `ManualTimeProvider`).
+- `scripts/windows-release.test.mjs`: pianificazione della versione su un repository git temporaneo, nomi degli asset, `SHA256SUMS.txt`, note della release.
 
 Verifica manuale della UI a ogni milestone: avvio, linguetta, espansione, fissaggio, menu tray, impostazioni, toast.
 
@@ -292,3 +298,31 @@ Verifica manuale della UI a ogni milestone: avvio, linguetta, espansione, fissag
 - Nessun riferimento ad assistenti AI nei commit o nei file versionati.
 - Artefatti di lavoro generati (piani, handoff, `.superpowers/`) esclusi via `.git/info/exclude`.
 - Convenzione commit: `feat:`, `fix:`, `test:`, `docs:`, `chore:`.
+
+## 15. Aggiornamenti dalle release GitHub
+
+Porting del sistema di ChessAdvisor (updater Electron) su un exe .NET a file singolo senza installer.
+
+### 15.1 Rilasci
+
+- `.github/workflows/windows-release.yml` a ogni push su `main` (e `workflow_dispatch`), runner Windows, `contents: write`, concorrenza in coda.
+- `scripts/windows-release.mjs prepare`: versione = ultima release pubblicata (o `<Version>` del csproj dell'App se più alta) incrementata secondo i conventional commit (`feat` → minor, `!`/`BREAKING CHANGE` → major, altrimenti patch); un commit già rilasciato non produce una nuova release; HEAD che non discende dall'ultima release è un errore. Nessun file modificato: la versione arriva a `dotnet publish -p:Version`.
+- Test .NET e Node, publish delle varianti framework-dependent e self-contained single-file win-x64, smoke test (header MZ, `FileVersion`/`ProductVersion`, marcatore di variante), poi `publish`: bozza `v<versione>` con `AIUsageMonitor-<v>-win-x64.exe`, `AIUsageMonitor-<v>-win-x64-selfcontained.exe` e `SHA256SUMS.txt` (formato `sha256sum`), verifica delle dimensioni caricate, pubblicazione come Latest. Nessun commit del bot.
+
+### 15.2 Credenziali
+
+- Unica fonte: la sessione creata dall'app. Collegamento esplicito dal pulsante Collega GitHub e controlla: `git-credential-manager.exe get` della stessa installazione di Git for Windows trovata in PATH o nei percorsi standard, con `GCM_PROVIDER=github`, `GCM_GITHUB_AUTHMODES=browser`, un `GCM_NAMESPACE` nuovo a ogni collegamento, tracce disattivate e variabili `GIT_*`/`GCM_*` ereditate ripulite; stdin `protocol=https`/`host=github.com`, stdout al massimo 32 KB, timeout 3 minuti, annullabile. `store` non viene mai chiamato.
+- Sessione `{token, account}` cifrata con DPAPI (utente corrente, entropia dell'app) in `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json` (`version`, `cipher`, `data`), scritta in modo atomico. File assente = non collegato; file illeggibile = messaggio che chiede di ricollegarsi. Scollega account elimina il file. Token e account non compaiono mai nei log.
+
+### 15.3 Controllo e download
+
+- Sorgente fissata in build: `leonardostagliano/AIUsageMonitor`. Richieste solo verso l'API del repository, i download delle sue release e le CDN degli asset di GitHub, con redirect seguiti a mano (massimo 5) e ricontrollati; `Authorization` solo verso `api.github.com`; header `X-GitHub-Api-Version`; limiti di dimensione e di tempo (30 s per i metadati, 10 minuti per il download, 30 s di inattività); errori classificati (credenziali, SSO, restrizioni OAuth, permessi, non trovato, rate limit) con messaggi senza payload né URL.
+- Controllo: `GET /releases?per_page=100`, candidate solo release pubblicate e non pre-release con tag SemVer stabile ed esattamente un eseguibile della variante in esecuzione; vince la versione più alta. Automatico 15 s dopo l'avvio e poi ogni 6 ore, solo con account collegato e `UpdatesAutoCheck` attivo; rinviato durante login, download, installazione o con un download pronto.
+- Download: rilettura della release scelta (asset cambiato → errore), hash atteso da `SHA256SUMS.txt` e/o dal digest dell'asset (se entrambi devono coincidere), scrittura in streaming in `updates\AIUsageMonitor-<v>-<guid>.exe.part` con SHA-256 calcolato al volo, verifica di hash, dimensione e header `MZ`, rename senza `.part`. File obsoleti eliminati 30 s dopo l'avvio.
+
+### 15.4 Proposta e installazione
+
+- `UpdatePromptController` (porting di `updatePrompt.ts`): con controllo automatico attivo e installazione supportata offre una versione alla volta; la tray mostra "Aggiorna alla versione X…" e una toast (`show-update`, una volta per versione); la conferma copre download e installazione, "Più tardi" ignora quella versione fino al riavvio.
+- Tipi di installazione: sviluppo (non file singolo), cartella non scrivibile, piattaforma non Windows x64 → la nuova versione viene segnalata ma installazione integrata disattivata; altrimenti supportata.
+- Installazione: nuova verifica dell'hash e della versione scritta nell'eseguibile; `ExecutableSwap` copia la nuova versione accanto all'exe (`.new-<guid>`), ne verifica lo SHA-256, rinomina l'exe in esecuzione in `.old-<guid>` e mette la copia al suo posto; avvio della nuova versione con `--updated <pid>`; su errore ripristino dell'exe precedente. L'app si chiude subito (`Shutdown` → `OnExit`).
+- La nuova istanza con `--updated <pid>` attende l'uscita di quel processo (massimo 30 s, pid riciclato riconosciuto dall'orario di avvio) e riprova il mutex per 5 s; poi toast "AIUsageMonitor aggiornato". A ogni avvio i `.old-*`/`.new-*` rimasti accanto all'exe vengono eliminati dopo 10 s.
