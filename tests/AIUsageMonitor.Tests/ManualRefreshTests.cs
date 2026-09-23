@@ -156,6 +156,28 @@ public class ManualRefreshTests
     }
 
     [Fact]
+    public async Task Gate_cooldown_does_not_follow_changes_of_the_wall_clock()
+    {
+        var time = new ManualTimeProvider();
+        var gate = new ManualRefreshGate(time, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(15));
+        Assert.True(await gate.TryRunAsync(() => Task.CompletedTask));
+        var completedAt = time.GetUtcNow();
+
+        // Set back an hour: the button must not stay dead for 3610 s.
+        time.ShiftWallClock(TimeSpan.FromHours(-1));
+        Assert.Equal(TimeSpan.FromSeconds(10), gate.CooldownRemaining);
+        Assert.Equal(completedAt, gate.LastCompletedAt); // the label keeps the wall time of the refresh
+        time.Advance(TimeSpan.FromSeconds(10));
+        Assert.True(gate.CanStart);
+
+        // Set forward: the cooldown is not cut short either.
+        Assert.True(await gate.TryRunAsync(() => Task.CompletedTask));
+        time.ShiftWallClock(TimeSpan.FromHours(2));
+        Assert.Equal(TimeSpan.FromSeconds(10), gate.CooldownRemaining);
+        Assert.False(await gate.TryRunAsync(() => Task.CompletedTask));
+    }
+
+    [Fact]
     public async Task Gate_releases_the_button_after_the_timeout_and_reports_failures()
     {
         var time = new ManualTimeProvider();

@@ -65,8 +65,10 @@ models.dev non ha la cache a 1 ora né i moltiplicatori; OpenRouter è il listin
   3. se il listino o il tasso hanno più di 24 ore, il loro aggiornamento (mai forzato quando sono freschi).
 - Mentre il refresh è in corso l'icona ruota e i click vengono ignorati. Il refresh si considera concluso quando
   1 e 2 sono terminati, o dopo **15 s** di timeout; il 3 non viene atteso.
-- Dopo la conclusione il pulsante resta disabilitato per **10 s** (cooldown, icona attenuata), per non martellare
-  l'endpoint Anthropic.
+- Dopo la conclusione i click vengono ignorati per **10 s** (cooldown, icona attenuata), per non martellare
+  l'endpoint Anthropic. Il pulsante non viene mai disabilitato: un `Button` disabilitato non riceve il click, che
+  arriverebbe al pannello e fisserebbe o sbloccherebbe il notch. Il cooldown si misura sull'orologio monotono, così
+  un cambio dell'ora di sistema non lo allunga né lo accorcia.
 - Tooltip: "Aggiorna Claude Code" + "Aggiornato alle HH:mm:ss" dopo il primo refresh manuale; durante il cooldown
   "Di nuovo tra N s".
 - Il click è marcato `Handled` come fanno `FlatRowButton` e il nome della sessione: non fissa né sblocca il notch.
@@ -84,9 +86,13 @@ models.dev non ha la cache a 1 ora né i moltiplicatori; OpenRouter è il listin
   costi di tutte le sessioni dell'agente, non silenzioso. Non tocca `_lastTokenRefresh`.
 - `AppServices.RefreshAgentAsync(AgentKind)`: combina i due, avvia il punto 3 senza attenderlo, non solleva mai
   (gli errori vanno nel log); timeout di 15 s e cooldown li applica `ManualRefreshGate` (Core).
-- `AgentCardViewModel`: `RefreshCommand` (CanExecute falso durante refresh e cooldown), `IsRefreshing`,
-  `RefreshTooltip`. Cooldown con un `DispatcherTimer`; lo stato è per card e non sopravvive a un `Rebuild`, che è
-  accettabile.
+- `ManualRefreshGate` (Core): un refresh alla volta, timeout, cooldown; `TryRunAsync` ignora i click durante il
+  refresh e il cooldown. Cooldown sul timestamp monotono di `TimeProvider`, `LastCompletedAt` (ora di parete) solo per
+  l'etichetta "Aggiornato alle".
+- `AgentCardViewModel`: `RefreshCommand` sempre abilitato (vedi 4.1: è `ManualRefreshGate` a ignorare i click),
+  `IsRefreshing`, `RefreshOpacity` (icona attenuata durante il cooldown), `RefreshTooltip`. Nessun `DispatcherTimer`:
+  il tick di 1 s già presente nel notch (`TickClocks`) aggiorna icona e "Di nuovo tra N s" finché il cooldown dura.
+  Lo stato è per card e non sopravvive a un `Rebuild`, che è accettabile.
 - `Icons.xaml`: nuova geometria `RefreshIcon`; rotazione con `RotateTransform` animato da un `DataTrigger` su
   `IsRefreshing`, come il `PulseStoryboard` esistente.
 

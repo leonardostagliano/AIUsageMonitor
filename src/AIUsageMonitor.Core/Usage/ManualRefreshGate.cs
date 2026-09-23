@@ -11,6 +11,7 @@ public sealed class ManualRefreshGate
     private readonly object _gate = new();
     private bool _refreshing;
     private DateTimeOffset? _lastCompletedAt;
+    private long? _completedTimestamp;
 
     public ManualRefreshGate(TimeProvider time, TimeSpan cooldown, TimeSpan timeout)
     {
@@ -74,16 +75,21 @@ public sealed class ManualRefreshGate
             {
                 _refreshing = false;
                 _lastCompletedAt = _time.GetUtcNow();
+                _completedTimestamp = _time.GetTimestamp();
             }
             Raise();
         }
         return true;
     }
 
+    /// <summary>
+    /// On the monotonic clock: a wall clock set back (by hand, or by NTP after a resume) would stretch the cooldown by
+    /// as much, one set forward would cut it short. <see cref="LastCompletedAt"/> keeps the wall time for the label.
+    /// </summary>
     private TimeSpan CooldownLeft()
     {
-        if (_lastCompletedAt is not { } last) return TimeSpan.Zero;
-        var left = Cooldown - (_time.GetUtcNow() - last);
+        if (_completedTimestamp is not { } completed) return TimeSpan.Zero;
+        var left = Cooldown - _time.GetElapsedTime(completed);
         return left > TimeSpan.Zero ? left : TimeSpan.Zero;
     }
 
