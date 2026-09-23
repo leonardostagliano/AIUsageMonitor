@@ -45,7 +45,12 @@ public sealed class PricingService : IDisposable
     private readonly TimeProvider _time;
     private readonly Action<string, Exception?>? _logError;
     private readonly CancellationTokenSource _cts = new();
+
+    // Start may run on a pool thread while Dispose runs on the UI thread: the three fields below are guarded by _gate.
+    private readonly object _gate = new();
     private ITimer? _timer;
+    private bool _started;
+    private bool _disposed;
 
     public PricingService(PriceListService prices, ExchangeRateService rates, Func<bool> enabled, TimeProvider time,
         Action<string, Exception?>? logError = null)
@@ -75,11 +80,28 @@ public sealed class PricingService : IDisposable
     /// <summary>Raised when the list or the rate changed (or recorded an error), on the thread that changed them.</summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// Loads the local copies and schedules the checks. Only the first call does anything, and none after
+    /// <see cref="Dispose"/>; safe to call from any thread, also while another one disposes the service.
+    /// </summary>
     public void Start()
     {
+        lock (_gate)
+        {
+            if (_disposed || _started) return;
+            _started = true;
+        }
+
+        // File IO and listeners stay outside the lock.
         _prices.LoadLocal();
         _rates.LoadLocal();
-        _timer = _time.CreateTimer(_ => _ = RefreshIfStaleAsync(), null, FirstCheckDelay, CheckEvery);
+
+        lock (_gate)
+        {
+            // Disposed while the local copies were loading: no timer that nothing would dispose.
+            if (_disposed) return;
+            _timer = _time.CreateTimer(_ => _ = RefreshIfStaleAsync(), null, FirstCheckDelay, CheckEvery);
+        }
     }
 
     /// <summary>Downloads whatever is stale, both sources in parallel; nothing while costs are hidden. Never throws.</summary>
@@ -103,7 +125,15 @@ public sealed class PricingService : IDisposable
 
     public void Dispose()
     {
-        _timer?.Dispose();
+        ITimer? timer;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            timer = _timer;
+            _timer = null;
+        }
+        timer?.Dispose();
         _prices.Changed -= RaiseChanged;
         _rates.Changed -= RaiseChanged;
         _cts.Cancel();
