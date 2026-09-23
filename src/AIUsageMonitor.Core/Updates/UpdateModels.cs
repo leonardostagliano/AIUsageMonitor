@@ -103,6 +103,17 @@ public sealed record UpdateCredential(UpdateAuthSource Source, string? Token, st
 {
     public static UpdateCredential Connected(string token, string account) => new(UpdateAuthSource.GitHubApp, token, account, null);
     public static UpdateCredential Missing(CredentialFailure failure) => new(UpdateAuthSource.Anonymous, null, null, failure);
+
+    // Il ToString() generato dei record stamperebbe token e account: un'interpolazione distratta in un log li scriverebbe
+    // su disco. Qui compare solo se sono presenti.
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Source = ").Append(Source)
+            .Append(", Token = ").Append(Token is null ? "null" : "***")
+            .Append(", Account = ").Append(Account is null ? "null" : "***")
+            .Append(", Failure = ").Append(Failure?.ToString() ?? "null");
+        return true;
+    }
 }
 
 /// <summary>Un asset caricato di una release GitHub. <see cref="Digest"/> e' lo SHA-256 esadecimale minuscolo, se GitHub lo pubblica.</summary>
