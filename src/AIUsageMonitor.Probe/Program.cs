@@ -1,7 +1,9 @@
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Pricing;
 using AIUsageMonitor.Core.Usage;
+using System.Text.Json;
 
 if (args.Contains("--install-hooks"))
 {
@@ -15,6 +17,26 @@ if (args.Contains("--remove-hooks"))
     var inst = new HookInstaller(AppPaths.Default, new SystemClock());
     foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex })
         Console.WriteLine($"{agent.DisplayName()}: {inst.Remove(agent).Status}");
+    return;
+}
+if (args.Contains("--update-price-snapshot"))
+{
+    // Rigenera la copia del listino imbarcata nell'exe (stesso filtro della cache): dotnet run --project src/AIUsageMonitor.Probe -- --update-price-snapshot
+    var target = args.SkipWhile(a => a != "--update-price-snapshot").Skip(1).FirstOrDefault()
+                 ?? Path.Combine("src", "AIUsageMonitor.Core", "Pricing", "prices-snapshot.json");
+    using var http = new HttpClient();
+    http.DefaultRequestHeaders.UserAgent.ParseAdd("AIUsageMonitor");
+    using var list = JsonDocument.Parse(await http.GetStringAsync(PriceListServiceOptions.DefaultSourceUrl));
+    var models = LiteLlmPriceParser.Trim(list.RootElement, out var anthropic, out var openai);
+    if (anthropic == 0 || openai == 0)
+    {
+        // Lo stesso controllo del download dell'app: un listino così non va imbarcato.
+        Console.Error.WriteLine($"listino senza modelli Anthropic ({anthropic}) o OpenAI ({openai}): snapshot non scritto");
+        Environment.ExitCode = 1;
+        return;
+    }
+    PriceListService.WriteListFile(target, DateTimeOffset.UtcNow, null, PriceListServiceOptions.DefaultSourceUrl.ToString(), models);
+    Console.WriteLine($"{target}: {anthropic} modelli Anthropic, {openai} OpenAI");
     return;
 }
 
