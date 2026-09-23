@@ -32,7 +32,8 @@ public sealed record SubagentState(
     DateTimeOffset? EndedAt,
     string? TranscriptPath,
     TokenUsage Tokens,
-    string? Model = null);
+    string? Model = null,
+    UsageLedger? Ledger = null);
 
 public sealed record SessionState(
     AgentKind Agent,
@@ -51,7 +52,9 @@ public sealed record SessionState(
     // Timestamp of the last SubagentStart/SubagentStop, used by the timeout sweep.
     DateTimeOffset? LastSubagentEventAt = null,
     // Terminal host of the session, from the latest SessionStart/UserPromptSubmit that carried one.
-    HostInfo? Host = null)
+    HostInfo? Host = null,
+    // Usage split by model and price variant, what the cost is computed from (null until the first read).
+    UsageLedger? Ledger = null)
 {
     /// <summary>Italian label shown in the UI. Idle is "pronto" before the first completed turn, "finito" after.</summary>
     public string PhaseLabel => Phase switch
@@ -78,6 +81,15 @@ public sealed record SessionState(
     public TokenUsage SubagentTokens => Subagents is null
         ? TokenUsage.Zero
         : Subagents.Aggregate(TokenUsage.Zero, (acc, s) => acc + s.Tokens);
+
+    /// <summary>Ledger of every known subagent (running and done): the cost of the whole conversation includes them.</summary>
+    public UsageLedger SubagentLedger => Subagents is null
+        ? UsageLedger.Empty
+        : Subagents.Aggregate(UsageLedger.Empty, (acc, s) => s.Ledger is null ? acc : acc + s.Ledger);
+
+    /// <summary>Ledger of the running subagents only, like <see cref="ActiveSubagentTokens"/>.</summary>
+    public UsageLedger ActiveSubagentLedger =>
+        RunningSubagents.Aggregate(UsageLedger.Empty, (acc, s) => s.Ledger is null ? acc : acc + s.Ledger);
 }
 
 /// <summary>One line of ~/.aiusagemonitor/events.jsonl as written by hook.cjs.</summary>

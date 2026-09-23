@@ -6,7 +6,9 @@ namespace AIUsageMonitor.App.Startup;
 
 /// <summary>
 /// The <see cref="ITokenSource"/> the pump asks for totals: Claude Code counts the transcript of the session and of
-/// every subagent it spawned, Codex reads the cumulative total of the thread and of its child threads.
+/// every subagent it spawned, Codex reads the cumulative total of the thread and of its child threads. The ledgers
+/// come from the same Claude counter state (no extra transcript read) and, for Codex, from an incremental forward read
+/// of the rollout.
 /// </summary>
 /// <remarks>
 /// Every member runs on the pump thread — that is where <see cref="HookEventPump"/> does its IO — and so does
@@ -23,6 +25,10 @@ public sealed class AppTokenSource : ITokenSource
     private readonly ClaudeTranscriptTokenCounter _claude = new();
     private readonly ClaudeAgentTranscriptLocator _claudeAgents = new();
     private readonly CodexTokenCounter _codex;
+    private readonly CodexUsageLedgerReader _codexLedgers = new();
+
+    /// <summary>Rollout read for each Codex thread id, so <see cref="Forget"/> can drop its ledger state.</summary>
+    private readonly Dictionary<string, string> _codexRollouts = new(StringComparer.OrdinalIgnoreCase);
 
     public AppTokenSource(AppPaths paths, IClock clock) => _codex = new CodexTokenCounter(paths.CodexSessionsDir, clock);
 
@@ -84,10 +90,64 @@ public sealed class AppTokenSource : ITokenSource
         return models.Count == 0 ? null : models;
     }
 
+    public UsageLedger? SessionLedger(SessionState session)
+    {
+        if (session.Agent == AgentKind.Codex) return CodexLedger(session.SessionId);
+        if (string.IsNullOrWhiteSpace(session.TranscriptPath)) return null;
+        return NullIfEmpty(_claude.LedgerOf(session.TranscriptPath));
+    }
+
+    public IReadOnlyDictionary<string, UsageLedger>? SubagentLedgers(SessionState session)
+    {
+        if (session.Subagents is not { Count: > 0 }) return null;
+
+        var ledgers = new Dictionary<string, UsageLedger>(StringComparer.Ordinal);
+        foreach (var subagent in session.Subagents)
+        {
+            UsageLedger? ledger;
+            if (session.Agent == AgentKind.Codex)
+                ledger = CodexLedger(subagent.AgentId, reuseKnownRollout: subagent.Phase == SubagentPhase.Done);
+            else
+            {
+                // Same path SubagentTokens has just read, so the counter state behind LedgerOf is current.
+                var path = subagent.TranscriptPath
+                           ?? _claudeAgents.Locate(session.TranscriptPath, session.SessionId, subagent.AgentId);
+                ledger = string.IsNullOrWhiteSpace(path) ? null : NullIfEmpty(_claude.LedgerOf(path));
+            }
+            if (ledger is not null) ledgers[subagent.AgentId] = ledger;
+        }
+        return ledgers.Count == 0 ? null : ledgers;
+    }
+
+    /// <param name="reuseKnownRollout">
+    /// True for a finished child: the rollout it was last read from is read again as is. Resolving it anew would cost
+    /// a recursive scan of the sessions directory per finished child every <see cref="CodexTokenCounter.CacheTtl"/>,
+    /// while the incremental read of a known rollout only opens it and parses what was appended since.
+    /// </param>
+    private UsageLedger? CodexLedger(string threadId, bool reuseKnownRollout = false)
+    {
+        string? path;
+        if (!reuseKnownRollout || !_codexRollouts.TryGetValue(threadId, out path))
+        {
+            if (!_codex.TryResolveRollout(threadId, out path) || path is null) return null;
+            // The thread now resolves to another rollout: the state read from the previous one would otherwise stay
+            // until the app exits (Forget is always safe, a later Read rebuilds the state from the start of the file).
+            if (_codexRollouts.TryGetValue(threadId, out var previous) && !string.Equals(previous, path, StringComparison.OrdinalIgnoreCase))
+                _codexLedgers.Forget(previous);
+            _codexRollouts[threadId] = path;
+        }
+        return NullIfEmpty(_codexLedgers.Read(path));
+    }
+
     /// <summary>Drops the per-transcript state of a session that is gone, with that of its subagents.</summary>
     public void Forget(SessionState session)
     {
-        if (session.Agent == AgentKind.Codex) return;
+        if (session.Agent == AgentKind.Codex)
+        {
+            ForgetCodex(session.SessionId);
+            foreach (var subagent in session.Subagents ?? []) ForgetCodex(subagent.AgentId);
+            return;
+        }
         if (!string.IsNullOrWhiteSpace(session.TranscriptPath)) _claude.Forget(session.TranscriptPath);
         foreach (var subagent in session.Subagents ?? [])
         {
@@ -98,5 +158,12 @@ public sealed class AppTokenSource : ITokenSource
         }
     }
 
+    private void ForgetCodex(string threadId)
+    {
+        if (_codexRollouts.Remove(threadId, out var path)) _codexLedgers.Forget(path);
+    }
+
     private static TokenUsage? NullIfEmpty(TokenUsage usage) => usage.Total > 0 ? usage : null;
+
+    private static UsageLedger? NullIfEmpty(UsageLedger ledger) => ledger.IsEmpty ? null : ledger;
 }
