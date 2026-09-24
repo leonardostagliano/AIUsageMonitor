@@ -121,6 +121,32 @@ public class WaitingAndIdleTests
     }
 
     [Fact]
+    public void A_main_agent_that_resumes_on_its_own_after_idle_prompt_goes_back_to_work()
+    {
+        using var dir = new TempDir();
+        var clock = new FakeClock(T0.AddMinutes(5));
+        var probe = new FakeProcessProbe().Start(10, T0.AddSeconds(-1).UtcDateTime.ToFileTimeUtc());
+        var tracker = new SessionTracker(clock);
+        var feed = new ClaudeRegistrySessionFeed(new ClaudeSessionRegistryReader(dir.Path), probe, clock);
+        bool HookOwned(string _) => true;
+
+        // The turn ends, nobody answers, Claude Code says it is waiting: no agent anywhere.
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("Stop", 30));
+        tracker.Apply(Ev("Notification", 90, notificationType: "idle_prompt"));
+        Record(dir.Path, 10, "s1", "idle", T0, T0.AddSeconds(30));
+        Assert.Empty(feed.Sync(tracker.Sessions, HookOwned).Events);
+        Assert.Equal(SessionPhase.NeedsInput, tracker.Sessions.Single().Phase);
+
+        // A background command finishes (or a scheduled check-in fires) and the main agent works again with no
+        // UserPromptSubmit: only its registry record says so.
+        Record(dir.Path, 10, "s1", "busy", T0, T0.AddSeconds(120));
+        foreach (var e in feed.Sync(tracker.Sessions, HookOwned).Events) tracker.Apply(e);
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase);
+        Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
+    }
+
+    [Fact]
     public void Idle_app_conversations_are_adopted_only_while_recent_and_spare_processes_never()
     {
         using var dir = new TempDir();
