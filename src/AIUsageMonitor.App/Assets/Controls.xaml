@@ -364,10 +364,13 @@
     </Style.Triggers>
   </Style>
 
-  <!-- ProgressBar da 8 px con il gradiente del tono normale e il riflesso (download degli aggiornamenti). ProgressBar
-       dimensiona da solo PART_Indicator rispetto a PART_Track, quindi i due nomi sono obbligatori. Il riflesso gira
-       solo con le animazioni di Windows attive e solo mentre la barra e' visibile; in modo indeterminato l'indicatore
-       pulsa, alle stesse condizioni. -->
+  <!-- ProgressBar da 8 px con il gradiente del tono normale e il riflesso (download degli aggiornamenti).
+       In modo determinato la disegna UsageBar, che porta il riempimento di 300 ms dal valore precedente (spec 5) e il
+       riflesso: ProgressBar imposterebbe la larghezza di PART_Indicator a scatti. UsageBar legge Value come
+       percentuale, quindi lo stile vale per Minimum 0 e Maximum 100, come tutte le ProgressBar dell'app. Resta una
+       ProgressBar, cosi' UI Automation continua a leggerne il valore.
+       In modo indeterminato ProgressBar allarga PART_Indicator (nome obbligatorio, come PART_Track) a tutta la traccia:
+       l'indicatore pulsa e ha un riflesso suo, solo con le animazioni di Windows attive e a barra visibile. -->
   <Style TargetType="ProgressBar">
     <Setter Property="Foreground" Value="{StaticResource ToneNormalBrush}"/>
     <Setter Property="Background" Value="{StaticResource BarTrack}"/>
@@ -377,8 +380,10 @@
       <Setter.Value>
         <ControlTemplate TargetType="ProgressBar">
           <Grid x:Name="PART_Track">
-            <Border Background="{TemplateBinding Background}" CornerRadius="4"/>
-            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left">
+            <c:UsageBar x:Name="Bar" Value="{TemplateBinding Value}" ShowSheen="True"/>
+            <Border x:Name="IndeterminateTrack" Background="{TemplateBinding Background}" CornerRadius="4" Visibility="Collapsed"/>
+            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left"
+                    Visibility="Collapsed">
               <!-- Il riflesso copre tutta la parte piena, con gli stessi angoli arrotondati. La banda sta nel pennello
                    (il 40 % della larghezza, come in UsageBar) e scorre spostandone la RelativeTransform, in frazioni
                    della parte piena: da -0,4 (appena fuori a sinistra) a 1 (appena fuori a destra), qualunque sia la
@@ -396,9 +401,16 @@
             </Border>
           </Grid>
           <ControlTemplate.Triggers>
-            <!-- Passaggio in 1,7 s, poi pausa fino a 2,8 s (spec, sezione 5). -->
+            <Trigger Property="IsIndeterminate" Value="True">
+              <Setter TargetName="Bar" Property="Visibility" Value="Collapsed"/>
+              <Setter TargetName="IndeterminateTrack" Property="Visibility" Value="Visible"/>
+              <Setter TargetName="PART_Indicator" Property="Visibility" Value="Visible"/>
+            </Trigger>
+            <!-- Riflesso dell'indicatore indeterminato: passaggio in 1,7 s, poi pausa fino a 2,8 s (spec, sezione 5). In
+                 modo determinato il riflesso e' quello di UsageBar e questo ciclo non parte. -->
             <MultiDataTrigger>
               <MultiDataTrigger.Conditions>
+                <Condition Binding="{Binding IsIndeterminate, RelativeSource={RelativeSource Self}}" Value="True"/>
                 <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
                 <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
               </MultiDataTrigger.Conditions>
