@@ -8,13 +8,13 @@
   <!-- Voce semplice: colonna fissa per il segno di spunta, cosi' le etichette restano allineate anche quando
        "Avvio automatico" e' attivo. -->
   <ControlTemplate x:Key="TrayMenuItemTemplate" TargetType="MenuItem">
-    <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}" Margin="0,1">
+    <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="{TemplateBinding Padding}" Margin="0,1">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="18"/>
           <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
-        <Path x:Name="Check" Width="18" Height="18" Data="M3,9 L7,13 L15,5" Stroke="{StaticResource Accent}" StrokeThickness="2"
+        <Path x:Name="Check" Width="18" Height="18" Data="M3,9 L7,13 L15,5" Stroke="{StaticResource Toggle}" StrokeThickness="2"
               StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" VerticalAlignment="Center"
               Visibility="Hidden"/>
         <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center"
@@ -35,7 +35,7 @@
        aprire e chiudere il sottomenu. AllowsTransparency serve agli angoli arrotondati. -->
   <ControlTemplate x:Key="TrayMenuHeaderTemplate" TargetType="MenuItem">
     <Grid>
-      <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}" Margin="0,1">
+      <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="{TemplateBinding Padding}" Margin="0,1">
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="18"/>
@@ -51,8 +51,8 @@
       </Border>
       <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="2" VerticalOffset="-7"
              IsOpen="{TemplateBinding IsSubmenuOpen}" AllowsTransparency="True" PopupAnimation="Fade" Focusable="False">
-        <Border Background="{StaticResource WindowBackground}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1"
-                CornerRadius="10" Padding="6" MinWidth="180">
+        <Border Background="{StaticResource Card}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1"
+                CornerRadius="14" Padding="6" MinWidth="180">
           <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
         </Border>
       </Popup>
@@ -69,10 +69,10 @@
 
   <Style x:Key="TrayMenuItem" TargetType="MenuItem">
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
-    <Setter Property="Padding" Value="10,0"/>
-    <Setter Property="MinHeight" Value="32"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Padding" Value="12,0"/>
+    <Setter Property="MinHeight" Value="34"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template" Value="{StaticResource TrayMenuItemTemplate}"/>
     <Style.Triggers>
@@ -83,9 +83,27 @@
     </Style.Triggers>
   </Style>
 
+  <!-- "Aggiorna alla versione X…": capsula bianca in cima al menu, l'unica voce che chiede un'azione. -->
+  <Style x:Key="TrayMenuAccentItem" TargetType="MenuItem" BasedOn="{StaticResource TrayMenuItem}">
+    <Setter Property="Foreground" Value="{StaticResource AccentText}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="MenuItem">
+          <Border x:Name="Bd" Background="{StaticResource Accent}" CornerRadius="17" Padding="{TemplateBinding Padding}" Margin="0,1,0,3">
+            <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center" Margin="26,0,0,0"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.9"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <Style x:Key="TrayMenuSeparator" TargetType="Separator">
-    <Setter Property="Background" Value="{StaticResource NotchBorder}"/>
-    <Setter Property="Margin" Value="8,5"/>
+    <Setter Property="Background" Value="{StaticResource Hairline}"/>
+    <Setter Property="Margin" Value="10,5"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Separator">
@@ -97,8 +115,8 @@
 
   <Style x:Key="TrayContextMenu" TargetType="ContextMenu">
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
     <!-- HasDropShadow governa AllowsTransparency del Popup che ospita il menu: senza finestra a livelli gli angoli
          arrotondati verrebbero riempiti di nero. L'ombra vera e propria la disegnerebbe il template di default, che
@@ -107,8 +125,8 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ContextMenu">
-          <Border Background="{StaticResource WindowBackground}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1"
-                  CornerRadius="10" Padding="6" MinWidth="200">
+          <Border Background="{StaticResource Card}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1"
+                  CornerRadius="14" Padding="6" MinWidth="220">
             <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
           </Border>
         </ControlTemplate>
