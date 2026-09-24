@@ -52,6 +52,7 @@ public sealed class TrayIconController : IDisposable
         _menu = new ContextMenu { Style = Resource<Style>("TrayContextMenu") };
         // In cima, visibile solo quando c'e' una versione da offrire: etichetta e visibilita' le rilegge RefreshMenuState.
         _update = Item("Aggiorna…", () => OpenUpdatePrompt?.Invoke());
+        _update.Style = Resource<Style>("TrayMenuAccentItem");
         _update.Visibility = Visibility.Collapsed;
         _menu.Items.Add(_update);
         _updateSeparator = new Separator { Style = Resource<Style>("TrayMenuSeparator"), Visibility = Visibility.Collapsed };
