@@ -1,159 +1,306 @@
 <Window x:Class="AIUsageMonitor.App.Settings.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AIUsageMonitor · Impostazioni" Width="560" MinWidth="520" SizeToContent="Height" ResizeMode="CanResize"
+        xmlns:c="clr-namespace:AIUsageMonitor.App.Controls"
+        Title="AIUsageMonitor · Impostazioni" Width="760" Height="620" MinWidth="700" MinHeight="520" ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen" Background="{StaticResource WindowBackground}"
-        FontFamily="Segoe UI Variable, Segoe UI" FontSize="12" Foreground="{StaticResource TextPrimary}">
-  <!-- Nessuno stile locale: i controlli prendono quelli impliciti scuri di Assets/Controls.xaml (margini, raggi,
-       padding compresi), cosi' la finestra e il notch restano coerenti. La barra del titolo la scurisce DWM in
-       OnSourceInitialized (DarkTitleBar), il tetto all'altezza lo mette ApplyWorkAreaCap con l'area di lavoro del
-       monitor reale: su schermi bassi la ScrollViewer mostra la barra invece di far tagliare il contenuto. -->
-  <ScrollViewer x:Name="Scroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <StackPanel Margin="18,16,18,14">
+        FontFamily="{StaticResource TextFont}" FontSize="13" Foreground="{StaticResource TextPrimary}">
+  <!-- Impostazioni "Premium" (spec 2026-09-24, sezione 7): schede segmentate, una sezione per scheda, card con
+       interruttori e stepper; Salva e Annulla valgono per tutte le schede. Nessuno stile locale per i controlli: sono
+       quelli impliciti di Assets/Controls.xaml. La barra del titolo la scurisce DWM in OnSourceInitialized. -->
+  <Window.Resources>
+    <Style x:Key="Caption" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+    <Style x:Key="CardTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,0,0,12"/>
+    </Style>
+    <Style x:Key="TabScroll" TargetType="ScrollViewer">
+      <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+      <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+      <Setter Property="Padding" Value="0,0,6,0"/>
+    </Style>
+    <!-- Stato dell'aggiornamento nell'intestazione: SuccessText quando la versione e' aggiornata (spec 7.1). Il valore
+         confrontato e' l'etichetta di UpdatePhase.UpToDate in UpdatesViewModel.PhaseLabel. -->
+    <Style x:Key="UpdatePhaseRun" TargetType="Run">
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding Updates.PhaseText, Mode=OneWay}" Value="Aggiornata">
+          <Setter Property="Foreground" Value="{StaticResource SuccessText}"/>
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+  </Window.Resources>
 
-      <GroupBox Header="AGENTI">
-        <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-          <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-          <CheckBox Content="Claude Code" IsChecked="{Binding ClaudeEnabled}"/>
-          <Label Grid.Column="1" Content="refresh (s)"/>
-          <TextBox Grid.Column="2" Text="{Binding ClaudeRefreshSeconds, UpdateSourceTrigger=PropertyChanged}"/>
-          <CheckBox Grid.Row="1" Content="Codex" IsChecked="{Binding CodexEnabled}"/>
-          <Label Grid.Row="1" Grid.Column="1" Content="refresh (s)"/>
-          <TextBox Grid.Row="1" Grid.Column="2" Text="{Binding CodexRefreshSeconds, UpdateSourceTrigger=PropertyChanged}"/>
-          <CheckBox Grid.Row="2" Grid.ColumnSpan="3" Content="Codex: rileva i thread figli dai rollout" IsChecked="{Binding CodexSubagentFallback}"
-                    ToolTip="Conta i thread figli di Codex leggendo i file di rollout, utile finché i gruppi hook di Codex non sono approvati con /hooks. Per le sessioni i cui hook riportano già i subagenti viene ignorato automaticamente."/>
-        </Grid>
-      </GroupBox>
+  <Grid Margin="28,16,28,20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
 
-      <GroupBox Header="NOTCH">
-        <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-          <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-          <Label Content="Monitor"/>
-          <ComboBox Grid.Column="1" ItemsSource="{Binding Monitors}" SelectedIndex="{Binding MonitorIndex}"/>
-          <Label Grid.Row="1" Content="Offset verticale (px)"/>
-          <TextBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" Text="{Binding VerticalOffset, UpdateSourceTrigger=PropertyChanged}"/>
-          <Label Grid.Row="2" Content="Ritardo di chiusura (ms)"/>
-          <TextBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Left" Text="{Binding CollapseDelayMs, UpdateSourceTrigger=PropertyChanged}"/>
-          <CheckBox Grid.Row="3" Grid.ColumnSpan="2" Content="Modalità compatta (icone più piccole)" IsChecked="{Binding Compact}"/>
-        </Grid>
-      </GroupBox>
+    <DockPanel Margin="0,0,0,16">
+      <TextBlock DockPanel.Dock="Right" Style="{StaticResource Caption}" VerticalAlignment="Bottom" Margin="0,0,0,6" TextWrapping="NoWrap">
+        <Run Text="Versione "/><Run Text="{Binding Updates.VersionText, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding Updates.PhaseText, Mode=OneWay}" Style="{StaticResource UpdatePhaseRun}"/>
+      </TextBlock>
+      <TextBlock Text="Impostazioni" FontFamily="{StaticResource DisplayFont}" FontSize="30" FontWeight="SemiBold"/>
+    </DockPanel>
 
-      <GroupBox Header="HOOK (STATO LIVE)">
-        <StackPanel>
-          <TextBlock Text="{Binding ClaudeHookStatus, StringFormat=Claude Code: {0}}" Margin="0,2" TextWrapping="Wrap"/>
-          <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-            <Button Content="Installa" Command="{Binding InstallClaudeHooksCommand}"/>
-            <Button Content="Rimuovi" Command="{Binding RemoveClaudeHooksCommand}"/>
-          </StackPanel>
-          <TextBlock Text="{Binding CodexHookStatus, StringFormat=Codex: {0}}" Margin="0,10,0,2" TextWrapping="Wrap"/>
-          <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-            <Button Content="Installa" Command="{Binding InstallCodexHooksCommand}"/>
-            <Button Content="Rimuovi" Command="{Binding RemoveCodexHooksCommand}"/>
-          </StackPanel>
-          <TextBlock Text="{Binding EventsFile}" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0,10,0,4" TextTrimming="CharacterEllipsis"/>
-          <Button Content="Apri cartella" Command="{Binding OpenEventsFolderCommand}" HorizontalAlignment="Left"/>
-        </StackPanel>
-      </GroupBox>
-
-      <GroupBox Header="NOTIFICHE">
-        <StackPanel>
-          <CheckBox Content="Attende input" IsChecked="{Binding NotifyNeedsInput}"/>
-          <CheckBox Content="Turno completato" IsChecked="{Binding NotifyTurnCompleted}"/>
-          <CheckBox Content="Errore" IsChecked="{Binding NotifyError}"/>
-          <Separator/>
-          <CheckBox Content="Da Claude Code" IsChecked="{Binding NotifyClaude}"/>
-          <CheckBox Content="Da Codex" IsChecked="{Binding NotifyCodex}"/>
-        </StackPanel>
-      </GroupBox>
-
-      <GroupBox Header="COSTI">
-        <StackPanel>
-          <CheckBox Content="Mostra costi (prezzi API di listino)" IsChecked="{Binding ShowCosts}"
-                    ToolTip="Costo API equivalente in euro accanto ai token: listino LiteLLM (prezzi pubblicati da Anthropic e OpenAI) e tasso di riferimento BCE. Con un abbonamento non è la spesa reale. Spento, l'app non scarica né listino né tasso."/>
-          <Grid Margin="0,4,0,0">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <Label Content="Tasso di riserva: 1 € ="/>
-            <!-- Testo, non double: FallbackRateInput accetta "1,14" e "1.14" (il convertitore di WPF in it-IT leggeva
-                 "1.14" come 114). PropertyChanged: l'errore e lo stato di Salva seguono ogni tasto. -->
-            <TextBox Grid.Column="1" MinWidth="60" Text="{Binding UsdPerEurText, UpdateSourceTrigger=PropertyChanged}"
-                     ToolTip="Usato solo quando il tasso BCE non è disponibile (tra 0,5 e 2). Virgola o punto per i decimali."/>
-            <Label Grid.Column="2" Content="$"/>
-          </Grid>
-          <TextBlock Text="{Binding UsdPerEurError}" Visibility="{Binding UsdPerEurErrorVisibility}"
-                     Foreground="{StaticResource Amber}" TextWrapping="Wrap" Margin="0,2,0,0"/>
-          <TextBlock Text="{Binding PricingStatus}" Foreground="{StaticResource TextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,4"/>
-          <Button Content="Apri cartella dati" Command="{Binding OpenDataFolderCommand}" HorizontalAlignment="Left"
-                  ToolTip="Qui puoi creare prices-override.json per aggiungere o correggere il prezzo di un modello."/>
-        </StackPanel>
-      </GroupBox>
-
-      <!-- Stato e comandi dal vivo di UpdateService (UpdatesViewModel, proprieta' Updates): non passano da Salva/Annulla.
-           Solo "Controlla automaticamente" e' una preferenza della bozza, salvata insieme alle altre. -->
-      <GroupBox x:Name="UpdatesGroup" Header="AGGIORNAMENTI">
-        <StackPanel>
+    <TabControl x:Name="Tabs" Grid.Row="1" SelectedIndex="{Binding SelectedTabIndex}" SelectionChanged="Tabs_SelectionChanged">
+      <TabItem Header="Agenti">
+        <ScrollViewer Style="{StaticResource TabScroll}">
           <Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-            <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-            <Label Content="Versione corrente"/>
-            <TextBlock Grid.Column="1" Text="{Binding Updates.VersionText, Mode=OneWay}" VerticalAlignment="Center" TextWrapping="Wrap"/>
-            <Label Grid.Row="1" Content="Account GitHub"/>
-            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Updates.AccountText, Mode=OneWay}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-            <Label Grid.Row="2" Content="Ultimo controllo"/>
-            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Updates.LastCheckText, Mode=OneWay}" VerticalAlignment="Center"/>
-            <Label Grid.Row="3" Content="Stato"/>
-            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Updates.PhaseText, Mode=OneWay}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="14"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Style="{StaticResource CardBorder}" Padding="0" VerticalAlignment="Top">
+              <Border CornerRadius="18" Background="{StaticResource ClaudeGlow}" Padding="18">
+                <StackPanel>
+                  <DockPanel Margin="0,0,0,18">
+                    <CheckBox DockPanel.Dock="Right" IsChecked="{Binding ClaudeEnabled}" Margin="0" AutomationProperties.Name="Monitora Claude Code"/>
+                    <Grid Width="40" Height="40" Margin="0,0,12,0">
+                      <Ellipse Fill="{StaticResource BrandClaude}"/>
+                      <Path Data="{StaticResource ClaudeIcon}" Fill="White" Width="20" Height="20" Stretch="Uniform"/>
+                    </Grid>
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock Text="Claude Code" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="{Binding ClaudePlan, Mode=OneWay}" Style="{StaticResource Caption}" Visibility="{Binding ClaudePlanVisibility, Mode=OneWay}"/>
+                    </StackPanel>
+                  </DockPanel>
+                  <TextBlock Text="Aggiorna la quota ogni" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+                  <c:NumberStepper Value="{Binding ClaudeRefreshSeconds}" Minimum="30" Maximum="600" Step="10" Unit="s"
+                                   AutomationProperties.Name="Secondi tra due aggiornamenti della quota di Claude Code"/>
+                </StackPanel>
+              </Border>
+            </Border>
+            <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="0" VerticalAlignment="Top">
+              <Border CornerRadius="18" Background="{StaticResource CodexGlow}" Padding="18">
+                <StackPanel>
+                  <DockPanel Margin="0,0,0,18">
+                    <CheckBox DockPanel.Dock="Right" IsChecked="{Binding CodexEnabled}" Margin="0" AutomationProperties.Name="Monitora Codex"/>
+                    <Grid Width="40" Height="40" Margin="0,0,12,0">
+                      <Ellipse Fill="{StaticResource BrandCodex}"/>
+                      <Path Data="{StaticResource CodexIcon}" Fill="White" Width="20" Height="20" Stretch="Uniform"/>
+                    </Grid>
+                    <StackPanel VerticalAlignment="Center">
+                      <TextBlock Text="Codex" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="{Binding CodexPlan, Mode=OneWay}" Style="{StaticResource Caption}" Visibility="{Binding CodexPlanVisibility, Mode=OneWay}"/>
+                    </StackPanel>
+                  </DockPanel>
+                  <TextBlock Text="Aggiorna la quota ogni" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+                  <c:NumberStepper Value="{Binding CodexRefreshSeconds}" Minimum="10" Maximum="600" Step="10" Unit="s"
+                                   AutomationProperties.Name="Secondi tra due aggiornamenti della quota di Codex"/>
+                  <CheckBox Content="Thread figli dai rollout" IsChecked="{Binding CodexSubagentFallback}" Margin="0,16,0,0"
+                            ToolTip="Conta i thread figli di Codex leggendo i file di rollout, utile finché i gruppi hook di Codex non sono approvati con /hooks. Per le sessioni i cui hook riportano già i subagenti viene ignorato automaticamente."/>
+                </StackPanel>
+              </Border>
+            </Border>
           </Grid>
+        </ScrollViewer>
+      </TabItem>
 
-          <!-- Messaggio dello stato: grigio di norma, Amber nella fase Error (due TextBlock per non introdurre stili
-               locali). Gli errori sono Amber come i messaggi di stato del notch: Red sulla card (#2D2D31) si ferma a
-               4.1:1, sotto il minimo 4.5:1 del testo normale. -->
-          <TextBlock Text="{Binding Updates.Message, Mode=OneWay}" Visibility="{Binding Updates.MessageVisibility, Mode=OneWay}"
-                     Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-          <TextBlock Text="{Binding Updates.Message, Mode=OneWay}" Visibility="{Binding Updates.ErrorMessageVisibility, Mode=OneWay}"
-                     Foreground="{StaticResource Amber}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-          <TextBlock Text="{Binding Updates.CommandError, Mode=OneWay}" Visibility="{Binding Updates.CommandErrorVisibility, Mode=OneWay}"
-                     Foreground="{StaticResource Amber}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+      <TabItem Header="Notch">
+        <ScrollViewer Style="{StaticResource TabScroll}">
+          <Border Style="{StaticResource CardBorder}" VerticalAlignment="Top">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <TextBlock Text="Monitor" VerticalAlignment="Center"/>
+              <ComboBox Grid.Column="1" ItemsSource="{Binding Monitors}" SelectedIndex="{Binding MonitorIndex}" AutomationProperties.Name="Monitor"/>
+              <TextBlock Grid.Row="1" Text="Offset verticale" VerticalAlignment="Center" Margin="0,16,0,0"/>
+              <c:NumberStepper Grid.Row="1" Grid.Column="1" Width="240" HorizontalAlignment="Left" Margin="0,16,0,0"
+                               Value="{Binding VerticalOffset}" Minimum="-5000" Maximum="5000" Step="10" Unit="px"
+                               AutomationProperties.Name="Offset verticale in pixel"/>
+              <TextBlock Grid.Row="2" Text="Ritardo di chiusura" VerticalAlignment="Center" Margin="0,16,0,0"/>
+              <c:NumberStepper Grid.Row="2" Grid.Column="1" Width="240" HorizontalAlignment="Left" Margin="0,16,0,0"
+                               Value="{Binding CollapseDelayMs}" Minimum="0" Maximum="5000" Step="50" Unit="ms"
+                               AutomationProperties.Name="Ritardo di chiusura in millisecondi"/>
+              <CheckBox Grid.Row="3" Grid.ColumnSpan="2" Content="Modalità compatta (icone più piccole)" IsChecked="{Binding Compact}" Margin="0,18,0,0"/>
+            </Grid>
+          </Border>
+        </ScrollViewer>
+      </TabItem>
 
-          <StackPanel Visibility="{Binding Updates.ProgressVisibility, Mode=OneWay}" Margin="0,8,0,0">
-            <ProgressBar Minimum="0" Maximum="100" Value="{Binding Updates.ProgressValue, Mode=OneWay}"/>
-            <TextBlock Text="{Binding Updates.ProgressText, Mode=OneWay}" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0,4,0,0"/>
+      <TabItem Header="Hook">
+        <ScrollViewer Style="{StaticResource TabScroll}">
+          <StackPanel>
+            <Border Style="{StaticResource CardBorder}">
+              <StackPanel>
+                <DockPanel>
+                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="Installa" Command="{Binding InstallClaudeHooksCommand}"/>
+                    <Button Content="Rimuovi" Command="{Binding RemoveClaudeHooksCommand}" Margin="0"/>
+                  </StackPanel>
+                  <Ellipse Width="10" Height="10" Fill="{Binding ClaudeHookBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                  <TextBlock Text="Claude Code" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <TextBlock Text="{Binding ClaudeHookStatus}" Style="{StaticResource Caption}" Margin="20,8,0,0"/>
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorder}">
+              <StackPanel>
+                <DockPanel>
+                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="Installa" Command="{Binding InstallCodexHooksCommand}"/>
+                    <Button Content="Rimuovi" Command="{Binding RemoveCodexHooksCommand}" Margin="0"/>
+                  </StackPanel>
+                  <Ellipse Width="10" Height="10" Fill="{Binding CodexHookBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                  <TextBlock Text="Codex" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <TextBlock Text="{Binding CodexHookStatus}" Style="{StaticResource Caption}" Margin="20,8,0,0"/>
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorder}">
+              <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Apri cartella" Command="{Binding OpenEventsFolderCommand}" Margin="0"/>
+                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                  <TextBlock Text="File eventi" FontWeight="SemiBold"/>
+                  <TextBlock Text="{Binding EventsFile}" Style="{StaticResource Caption}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
           </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-          <WrapPanel Margin="0,8,0,0">
-            <Button Content="Collega GitHub e controlla" Command="{Binding Updates.ConnectCommand}" Style="{StaticResource PrimaryButton}"/>
-            <Button Content="Controlla ora" Command="{Binding Updates.CheckCommand}" Visibility="{Binding Updates.CheckVisibility, Mode=OneWay}"/>
-            <Button Content="Scarica" Command="{Binding Updates.DownloadCommand}"/>
-            <Button Content="Installa e riavvia" Command="{Binding Updates.InstallCommand}"/>
-            <Button Content="Annulla collegamento" Command="{Binding Updates.CancelAuthenticationCommand}"
-                    Visibility="{Binding Updates.CancelAuthenticationVisibility, Mode=OneWay}"/>
-            <Button Content="Scollega account" Command="{Binding Updates.DisconnectCommand}" Visibility="{Binding Updates.DisconnectVisibility, Mode=OneWay}"/>
-            <Button Content="Apri release" Command="{Binding Updates.OpenReleaseCommand}"
-                    ToolTip="Apre nel browser la pagina GitHub della release proposta (o l'elenco delle release)."/>
-          </WrapPanel>
+      <TabItem Header="Notifiche">
+        <ScrollViewer Style="{StaticResource TabScroll}">
+          <StackPanel>
+            <Border Style="{StaticResource CardBorder}">
+              <StackPanel>
+                <TextBlock Text="Quando" Style="{StaticResource CardTitle}"/>
+                <CheckBox Content="Attende input" IsChecked="{Binding NotifyNeedsInput}"/>
+                <CheckBox Content="Turno completato" IsChecked="{Binding NotifyTurnCompleted}"/>
+                <CheckBox Content="Errore" IsChecked="{Binding NotifyError}"/>
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorder}">
+              <StackPanel>
+                <TextBlock Text="Da" Style="{StaticResource CardTitle}"/>
+                <CheckBox Content="Claude Code" IsChecked="{Binding NotifyClaude}"/>
+                <CheckBox Content="Codex" IsChecked="{Binding NotifyCodex}"/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
 
-          <Expander Header="{Binding Updates.NotesHeader, Mode=OneWay}" Visibility="{Binding Updates.NotesVisibility, Mode=OneWay}" Margin="0,6,0,0">
-            <TextBox Text="{Binding Updates.Notes, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="220"
-                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,4,0,0"/>
-          </Expander>
+      <TabItem Header="Costi">
+        <ScrollViewer Style="{StaticResource TabScroll}">
+          <Border Style="{StaticResource CardBorder}" VerticalAlignment="Top">
+            <StackPanel>
+              <CheckBox Content="Mostra costi (prezzi API di listino)" IsChecked="{Binding ShowCosts}"
+                        ToolTip="Costo API equivalente in euro accanto ai token: listino LiteLLM (prezzi pubblicati da Anthropic e OpenAI) e tasso di riferimento BCE. Con un abbonamento non è la spesa reale. Spento, l'app non scarica né listino né tasso."/>
+              <DockPanel Margin="0,14,0,0">
+                <TextBlock DockPanel.Dock="Right" Text="$" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                <!-- Testo, non double: FallbackRateInput accetta "1,14" e "1.14" (il convertitore di WPF in it-IT leggeva
+                     "1.14" come 114). PropertyChanged: l'errore e lo stato di Salva seguono ogni tasto. -->
+                <TextBox DockPanel.Dock="Right" Width="90" Text="{Binding UsdPerEurText, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Tasso di riserva in dollari per euro"
+                         ToolTip="Usato solo quando il tasso BCE non è disponibile (tra 0,5 e 2). Virgola o punto per i decimali."/>
+                <TextBlock Text="Tasso di riserva: 1 € =" VerticalAlignment="Center"/>
+              </DockPanel>
+              <TextBlock Text="{Binding UsdPerEurError}" Visibility="{Binding UsdPerEurErrorVisibility}"
+                         Foreground="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+              <Border CornerRadius="12" Background="{StaticResource Tile}" Padding="12,10" Margin="0,14,0,0">
+                <TextBlock Text="{Binding PricingStatus}" Style="{StaticResource Caption}"/>
+              </Border>
+              <Button Content="Apri cartella dati" Command="{Binding OpenDataFolderCommand}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                      ToolTip="Qui puoi creare prices-override.json per aggiungere o correggere il prezzo di un modello."/>
+            </StackPanel>
+          </Border>
+        </ScrollViewer>
+      </TabItem>
 
-          <CheckBox Content="Controlla automaticamente gli aggiornamenti" IsChecked="{Binding UpdatesAutoCheck}" Margin="0,8,0,4"
-                    ToolTip="Un controllo 15 secondi dopo l'avvio e poi ogni 6 ore, solo con un account GitHub collegato. La scelta vale dopo Salva."/>
-        </StackPanel>
-      </GroupBox>
+      <TabItem Header="Aggiornamenti">
+        <ScrollViewer Style="{StaticResource TabScroll}">
+          <!-- Stato e comandi dal vivo di UpdateService (UpdatesViewModel, proprieta' Updates): non passano da Salva/Annulla.
+               Solo "Controlla automaticamente" e' una preferenza della bozza, salvata insieme alle altre. -->
+          <Border Style="{StaticResource CardBorder}" VerticalAlignment="Top">
+            <StackPanel>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="150"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Versione corrente" Style="{StaticResource Caption}" Margin="0,4"/>
+                <TextBlock Grid.Column="1" Text="{Binding Updates.VersionText, Mode=OneWay}" TextWrapping="Wrap" Margin="0,4"/>
+                <TextBlock Grid.Row="1" Text="Account GitHub" Style="{StaticResource Caption}" Margin="0,4"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Updates.AccountText, Mode=OneWay}" TextTrimming="CharacterEllipsis" Margin="0,4"/>
+                <TextBlock Grid.Row="2" Text="Ultimo controllo" Style="{StaticResource Caption}" Margin="0,4"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Updates.LastCheckText, Mode=OneWay}" Margin="0,4"/>
+                <TextBlock Grid.Row="3" Text="Stato" Style="{StaticResource Caption}" Margin="0,4"/>
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Updates.PhaseText, Mode=OneWay}" FontWeight="SemiBold" Margin="0,4"/>
+              </Grid>
+              <!-- Messaggio dello stato: grigio di norma, WarningText nella fase Error (due TextBlock per non introdurre
+                   stili locali). -->
+              <TextBlock Text="{Binding Updates.Message, Mode=OneWay}" Visibility="{Binding Updates.MessageVisibility, Mode=OneWay}"
+                         Style="{StaticResource Caption}" Margin="0,10,0,0"/>
+              <TextBlock Text="{Binding Updates.Message, Mode=OneWay}" Visibility="{Binding Updates.ErrorMessageVisibility, Mode=OneWay}"
+                         Foreground="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+              <TextBlock Text="{Binding Updates.CommandError, Mode=OneWay}" Visibility="{Binding Updates.CommandErrorVisibility, Mode=OneWay}"
+                         Foreground="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+              <StackPanel Visibility="{Binding Updates.ProgressVisibility, Mode=OneWay}" Margin="0,12,0,0">
+                <ProgressBar Minimum="0" Maximum="100" Value="{Binding Updates.ProgressValue, Mode=OneWay}"/>
+                <TextBlock Text="{Binding Updates.ProgressText, Mode=OneWay}" Style="{StaticResource Caption}" FontSize="11" Margin="0,6,0,0"/>
+              </StackPanel>
+              <WrapPanel Margin="0,14,0,0">
+                <Button Content="Collega GitHub e controlla" Command="{Binding Updates.ConnectCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+                <Button Content="Controlla ora" Command="{Binding Updates.CheckCommand}" Visibility="{Binding Updates.CheckVisibility, Mode=OneWay}" Margin="0,0,8,8"/>
+                <Button Content="Scarica" Command="{Binding Updates.DownloadCommand}" Margin="0,0,8,8"/>
+                <Button Content="Installa e riavvia" Command="{Binding Updates.InstallCommand}" Margin="0,0,8,8"/>
+                <Button Content="Annulla collegamento" Command="{Binding Updates.CancelAuthenticationCommand}"
+                        Visibility="{Binding Updates.CancelAuthenticationVisibility, Mode=OneWay}" Margin="0,0,8,8"/>
+                <Button Content="Scollega account" Command="{Binding Updates.DisconnectCommand}"
+                        Visibility="{Binding Updates.DisconnectVisibility, Mode=OneWay}" Margin="0,0,8,8"/>
+                <Button Content="Apri release" Command="{Binding Updates.OpenReleaseCommand}" Margin="0,0,8,8"
+                        ToolTip="Apre nel browser la pagina GitHub della release proposta (o l'elenco delle release)."/>
+              </WrapPanel>
+              <Expander Header="{Binding Updates.NotesHeader, Mode=OneWay}" Visibility="{Binding Updates.NotesVisibility, Mode=OneWay}" Margin="0,4,0,0">
+                <TextBox Text="{Binding Updates.Notes, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="220"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,4,0,0"/>
+              </Expander>
+              <CheckBox Content="Controlla automaticamente gli aggiornamenti" IsChecked="{Binding UpdatesAutoCheck}" Margin="0,12,0,0"
+                        ToolTip="Un controllo 15 secondi dopo l'avvio e poi ogni 6 ore, solo con un account GitHub collegato. La scelta vale dopo Salva."/>
+            </StackPanel>
+          </Border>
+        </ScrollViewer>
+      </TabItem>
 
-      <GroupBox Header="SISTEMA">
-        <StackPanel>
-          <CheckBox Content="Avvio automatico con Windows" IsChecked="{Binding AutoStartEnabled}"/>
-          <Button Content="Apri cartella log" Command="{Binding OpenLogsFolderCommand}" HorizontalAlignment="Left" Margin="0,6,0,0"/>
-        </StackPanel>
-      </GroupBox>
+      <TabItem Header="Sistema">
+        <ScrollViewer Style="{StaticResource TabScroll}">
+          <Border Style="{StaticResource CardBorder}" VerticalAlignment="Top">
+            <StackPanel>
+              <CheckBox Content="Avvio automatico con Windows" IsChecked="{Binding AutoStartEnabled}"/>
+              <Button Content="Apri cartella log" Command="{Binding OpenLogsFolderCommand}" HorizontalAlignment="Left" Margin="0,14,0,0"/>
+            </StackPanel>
+          </Border>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
 
-      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
-        <Button Content="Annulla" Click="Cancel_Click" IsCancel="True"/>
-        <Button Content="Salva" Command="{Binding SaveCommand}" IsDefault="True" Style="{StaticResource PrimaryButton}" Margin="0,2,0,2"/>
-      </StackPanel>
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button Content="Annulla" Click="Cancel_Click" IsCancel="True"/>
+      <Button Content="Salva" Command="{Binding SaveCommand}" IsDefault="True" Style="{StaticResource PrimaryButton}" Margin="0"/>
     </StackPanel>
-  </ScrollViewer>
+  </Grid>
 </Window>
