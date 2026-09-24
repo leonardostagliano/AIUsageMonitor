@@ -164,20 +164,25 @@ piano il terminale che ospita quella sessione di Claude Code o Codex, senza scol
 notch.
 
 1. L'hook (`hook.cjs`) registra, solo sugli eventi `SessionStart` e `UserPromptSubmit`, un oggetto
-   `host` con l'ambiente del processo che lo ha eseguito: `HERDR_PANE_ID`, `WT_SESSION`,
-   `TERM_PROGRAM`, `VSCODE_PID` e il ppid. Le sessioni avviate prima di installare questa versione
+   `host` con l'ambiente del processo che lo ha eseguito: `HERDR_PANE_ID`, `WMUX_PTY_ID`,
+   `WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID` e il ppid. Le sessioni avviate prima di installare questa versione
    non hanno `host` finché non emettono il prompt successivo: fino ad allora il nome non è
    cliccabile.
 2. Quando l'evento arriva, l'app risale l'albero dei processi a partire da quel ppid — il processo
    che ha eseguito l'hook vive pochi secondi, la finestra del terminale resta — e tiene per ogni
    sessione il pid dell'agente e il pid del primo antenato con una finestra top-level.
 3. Al click la catena di strategie è: prima **Herdr** (`herdr agent focus <pane>`, con
-   `herdr tab focus` come ripiego se il pane non risponde più), poi la finestra risolta al passo
-   precedente, infine gli indizi residui (`VSCODE_PID`, `WT_SESSION`). Se nessuna strategia
+   `herdr tab focus` come ripiego se il pane non risponde più), poi **wmux** (workspace, pane e
+   tab del pty via la pipe di controllo di wmux, poi la sua finestra), poi la finestra risolta al
+   passo precedente, infine gli indizi residui (`VSCODE_PID`, `WT_SESSION`). Se nessuna strategia
    funziona compare il toast "Terminale non trovato".
 
-**Herdr** è l'unica strategia che arriva al pane: porta in primo piano il pane esatto anche se si
-trova in un'altra tab o in un altro workspace. **Senza Herdr** l'app attiva la finestra risolta
+**Herdr** e **wmux** sono le strategie che arrivano al pane: portano in primo piano il pane esatto
+anche se si trova in un'altra tab o in un altro workspace. wmux fa girare le shell sotto un daemon
+senza finestra e il processo che esegue l'hook è già terminato quando l'evento arriva, quindi la
+risalita dei processi lì non funziona quasi mai: è il `WMUX_PTY_ID` registrato dall'hook a portare
+al pane, e l'app parla con wmux sulla sua named pipe di controllo con il token di
+`%USERPROFILE%\.wmux-auth-token`, come fa la CLI `wmux`. **Senza Herdr** l'app attiva la finestra risolta
 risalendo i processi quando l'evento è arrivato: è quella giusta anche con più finestre di Windows
 Terminal aperte, perché non dipende da quante sono ma dall'antenato del processo che ha eseguito
 l'hook. Quello che non può fare è scegliere la tab — l'attivazione agisce sulla finestra top-level —
@@ -337,8 +342,8 @@ repository e il download dei suoi asset, con la sessione creata dall'app (mai sc
 mostrata). Nessun prompt, nessun contenuto di conversazione e nessun token viene inviato, registrato
 o mostrato da nessuna parte: gli eventi tracciati sono nomi di evento, identificativo di sessione,
 cartella di lavoro, un messaggio breve dell'agente e, sugli eventi di avvio e di prompt, qualche
-indizio sul terminale che ospita la sessione (ppid, pane di Herdr, `WT_SESSION`, `TERM_PROGRAM`,
-`VSCODE_PID`), che serve solo al click "vai al terminale" e non lascia mai la macchina. Non c'è
+indizio sul terminale che ospita la sessione (ppid, pane di Herdr, pty di wmux, `WT_SESSION`,
+`TERM_PROGRAM`, `VSCODE_PID`), che serve solo al click "vai al terminale" e non lascia mai la macchina. Non c'è
 telemetria.
 
 ## Licenza

@@ -122,21 +122,38 @@ test('truncation never leaves a lone surrogate', () => {
 });
 
 test('SessionStart carries a host object read from the environment and ppid', () => {
-  const saved = { HERDR_PANE_ID: process.env.HERDR_PANE_ID, WT_SESSION: process.env.WT_SESSION, TERM_PROGRAM: process.env.TERM_PROGRAM, VSCODE_PID: process.env.VSCODE_PID };
+  const saved = { HERDR_PANE_ID: process.env.HERDR_PANE_ID, WT_SESSION: process.env.WT_SESSION, TERM_PROGRAM: process.env.TERM_PROGRAM, VSCODE_PID: process.env.VSCODE_PID, WMUX_PTY_ID: process.env.WMUX_PTY_ID };
   try {
     process.env.HERDR_PANE_ID = 'w15:p1';
     process.env.WT_SESSION = '4b2c1234-0000-0000-0000-000000000000';
     delete process.env.TERM_PROGRAM;
     delete process.env.VSCODE_PID;
+    delete process.env.WMUX_PTY_ID;
     const obj = JSON.parse(buildLine('claude', { hook_event_name: 'SessionStart', session_id: 's1', cwd: '/w' }));
     assert.ok(Number.isInteger(obj.host.ppid) && obj.host.ppid > 0);
     assert.equal(obj.host.herdr_pane, 'w15:p1');
     assert.equal(obj.host.wt_session, '4b2c1234-0000-0000-0000-000000000000');
     assert.equal(obj.host.term_program, null);
     assert.equal(obj.host.vscode_pid, null);
+    assert.equal(obj.host.wmux_pty, null);
 
     const prompt = JSON.parse(buildLine('claude', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/w' }));
     assert.equal(prompt.host.herdr_pane, 'w15:p1');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test('inside wmux the host carries the pty id of the pane', () => {
+  const saved = { TERM_PROGRAM: process.env.TERM_PROGRAM, WMUX_PTY_ID: process.env.WMUX_PTY_ID };
+  try {
+    process.env.TERM_PROGRAM = 'wmux';
+    process.env.WMUX_PTY_ID = 'daemon-8bab41b8';
+    const obj = JSON.parse(buildLine('claude', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/w' }));
+    assert.equal(obj.host.term_program, 'wmux');
+    assert.equal(obj.host.wmux_pty, 'daemon-8bab41b8');
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;

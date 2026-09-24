@@ -63,6 +63,15 @@ public class HookEventReaderTests
         Assert.Equal("4b2c", ev.Host.WtSession);
         Assert.Null(ev.Host.TermProgram);
         Assert.Null(ev.Host.VscodePid);
+        Assert.Null(ev.Host.WmuxPty);
+    }
+
+    [Fact]
+    public void Parse_reads_the_wmux_pty_id()
+    {
+        var ev = HookEventParser.Parse("""{"ts":"2026-09-24T07:21:05Z","agent":"claude","event":"UserPromptSubmit","session_id":"s1","host":{"ppid":4240,"term_program":"wmux","wmux_pty":"daemon-8bab41b8"}}""")!;
+        Assert.Equal("wmux", ev.Host!.TermProgram);
+        Assert.Equal("daemon-8bab41b8", ev.Host.WmuxPty);
     }
 
     [Fact]
