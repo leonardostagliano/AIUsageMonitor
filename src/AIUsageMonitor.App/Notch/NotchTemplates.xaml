@@ -71,7 +71,7 @@
   <DataTemplate x:Key="WindowRowTemplate">
     <StackPanel Margin="0,12,0,0">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Text="{Binding PercentText}" FontSize="12" FontWeight="SemiBold"/>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding PercentText}" FontSize="12" FontWeight="SemiBold" Typography.NumeralAlignment="Tabular"/>
         <TextBlock Text="{Binding Label}" FontSize="12" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis"/>
       </DockPanel>
       <c:UsageBar Height="8" Margin="0,5,0,0" Value="{Binding Percent}" Tone="{Binding Tone}"
@@ -153,8 +153,11 @@
             <TextBlock Text="{Binding Subtitle}" FontSize="11" Foreground="{Binding ToneTextBrush}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
           </StackPanel>
           <StackPanel Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center" Background="Transparent" ToolTip="{Binding TokensTooltip}">
-            <TextBlock Text="{Binding CostText}" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Right" Visibility="{Binding CostVisibility}"/>
-            <TextBlock Text="{Binding TokensShort}" FontSize="10.5" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"/>
+            <!-- Cifre tabulari (spec 4.2): costi e token dei riquadri impilati si allineano in colonna. -->
+            <TextBlock Text="{Binding CostText}" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Right" Visibility="{Binding CostVisibility}"
+                       Typography.NumeralAlignment="Tabular"/>
+            <TextBlock Text="{Binding TokensShort}" FontSize="10.5" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"
+                       Typography.NumeralAlignment="Tabular"/>
           </StackPanel>
         </Grid>
       </Border>
@@ -241,8 +244,10 @@
             </Grid.ColumnDefinitions>
             <StackPanel Visibility="{Binding HeroVisibility}">
               <StackPanel Orientation="Horizontal">
+                <!-- Cifre tabulari: mentre il numero scorre la larghezza non cambia e il "%" accanto resta fermo. -->
                 <TextBlock c:NumberRoll.Value="{Binding HeroPercent}" FontFamily="{StaticResource DisplayFont}" FontWeight="SemiBold"
-                           FontSize="{Binding DataContext.HeroFontSize, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                           FontSize="{Binding DataContext.HeroFontSize, RelativeSource={RelativeSource AncestorType=Window}}"
+                           Typography.NumeralAlignment="Tabular"/>
                 <TextBlock Text="%" FontFamily="{StaticResource DisplayFont}" FontSize="20" Foreground="{StaticResource TextMuted}"
                            VerticalAlignment="Bottom" Margin="1,0,0,6"/>
               </StackPanel>
@@ -271,7 +276,8 @@
                         Visibility="{Binding CostVisibility}" ToolTip="{Binding CostTooltip}">
               <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Visibility="{Binding CostAmountVisibility}">
                 <TextBlock Text="{Binding CostLead}" FontSize="13" Foreground="{StaticResource TextMuted}" VerticalAlignment="Bottom" Margin="0,0,4,3"/>
-                <TextBlock c:NumberRoll.Value="{Binding CostValue}" c:NumberRoll.Kind="Euro" FontFamily="{StaticResource DisplayFont}" FontSize="20" FontWeight="SemiBold"/>
+                <TextBlock c:NumberRoll.Value="{Binding CostValue}" c:NumberRoll.Kind="Euro" FontFamily="{StaticResource DisplayFont}" FontSize="20" FontWeight="SemiBold"
+                           Typography.NumeralAlignment="Tabular"/>
               </StackPanel>
               <TextBlock Text="{Binding CostFallback}" FontSize="13" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"
                          Visibility="{Binding CostFallbackVisibility}"/>
@@ -281,12 +287,15 @@
 
           <ItemsControl ItemsSource="{Binding OtherWindows}" ItemTemplate="{StaticResource WindowRowTemplate}"/>
 
-          <Border CornerRadius="10" Background="{StaticResource WarningFill}" Padding="10,6" Margin="0,12,0,0" Visibility="{Binding StatusPillVisibility}">
+          <!-- Raggi a meta' altezza (spec 4.3, capsule): 13 per una riga da 11 px piu' 6+6 di padding; 18 per la pillola
+               con il pulsante Installa (24 + 6 + 6). Un CornerRadius oltre meta' altezza non fa una capsula in WPF:
+               Border lo riduce asse per asse (a meta' altezza e a meta' larghezza) e gli angoli diventano ellittici. -->
+          <Border CornerRadius="13" Background="{StaticResource WarningFill}" Padding="10,6" Margin="0,12,0,0" Visibility="{Binding StatusPillVisibility}">
             <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource WarningText}" FontSize="11" TextWrapping="Wrap"/>
           </Border>
           <TextBlock Text="{Binding ExtraUsage}" Foreground="{StaticResource TextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"
                      Visibility="{Binding ExtraVisibility}"/>
-          <Border CornerRadius="12" Background="{StaticResource Tile}" Padding="12,6,6,6" Margin="0,12,0,0" Visibility="{Binding HookWarningVisibility}">
+          <Border CornerRadius="18" Background="{StaticResource Tile}" Padding="14,6,6,6" Margin="0,12,0,0" Visibility="{Binding HookWarningVisibility}">
             <DockPanel>
               <Button DockPanel.Dock="Right" Style="{StaticResource PillButton}" Content="Installa" Command="{Binding InstallHooksCommand}"/>
               <TextBlock Text="Stato live non attivo" Foreground="{StaticResource TextMuted}" FontSize="11" VerticalAlignment="Center"/>

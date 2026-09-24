@@ -28,10 +28,13 @@
       </Border.RenderTransform>
       <DockPanel>
         <DockPanel DockPanel.Dock="Top" Margin="2,0,2,12">
-          <Path x:Name="PinGlyph" DockPanel.Dock="Right" Visibility="Collapsed" Width="13" Height="13" Stretch="Uniform" Margin="8,0,0,0"
-                Data="M9,3 L15,3 L14,9 L17,12 L7,12 L10,9 Z M12,12 L12,21" Stroke="{StaticResource TextMuted}" StrokeThickness="1.6"
-                StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" VerticalAlignment="Center"
-                ToolTip="Fissato: clicca la linguetta o l'icona nella tray per sbloccare"/>
+          <!-- Il tooltip sta su un Border trasparente: una Path senza Fill riceve il mouse solo sul tratto da 1,6 px. -->
+          <Border x:Name="PinGlyph" DockPanel.Dock="Right" Visibility="Collapsed" Background="Transparent" Padding="3" Margin="5,0,0,0"
+                  VerticalAlignment="Center" ToolTip="Fissato: clicca la linguetta o l'icona nella tray per sbloccare">
+            <Path Width="13" Height="13" Stretch="Uniform"
+                  Data="M9,3 L15,3 L14,9 L17,12 L7,12 L10,9 Z M12,12 L12,21" Stroke="{StaticResource TextMuted}" StrokeThickness="1.6"
+                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+          </Border>
           <Border DockPanel.Dock="Right" CornerRadius="11" Padding="10,3" Background="{Binding SummaryFill}"
                   Visibility="{Binding SummaryVisibility}" VerticalAlignment="Center">
             <StackPanel Orientation="Horizontal">
