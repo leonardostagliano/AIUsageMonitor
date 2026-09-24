@@ -1,42 +1,14 @@
 <ResourceDictionary x:Class="AIUsageMonitor.App.Notch.NotchTemplates"
                     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:c="clr-namespace:AIUsageMonitor.App.Controls">
 
-  <DataTemplate x:Key="TabItemTemplate">
-    <StackPanel Height="{Binding DataContext.TabRowHeight, RelativeSource={RelativeSource AncestorType=Window}}" Width="28">
-      <Path Data="{Binding Icon}" Fill="White"
-            Width="{Binding DataContext.TabIconSize, RelativeSource={RelativeSource AncestorType=Window}}"
-            Height="{Binding DataContext.TabIconSize, RelativeSource={RelativeSource AncestorType=Window}}"
-            Stretch="Uniform" HorizontalAlignment="Center" Margin="0,2,0,3"/>
-      <Ellipse Width="8" Height="8" Fill="{Binding AggregateBrush}" Stroke="{Binding AggregateStroke}" StrokeThickness="1" HorizontalAlignment="Center"/>
-    </StackPanel>
-  </DataTemplate>
-
-  <DataTemplate x:Key="WindowRowTemplate">
-    <Grid Margin="0,3">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="66"/>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="42"/>
-        <ColumnDefinition Width="58"/>
-      </Grid.ColumnDefinitions>
-      <TextBlock Text="{Binding Label}" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-      <Border Grid.Column="1" Height="6" CornerRadius="3" Background="{StaticResource BarTrack}" VerticalAlignment="Center" Margin="4,0">
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="{Binding FilledStar}"/>
-            <ColumnDefinition Width="{Binding EmptyStar}"/>
-          </Grid.ColumnDefinitions>
-          <Border CornerRadius="3" Background="{Binding BarBrush}"/>
-        </Grid>
-      </Border>
-      <TextBlock Grid.Column="2" Text="{Binding PercentText}" TextAlignment="Right" VerticalAlignment="Center"/>
-      <TextBlock Grid.Column="3" Text="{Binding ResetText}" Foreground="{StaticResource TextMuted}" FontSize="11" TextAlignment="Right" VerticalAlignment="Center"/>
-    </Grid>
-  </DataTemplate>
-
-  <Storyboard x:Key="PulseStoryboard" RepeatBehavior="Forever" AutoReverse="True">
-    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.35" Duration="0:0:0.9"/>
+  <!-- Pulsazione "al lavoro": un alone che si allarga e sfuma, 2 s, 30 fps. Si avvia solo con pannello aperto (o nella
+       linguetta) e animazioni di Windows attive; ogni template che lo usa ha un elemento chiamato Halo. -->
+  <Storyboard x:Key="HaloStoryboard" RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+    <DoubleAnimation Storyboard.TargetName="Halo" Storyboard.TargetProperty="Opacity" From="0.7" To="0" Duration="0:0:2"/>
+    <DoubleAnimation Storyboard.TargetName="Halo" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" From="1" To="1.7" Duration="0:0:2"/>
+    <DoubleAnimation Storyboard.TargetName="Halo" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="1" To="1.7" Duration="0:0:2"/>
   </Storyboard>
 
   <!-- Riga cliccabile senza cornice: marca il click come Handled (ButtonBase), quindi non arriva al pannello e non
@@ -59,141 +31,253 @@
     </Setter>
   </Style>
 
-  <DataTemplate x:Key="SubagentRowTemplate">
-    <Grid Margin="16,4,0,4">
-      <Grid.RowDefinitions>
-        <RowDefinition Height="Auto"/>
-        <RowDefinition Height="Auto"/>
-        <RowDefinition Height="Auto"/>
-      </Grid.RowDefinitions>
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="12"/>
-        <ColumnDefinition Width="*" MinWidth="24"/>
-        <ColumnDefinition Width="Auto"/>
-        <ColumnDefinition Width="36"/>
-      </Grid.ColumnDefinitions>
-      <Ellipse Width="6" Height="6" Fill="{Binding DotBrush}" VerticalAlignment="Center" HorizontalAlignment="Left">
-        <Ellipse.Style>
-          <Style TargetType="Ellipse">
-            <Style.Triggers>
-              <DataTrigger Binding="{Binding IsPulsing}" Value="True">
-                <DataTrigger.EnterActions>
-                  <BeginStoryboard x:Name="SubagentPulse" Storyboard="{StaticResource PulseStoryboard}"/>
-                </DataTrigger.EnterActions>
-                <DataTrigger.ExitActions>
-                  <StopStoryboard BeginStoryboardName="SubagentPulse"/>
-                </DataTrigger.ExitActions>
-              </DataTrigger>
-            </Style.Triggers>
-          </Style>
-        </Ellipse.Style>
-      </Ellipse>
-      <TextBlock Grid.Column="1" Text="{Binding Name}" ToolTip="{Binding Name}" FontSize="11" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-      <TextBlock Grid.Column="2" Text="{Binding PhaseLabel}" Foreground="{Binding DotBrush}" FontSize="10" Margin="4,0" VerticalAlignment="Center"/>
-      <TextBlock Grid.Column="3" Text="{Binding ElapsedText}" Foreground="{StaticResource TextMuted}" FontSize="10" TextAlignment="Right" VerticalAlignment="Center"/>
-      <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding ModelText}" ToolTip="{Binding ModelText}" TextTrimming="CharacterEllipsis" Foreground="{StaticResource TextMuted}" FontSize="10" Margin="0,2,0,0"/>
-      <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Text="{Binding TokensText}" ToolTip="{Binding TokensTooltip}" Foreground="{StaticResource TextMuted}" FontSize="10" Margin="0,2,0,0"/>
+  <!-- Linguetta: cerchio dell'agente con l'anello della prima finestra e il pallino dello stato (spec 6.1). -->
+  <DataTemplate x:Key="TabItemTemplate">
+    <Grid Height="{Binding DataContext.TabRowHeight, RelativeSource={RelativeSource AncestorType=Window}}">
+      <Grid Width="{Binding DataContext.TabRingSize, RelativeSource={RelativeSource AncestorType=Window}}"
+            Height="{Binding DataContext.TabRingSize, RelativeSource={RelativeSource AncestorType=Window}}"
+            HorizontalAlignment="Center" VerticalAlignment="Center">
+        <c:UsageRing Value="{Binding TabPercent}" Tone="{Binding TabTone}" Thickness="2"/>
+        <Ellipse Margin="4" Fill="{Binding BrandBrush}"/>
+        <Path Data="{Binding Icon}" Fill="White" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
+              Width="{Binding DataContext.TabIconSize, RelativeSource={RelativeSource AncestorType=Window}}"
+              Height="{Binding DataContext.TabIconSize, RelativeSource={RelativeSource AncestorType=Window}}"/>
+        <Grid Width="9" Height="9" HorizontalAlignment="Right" VerticalAlignment="Bottom" Visibility="{Binding BadgeVisibility}">
+          <Ellipse x:Name="Halo" Stroke="{Binding AggregateBrush}" StrokeThickness="1.5" Opacity="0" RenderTransformOrigin="0.5,0.5">
+            <Ellipse.RenderTransform><ScaleTransform/></Ellipse.RenderTransform>
+          </Ellipse>
+          <Ellipse Fill="{Binding AggregateBrush}" Stroke="{StaticResource WindowBackground}" StrokeThickness="2"/>
+        </Grid>
+      </Grid>
     </Grid>
+    <DataTemplate.Triggers>
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsWorking}" Value="True"/>
+          <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+        </MultiDataTrigger.Conditions>
+        <MultiDataTrigger.EnterActions><BeginStoryboard x:Name="TabHalo" Storyboard="{StaticResource HaloStoryboard}"/></MultiDataTrigger.EnterActions>
+        <MultiDataTrigger.ExitActions><StopStoryboard BeginStoryboardName="TabHalo"/></MultiDataTrigger.ExitActions>
+      </MultiDataTrigger>
+    </DataTemplate.Triggers>
   </DataTemplate>
 
-  <DataTemplate x:Key="SessionRowTemplate">
-    <StackPanel Margin="0,2">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="16"/>
-          <ColumnDefinition Width="*" MinWidth="28"/>
-          <ColumnDefinition Width="Auto"/>
-          <ColumnDefinition Width="44"/>
-        </Grid.ColumnDefinitions>
-        <Ellipse Width="8" Height="8" Fill="{Binding DotBrush}" VerticalAlignment="Center">
-          <Ellipse.Style>
-            <Style TargetType="Ellipse">
-              <Style.Triggers>
-                <DataTrigger Binding="{Binding IsPulsing}" Value="True">
-                  <DataTrigger.EnterActions>
-                    <BeginStoryboard x:Name="Pulse" Storyboard="{StaticResource PulseStoryboard}"/>
-                  </DataTrigger.EnterActions>
-                  <DataTrigger.ExitActions>
-                    <StopStoryboard BeginStoryboardName="Pulse"/>
-                  </DataTrigger.ExitActions>
-                </DataTrigger>
-              </Style.Triggers>
-            </Style>
-          </Ellipse.Style>
-        </Ellipse>
-        <!-- Il nome e' il collegamento al terminale della sessione: mano e click solo quando CanFocus e' vero (riga
-             senza host), e i due handler marcano l'evento Handled cosi' il click non arriva al pannello e non
-             fissa/sblocca la notch, esattamente come fa FlatRowButton per la riga dei subagenti. -->
-        <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Tooltip}" VerticalAlignment="Center"
-                   Background="Transparent" Cursor="{Binding NameCursor}"
-                   MouseLeftButtonDown="SessionName_MouseLeftButtonDown" MouseLeftButtonUp="SessionName_MouseLeftButtonUp"/>
-        <TextBlock Grid.Column="2" Text="{Binding PhaseLabel}" Foreground="{Binding DotBrush}" FontSize="11" Margin="6,0" VerticalAlignment="Center"/>
-        <TextBlock Grid.Column="3" Text="{Binding ElapsedText}" Foreground="{StaticResource TextMuted}" FontSize="11" TextAlignment="Right" VerticalAlignment="Center"/>
-      </Grid>
-      <TextBlock Text="{Binding TokensText}" ToolTip="{Binding TokensTooltip}" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="16,2,0,2"/>
-      <Button Style="{StaticResource FlatRowButton}" Command="{Binding ToggleCommand}" Visibility="{Binding SummaryVisibility}" Margin="16,1,0,0">
-        <StackPanel Orientation="Horizontal">
-          <TextBlock Text="{Binding ChevronGlyph}" FontSize="10" Foreground="{StaticResource TextMuted}" Margin="0,0,4,0" VerticalAlignment="Center"/>
-          <TextBlock Text="{Binding SubagentSummary}" FontSize="11" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
-        </StackPanel>
-      </Button>
-      <ItemsControl ItemsSource="{Binding Subagents}" ItemTemplate="{StaticResource SubagentRowTemplate}" Visibility="{Binding SubagentListVisibility}"/>
+  <!-- Finestra secondaria: etichetta e percentuale, barra da 8 px con riflesso (solo a pannello aperto), reset. -->
+  <DataTemplate x:Key="WindowRowTemplate">
+    <StackPanel Margin="0,12,0,0">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding PercentText}" FontSize="12" FontWeight="SemiBold"/>
+        <TextBlock Text="{Binding Label}" FontSize="12" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis"/>
+      </DockPanel>
+      <c:UsageBar Height="8" Margin="0,5,0,0" Value="{Binding Percent}" Tone="{Binding Tone}"
+                  ShowSheen="{Binding DataContext.IsPanelOpen, RelativeSource={RelativeSource AncestorType=Window}}"/>
+      <TextBlock Text="{Binding ResetCaption}" FontSize="10.5" Foreground="{StaticResource TextMuted}" Margin="0,5,0,0"
+                 Visibility="{Binding ResetVisibility}"/>
     </StackPanel>
   </DataTemplate>
 
+  <!-- Agente di workflow: riga ridotta dentro l'elenco aperto dalla pillola "N agenti attivi". -->
+  <DataTemplate x:Key="SubagentRowTemplate">
+    <Border CornerRadius="10" Background="{StaticResource Tile}" Padding="10,7" Margin="0,0,0,4">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center">
+          <Ellipse x:Name="Halo" Stroke="{Binding ToneBrush}" StrokeThickness="1.5" Opacity="0" RenderTransformOrigin="0.5,0.5">
+            <Ellipse.RenderTransform><ScaleTransform/></Ellipse.RenderTransform>
+          </Ellipse>
+          <Ellipse Fill="{Binding ToneBrush}"/>
+        </Grid>
+        <TextBlock Grid.Column="1" Text="{Binding Name}" ToolTip="{Binding Name}" FontSize="11.5" FontWeight="SemiBold"
+                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="2" Text="{Binding ElapsedText}" FontSize="10.5" Foreground="{StaticResource TextMuted}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+        <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding ModelText}" ToolTip="{Binding ModelText}"
+                   FontSize="10.5" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding TokensText}" ToolTip="{Binding TokensTooltip}"
+                   FontSize="10.5" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+      </Grid>
+    </Border>
+    <DataTemplate.Triggers>
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsPulsing}" Value="True"/>
+          <Condition Binding="{Binding DataContext.IsPanelOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+          <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+        </MultiDataTrigger.Conditions>
+        <MultiDataTrigger.EnterActions><BeginStoryboard x:Name="SubagentHalo" Storyboard="{StaticResource HaloStoryboard}"/></MultiDataTrigger.EnterActions>
+        <MultiDataTrigger.ExitActions><StopStoryboard BeginStoryboardName="SubagentHalo"/></MultiDataTrigger.ExitActions>
+      </MultiDataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+
+  <!-- Sessione come riquadro: avatar con anello di fase, nome (collegamento al terminale), sottotitolo, costo e token. -->
+  <DataTemplate x:Key="SessionRowTemplate">
+    <StackPanel Margin="0,0,0,8">
+      <Border CornerRadius="14" Background="{StaticResource Tile}"
+              Padding="{Binding DataContext.TilePadding, RelativeSource={RelativeSource AncestorType=Window}}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <Grid Margin="0,0,10,0" VerticalAlignment="Center"
+                Width="{Binding DataContext.AvatarSize, RelativeSource={RelativeSource AncestorType=Window}}"
+                Height="{Binding DataContext.AvatarSize, RelativeSource={RelativeSource AncestorType=Window}}">
+            <Ellipse x:Name="Halo" Stroke="{Binding ToneBrush}" StrokeThickness="2" Opacity="0" RenderTransformOrigin="0.5,0.5">
+              <Ellipse.RenderTransform><ScaleTransform/></Ellipse.RenderTransform>
+            </Ellipse>
+            <Ellipse Fill="{Binding ToneFill}" Stroke="{Binding ToneBrush}" StrokeThickness="2"/>
+            <TextBlock Text="{Binding Initial}" Foreground="{Binding ToneTextBrush}" FontSize="13" FontWeight="SemiBold"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center">
+            <!-- Il nome e' il collegamento al terminale della sessione: mano e click solo quando CanFocus e' vero, e i
+                 due handler marcano l'evento Handled cosi' il click non arriva al pannello e non fissa/sblocca la notch. -->
+            <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding Tooltip}" Background="Transparent" Cursor="{Binding NameCursor}" HorizontalAlignment="Left"
+                       MouseLeftButtonDown="SessionName_MouseLeftButtonDown" MouseLeftButtonUp="SessionName_MouseLeftButtonUp"/>
+            <TextBlock Text="{Binding Subtitle}" FontSize="11" Foreground="{Binding ToneTextBrush}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
+          </StackPanel>
+          <StackPanel Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center" Background="Transparent" ToolTip="{Binding TokensTooltip}">
+            <TextBlock Text="{Binding CostText}" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Right" Visibility="{Binding CostVisibility}"/>
+            <TextBlock Text="{Binding TokensShort}" FontSize="10.5" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+      <Button Style="{StaticResource FlatRowButton}" Command="{Binding ToggleCommand}" Visibility="{Binding SummaryVisibility}" Margin="12,6,0,0">
+        <Border CornerRadius="10" Background="{StaticResource Tile}" Padding="10,3">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Text="{Binding ChevronGlyph}" FontSize="10" Foreground="{StaticResource TextMuted}" Margin="0,0,6,0" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding SubagentSummary}" FontSize="11" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Border>
+      </Button>
+      <ItemsControl ItemsSource="{Binding Subagents}" ItemTemplate="{StaticResource SubagentRowTemplate}"
+                    Visibility="{Binding SubagentListVisibility}" Margin="12,6,0,0"/>
+    </StackPanel>
+    <DataTemplate.Triggers>
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsPulsing}" Value="True"/>
+          <Condition Binding="{Binding DataContext.IsPanelOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+          <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+        </MultiDataTrigger.Conditions>
+        <MultiDataTrigger.EnterActions><BeginStoryboard x:Name="SessionHalo" Storyboard="{StaticResource HaloStoryboard}"/></MultiDataTrigger.EnterActions>
+        <MultiDataTrigger.ExitActions><StopStoryboard BeginStoryboardName="SessionHalo"/></MultiDataTrigger.ExitActions>
+      </MultiDataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+
+  <!-- Card dell'agente (spec 6.3): alone, intestazione con refresh, finestra principale e costo, altre finestre,
+       messaggi, sessioni. -->
   <DataTemplate x:Key="AgentCardTemplate">
-    <Border Margin="0,0,0,10" Padding="0,0,0,8" BorderBrush="{StaticResource NotchBorder}" BorderThickness="0,0,0,1">
-      <StackPanel>
-        <DockPanel Margin="0,0,0,4">
-          <Path Data="{Binding Icon}" Fill="White" Width="16" Height="16" Stretch="Uniform" Margin="0,0,8,0" VerticalAlignment="Center"/>
-          <Border DockPanel.Dock="Right" CornerRadius="4" Background="{StaticResource Badge}" Padding="6,1" Visibility="{Binding PlanVisibility}" VerticalAlignment="Center">
-            <TextBlock Text="{Binding PlanLabel}" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+    <Border Margin="0,0,0,12" CornerRadius="18" Background="{StaticResource Card}" BorderBrush="{StaticResource Hairline}" BorderThickness="1">
+      <Border CornerRadius="18" Background="{Binding BrandGlow}"
+              Padding="{Binding DataContext.CardPadding, RelativeSource={RelativeSource AncestorType=Window}}">
+        <StackPanel>
+          <DockPanel>
+            <Grid Width="34" Height="34" Margin="0,0,10,0" VerticalAlignment="Center">
+              <Ellipse Fill="{Binding BrandBrush}"/>
+              <Path Data="{Binding Icon}" Fill="White" Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+            <!-- Refresh a comando: IconButton marca il click Handled (non fissa/sblocca il notch) ed e' sempre abilitato
+                 (un Button disabilitato lascerebbe passare il click al pannello); cooldown e timeout li gestisce il VM.
+                 La rotazione e' un ciclo: 30 fps e solo con le animazioni di Windows attive. -->
+            <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Command="{Binding RefreshCommand}"
+                    ToolTip="{Binding RefreshTooltip}" Opacity="{Binding RefreshOpacity}" VerticalAlignment="Center"
+                    AutomationProperties.Name="Aggiorna">
+              <Path Data="{StaticResource RefreshIcon}" Stroke="{StaticResource TextPrimary}" StrokeThickness="1.6"
+                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                    Width="14" Height="14" Stretch="Uniform" RenderTransformOrigin="0.5,0.5">
+                <Path.RenderTransform><RotateTransform/></Path.RenderTransform>
+                <Path.Style>
+                  <Style TargetType="Path">
+                    <Style.Triggers>
+                      <MultiDataTrigger>
+                        <MultiDataTrigger.Conditions>
+                          <Condition Binding="{Binding IsRefreshing}" Value="True"/>
+                          <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+                        </MultiDataTrigger.Conditions>
+                        <MultiDataTrigger.EnterActions>
+                          <BeginStoryboard x:Name="RefreshSpin">
+                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+                              <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" From="0" To="360" Duration="0:0:0.9"/>
+                            </Storyboard>
+                          </BeginStoryboard>
+                        </MultiDataTrigger.EnterActions>
+                        <MultiDataTrigger.ExitActions><StopStoryboard BeginStoryboardName="RefreshSpin"/></MultiDataTrigger.ExitActions>
+                      </MultiDataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Path.Style>
+              </Path>
+            </Button>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold"/>
+              <TextBlock Text="{Binding PlanLabel}" FontSize="11" Foreground="{StaticResource TextMuted}" Visibility="{Binding PlanVisibility}"/>
+            </StackPanel>
+          </DockPanel>
+
+          <Grid Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Visibility="{Binding HeroVisibility}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock c:NumberRoll.Value="{Binding HeroPercent}" FontFamily="{StaticResource DisplayFont}" FontWeight="SemiBold"
+                           FontSize="{Binding DataContext.HeroFontSize, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                <TextBlock Text="%" FontFamily="{StaticResource DisplayFont}" FontSize="20" Foreground="{StaticResource TextMuted}"
+                           VerticalAlignment="Bottom" Margin="1,0,0,6"/>
+              </StackPanel>
+              <c:UsageBar Height="3" Width="96" HorizontalAlignment="Left" Margin="0,4,0,0" Value="{Binding HeroPercent}" Tone="{Binding HeroTone}"/>
+              <TextBlock Text="{Binding HeroCaption}" FontSize="11" Foreground="{StaticResource TextMuted}" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+            <StackPanel Visibility="{Binding NoDataVisibility}">
+              <TextBlock Text="—" FontFamily="{StaticResource DisplayFont}" FontWeight="SemiBold" Foreground="{StaticResource TextMuted}"
+                         FontSize="{Binding DataContext.HeroFontSize, RelativeSource={RelativeSource AncestorType=Window}}"/>
+              <TextBlock Text="{Binding NoDataCaption}" FontSize="11" Foreground="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Bottom" Background="Transparent"
+                        Visibility="{Binding CostVisibility}" ToolTip="{Binding CostTooltip}">
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Visibility="{Binding CostAmountVisibility}">
+                <TextBlock Text="{Binding CostLead}" FontSize="13" Foreground="{StaticResource TextMuted}" VerticalAlignment="Bottom" Margin="0,0,4,3"/>
+                <TextBlock c:NumberRoll.Value="{Binding CostValue}" c:NumberRoll.Kind="Euro" FontFamily="{StaticResource DisplayFont}" FontSize="20" FontWeight="SemiBold"/>
+              </StackPanel>
+              <TextBlock Text="{Binding CostFallback}" FontSize="13" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"
+                         Visibility="{Binding CostFallbackVisibility}"/>
+              <TextBlock Text="costo API equivalente" FontSize="11" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"/>
+            </StackPanel>
+          </Grid>
+
+          <ItemsControl ItemsSource="{Binding OtherWindows}" ItemTemplate="{StaticResource WindowRowTemplate}"/>
+
+          <Border CornerRadius="10" Background="{StaticResource WarningFill}" Padding="10,6" Margin="0,12,0,0" Visibility="{Binding StatusPillVisibility}">
+            <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource WarningText}" FontSize="11" TextWrapping="Wrap"/>
           </Border>
-          <!-- Refresh a comando dell'agente. FlatRowButton marca il click Handled, quindi non fissa/sblocca il notch;
-               il comando e' sempre abilitato (un Button disabilitato lascerebbe passare il click al pannello). -->
-          <Button DockPanel.Dock="Right" Style="{StaticResource FlatRowButton}" Command="{Binding RefreshCommand}"
-                  ToolTip="{Binding RefreshTooltip}" Opacity="{Binding RefreshOpacity}" Margin="0,0,6,0" Padding="2"
-                  VerticalAlignment="Center" AutomationProperties.Name="Aggiorna">
-            <Path Data="{StaticResource RefreshIcon}" Stroke="{StaticResource TextMuted}" StrokeThickness="1.6"
-                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                  Width="12" Height="12" Stretch="Uniform" RenderTransformOrigin="0.5,0.5">
-              <Path.RenderTransform>
-                <RotateTransform/>
-              </Path.RenderTransform>
-              <Path.Style>
-                <Style TargetType="Path">
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding IsRefreshing}" Value="True">
-                      <DataTrigger.EnterActions>
-                        <BeginStoryboard x:Name="RefreshSpin">
-                          <Storyboard RepeatBehavior="Forever">
-                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                             From="0" To="360" Duration="0:0:0.9"/>
-                          </Storyboard>
-                        </BeginStoryboard>
-                      </DataTrigger.EnterActions>
-                      <DataTrigger.ExitActions>
-                        <StopStoryboard BeginStoryboardName="RefreshSpin"/>
-                      </DataTrigger.ExitActions>
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </Path.Style>
-            </Path>
-          </Button>
-          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-        </DockPanel>
-        <ItemsControl ItemsSource="{Binding Windows}" ItemTemplate="{StaticResource WindowRowTemplate}"/>
-        <TextBlock Text="{Binding ExtraUsage}" Foreground="{StaticResource TextMuted}" FontSize="11" Visibility="{Binding ExtraVisibility}"/>
-        <TextBlock Text="{Binding CostText}" ToolTip="{Binding CostTooltip}" Foreground="{StaticResource TextMuted}" FontSize="11"
-                   Visibility="{Binding CostVisibility}" Margin="0,2,0,0"/>
-        <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource Amber}" FontSize="11" TextWrapping="Wrap" Visibility="{Binding StatusVisibility}" Margin="0,2,0,0"/>
-        <TextBlock FontSize="11" Margin="0,4,0,0" Visibility="{Binding HookWarningVisibility}">
-          <Run Text="Stato live non attivo: " Foreground="{StaticResource TextMuted}"/><Hyperlink Command="{Binding InstallHooksCommand}" Foreground="{StaticResource Amber}" TextDecorations="None">installa hook</Hyperlink>
-        </TextBlock>
-        <ItemsControl ItemsSource="{Binding Sessions}" ItemTemplate="{StaticResource SessionRowTemplate}" Margin="0,4,0,0"/>
-        <TextBlock Text="nessuna sessione attiva" Foreground="{StaticResource TextMuted}" FontSize="11" Visibility="{Binding NoSessionsVisibility}" Margin="0,4,0,0"/>
-      </StackPanel>
+          <TextBlock Text="{Binding ExtraUsage}" Foreground="{StaticResource TextMuted}" FontSize="11" TextWrapping="Wrap" Margin="0,10,0,0"
+                     Visibility="{Binding ExtraVisibility}"/>
+          <Border CornerRadius="12" Background="{StaticResource Tile}" Padding="12,6,6,6" Margin="0,12,0,0" Visibility="{Binding HookWarningVisibility}">
+            <DockPanel>
+              <Button DockPanel.Dock="Right" Style="{StaticResource PillButton}" Content="Installa" Command="{Binding InstallHooksCommand}"/>
+              <TextBlock Text="Stato live non attivo" Foreground="{StaticResource TextMuted}" FontSize="11" VerticalAlignment="Center"/>
+            </DockPanel>
+          </Border>
+
+          <ItemsControl ItemsSource="{Binding Sessions}" ItemTemplate="{StaticResource SessionRowTemplate}" Margin="0,12,0,0"/>
+          <TextBlock Text="nessuna sessione attiva" Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,4,0,0"
+                     Visibility="{Binding NoSessionsVisibility}"/>
+        </StackPanel>
+      </Border>
     </Border>
   </DataTemplate>
 </ResourceDictionary>

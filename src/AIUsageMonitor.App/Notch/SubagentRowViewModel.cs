@@ -2,6 +2,7 @@ using System.Windows.Media;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Presentation;
 using AIUsageMonitor.Core.Pricing;
 
 namespace AIUsageMonitor.App.Notch;
@@ -31,9 +32,7 @@ public sealed class SubagentRowViewModel : ObservableObject
         ? (_state.AgentId.Length <= 8 ? _state.AgentId : _state.AgentId[..8])
         : _state.AgentType!;
 
-    public string PhaseLabel => _state.Phase == SubagentPhase.Running ? "in corso" : "finito";
-
-    public Brush DotBrush => PhaseVisuals.Brush(_state.Phase == SubagentPhase.Running ? SessionPhase.Working : SessionPhase.Idle);
+    public Brush ToneBrush => PhaseVisuals.ToneBrush(NotchPresentation.ToneOf(_state.Phase));
 
     public bool IsPulsing => _state.Phase == SubagentPhase.Running;
 
@@ -73,7 +72,7 @@ public sealed class SubagentRowViewModel : ObservableObject
     {
         _state = state;
         _pricing = pricing;
-        Raise(nameof(Name)); Raise(nameof(PhaseLabel)); Raise(nameof(DotBrush)); Raise(nameof(IsPulsing));
+        Raise(nameof(Name)); Raise(nameof(ToneBrush)); Raise(nameof(IsPulsing));
         Raise(nameof(TokensText)); Raise(nameof(TokensTooltip)); Raise(nameof(ModelText));
         Tick(now);
     }
