@@ -49,7 +49,12 @@ Windows.
   severity colours and a countdown to each reset.
 - **Live sessions.** Every Claude Code and Codex session shows whether it is working, waiting for your input,
   done or failed, driven by the agents' own hooks. Running workflow agents are listed under their session, with
-  the model they actually use.
+  the model they actually use. A session whose terminal you close disappears within seconds, even though the agent
+  had no chance to say goodbye.
+- **Sessions outside the terminal.** Claude Code sessions started from the Claude desktop app are picked up even
+  when they fire no hooks, and sessions running in the cloud (claude.ai/code, the desktop and mobile apps) and the
+  runs of your routines appear next to them, tagged `app`, `cloud` or `routine`. Clicking a cloud session opens it
+  on claude.ai.
 - **Tokens and API-equivalent cost.** Input (with cache) and output per session and per workflow agent, priced
   with the public [LiteLLM](https://github.com/BerriAI/litellm) price list and converted to euro at the ECB
   reference rate. It is labelled as an estimate: with a subscription it is not what you pay.
@@ -146,13 +151,26 @@ The agents don't expose their state, so the app reads it from their hooks.
 3. The app tails that file and keeps a state machine per session: `SessionStart` → ready, `UserPromptSubmit` →
    working, a `permission_prompt`/`idle_prompt` notification → waiting for input, `Stop` → done, `StopFailure` →
    error, `SessionEnd` → removed. At start-up it replays the last 24 hours silently, without toasts.
+4. **Subagents.** `SubagentStart`/`SubagentStop` keep the list of running agents. On `Stop`, Claude Code (2.1 and
+   later) also lists the background agents and workflows still in flight: an agent missing from that list has
+   finished even if its `SubagentStop` never arrived (interrupted, killed), an agent in the list the app never saw
+   start is added, and a background workflow between two phases keeps the session "al lavoro" instead of toasting
+   "finito" at every phase. An agent that sends no event for 30 minutes is considered finished only if its
+   transcript has not been written in that time either.
+5. **Closed terminals.** Closing a terminal kills the agent before it can fire `SessionEnd`. The app ties every
+   session to the process of its agent (from the process walk of the hook and from Claude Code's own session
+   registry, with the process creation time so a recycled pid is never mistaken for it) and ends the session when
+   that process is gone. The ties are saved in `session-processes.json`, so sessions whose terminal was closed
+   while the app was not running (or before a reboot) are not brought back by the replay.
 
 <details>
 <summary>What each event line contains, and how tokens are counted</summary>
 
 Each line holds a timestamp, the agent, the event name, `session_id`, `cwd`, the notification type and the agent's
 message cut to 200 characters. `SessionStart` and `UserPromptSubmit` also carry a `host` object with a few hints
-about the terminal (see [Jump to the terminal](#jump-to-the-terminal)).
+about the terminal (see [Jump to the terminal](#jump-to-the-terminal)) and Claude Code's entry point (`cli`,
+`claude-desktop`...). `Stop` and `SubagentStop` carry the id, type and agent type of the background agents and
+workflows still in flight.
 
 Every session shows **↑ input** (cache included) and **↓ output** separately. They are the conversation's
 cumulative tokens: the context sent again with every request is counted again, so they can be far larger than
@@ -305,18 +323,40 @@ settings on the updates tab.
 
 </details>
 
+### Sessions outside the terminal
+
+**Claude desktop app.** Every Claude Code process — the CLI, `claude -p`, and the SDK the desktop app runs — keeps
+a record in `%USERPROFILE%\.claude\sessions\<pid>.json` with its session id, folder, entry point and status
+(`busy`, `waiting`, `idle`). The app reads those records every 3 seconds. A session that no hook has reported after
+8 seconds (typically a desktop app session, or any session while the hooks are not installed) is adopted from its
+record and follows its status: busy → working, waiting → waiting for input, back to idle → done. Sessions started
+from the desktop app are tagged `app`, and clicking them brings the app window to the front. Their tokens and costs
+come from their transcript, like any other session. Sessions reported by the hooks are left to the hooks.
+
+**Cloud sessions and routines.** With *Settings → Agenti → Sessioni cloud e routine* on (the default), the app also
+reads, at the same pace as the Claude quota, the Claude Code sessions of your account that run in Anthropic's cloud
+(`GET /v1/code/sessions`, the list `claude --teleport` shows) and the latest run of each routine
+(`GET /v1/code/triggers`), with the OAuth token Claude Code already keeps on your machine. A cloud session is shown
+while it works or waits for you, and for 6 hours after its last activity; it shows the tokens and API-equivalent
+cost the session reports about itself. Clicking its name opens it on claude.ai. Remote Control sessions are skipped:
+they are local sessions the hooks already report. The first read after start-up raises no notifications.
+
 ## Privacy
 
-- **Read locally only:** Claude credentials, Codex session files, the hook configuration and the event file.
-- **Network:** the Anthropic usage endpoint, with the OAuth token already on your machine. With costs on (the
+- **Read locally only:** Claude credentials, Codex session files, the hook configuration, the event file, Claude
+  Code's session registry (`~/.claude/sessions`) and the organization id in `~/.claude.json`.
+- **Network:** the Anthropic usage endpoint, with the OAuth token already on your machine. With cloud sessions on
+  (the default), also the sessions and routines endpoints of the same API, with the same token: they return titles,
+  statuses and token counts, which stay in memory and are never logged. With costs on (the
   default), also two anonymous requests at most once a day that send no data: the LiteLLM price list from
   `raw.githubusercontent.com` and the reference rate from `www.ecb.europa.eu`. The updater talks to GitHub only
   after you link an account: this repository's release API and its asset downloads, with the session the app
   created (never logged or shown).
 - **Never sent, logged or shown:** prompts, conversation content and tokens. Recorded events hold event names,
   the session id, the working folder, a short message from the agent and, on start and prompt events, a few hints
-  about the hosting terminal (parent pid, Herdr pane, wmux pty, `WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID`),
-  used only by the jump-to-terminal click. They never leave the machine.
+  about the hosting terminal (parent pid, Herdr pane, wmux pty, `WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID`,
+  Claude Code's entry point), used only by the jump-to-terminal click, and on stop events the ids of the background
+  agents still running. They never leave the machine.
 - **No telemetry.**
 
 ## Files
@@ -329,6 +369,7 @@ settings on the updates tab.
 | `%LOCALAPPDATA%\AIUsageMonitor\prices-override.json` | prices you add or correct (optional) |
 | `%LOCALAPPDATA%\AIUsageMonitor\exchange-rate.json` | last ECB reference rate |
 | `%LOCALAPPDATA%\AIUsageMonitor\logs\app-<date>.log` | logs (7 days, Info level) |
+| `%LOCALAPPDATA%\AIUsageMonitor\session-processes.json` | which process runs each session, and the sessions found ended, to drop closed terminals |
 | `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json` | the updater's GitHub session, DPAPI-encrypted |
 | `%LOCALAPPDATA%\AIUsageMonitor\updates\` | downloaded version waiting to be installed (stale files or files older than 7 days are deleted) |
 | `<exe folder>\AIUsageMonitor.exe.old-<id>` | previous version after an update, deleted at the next start |
@@ -336,7 +377,7 @@ settings on the updates tab.
 | `%USERPROFILE%\.aiusagemonitor\events.jsonl` | agent events (rotated at 5 MB) |
 | `%USERPROFILE%\.aiusagemonitor\backups\` | backups of the configuration files before every change |
 
-The settings cover: enabled agents and refresh intervals, the notch's monitor, vertical offset, close delay and
+The settings cover: enabled agents and refresh intervals, cloud sessions and routines, the notch's monitor, vertical offset, close delay and
 compact mode, which notifications to show and for which agents, automatic update checks, costs (show or hide,
 fallback rate) and autostart (the `AIUsageMonitor` value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 
@@ -384,6 +425,12 @@ with *Run workflow*) on a Windows runner:
 The version lives in tags and releases: the workflow never commits or pushes to the repository.
 
 ## Known limitations
+
+- **Cloud sessions:** the sessions and routines endpoints are the internal ones the Claude Code CLI uses, not a
+  documented API: if they change, the log says "Sessioni cloud: ..." and the rest of the app keeps working. Cowork
+  sessions are not listed, and cloud sessions have no subagent list.
+- **Desktop app sessions without hooks:** their status comes from Claude Code's session registry, so they show
+  "waiting for input" and "done" but no agent list and no message.
 
 - **Claude Code, permissions:** granting a permission fires no hook, so the session stays "waiting for input"
   until the next `Stop`, that is until the end of the turn. `AskUserQuestion` is the exception: its
