@@ -67,6 +67,16 @@
     <GradientStop Offset="1" Color="#FF71717A"/>
   </LinearGradientBrush>
 
+  <!-- Riflesso delle barre: banda bianca al 55 % che sfuma a zero ai lati. BarSheen e' la banda che disegna UsageBar;
+       la ProgressBar di Controls.xaml usa i due colori per un pennello suo, perche' ne anima la posizione. -->
+  <Color x:Key="SheenClearColor">#00FFFFFF</Color>
+  <Color x:Key="SheenPeakColor">#8CFFFFFF</Color>
+  <LinearGradientBrush x:Key="BarSheen" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Offset="0" Color="{StaticResource SheenClearColor}"/>
+    <GradientStop Offset="0.5" Color="{StaticResource SheenPeakColor}"/>
+    <GradientStop Offset="1" Color="{StaticResource SheenClearColor}"/>
+  </LinearGradientBrush>
+
   <!-- Alone dell'agente nell'angolo in alto a sinistra della card: 160x130 px assoluti, dal 30 % a zero. -->
   <RadialGradientBrush x:Key="ClaudeGlow" MappingMode="Absolute" Center="0,0" GradientOrigin="0,0" RadiusX="160" RadiusY="130">
     <GradientStop Offset="0" Color="#4DD97757"/>

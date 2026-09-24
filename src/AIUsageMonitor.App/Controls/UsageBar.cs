@@ -33,8 +33,6 @@ public sealed class UsageBar : FrameworkElement
         "SheenPhase", typeof(double), typeof(UsageBar),
         new FrameworkPropertyMetadata(0d, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    private static readonly Brush SheenBrush = CreateSheenBrush();
-
     private bool _hasValue;
     private bool _sheenRunning;
 
@@ -120,7 +118,7 @@ public sealed class UsageBar : FrameworkElement
         var band = fill.Width * 0.4;
         var x = -band + (fill.Width + band) * (phase / 0.6);
         dc.PushClip(new RectangleGeometry(fill, radius, radius));
-        dc.DrawRectangle(SheenBrush, null, new Rect(x, 0, band, height));
+        dc.DrawRectangle(Resource("BarSheen", Brushes.Transparent), null, new Rect(x, 0, band, height));
         dc.Pop();
     }
 
@@ -133,14 +131,4 @@ public sealed class UsageBar : FrameworkElement
     };
 
     private Brush Resource(string key, Brush fallback) => TryFindResource(key) as Brush ?? fallback;
-
-    private static Brush CreateSheenBrush()
-    {
-        var brush = new LinearGradientBrush { StartPoint = new Point(0, 0.5), EndPoint = new Point(1, 0.5) };
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), 0));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF), 0.5));
-        brush.GradientStops.Add(new GradientStop(Color.FromArgb(0x00, 0xFF, 0xFF, 0xFF), 1));
-        brush.Freeze();
-        return brush;
-    }
 }

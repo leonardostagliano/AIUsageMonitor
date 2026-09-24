@@ -15,6 +15,7 @@ public sealed class MotionSettings : INotifyPropertyChanged
 
     public static readonly Duration FillDuration = new(TimeSpan.FromMilliseconds(300));
     public static readonly Duration CountDuration = new(TimeSpan.FromMilliseconds(400));
+    public static readonly Duration KnobDuration = new(TimeSpan.FromMilliseconds(150));
 
     public static MotionSettings Instance { get; } = new();
 

@@ -130,28 +130,30 @@
     <Setter Property="FontSize" Value="13"/>
     <Setter Property="Margin" Value="0,6"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    <!-- Scorrimento del pomello (150 ms) al cambio di stato: 18 = 44 - 20 - 3 - 3, la distanza fra le due posizioni
+         di riposo qui sotto. Vedi Controls/SwitchKnob.cs. -->
+    <Setter Property="c:SwitchKnob.Travel" Value="18"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="CheckBox">
           <DockPanel Background="Transparent" LastChildFill="True">
             <Border x:Name="Track" DockPanel.Dock="Right" Width="44" Height="26" CornerRadius="13"
                     Background="{StaticResource SurfacePressed}" VerticalAlignment="Center">
-              <Ellipse x:Name="Knob" Width="20" Height="20" Fill="White" HorizontalAlignment="Left" Margin="3,0,0,0">
-                <Ellipse.RenderTransform><TranslateTransform X="0"/></Ellipse.RenderTransform>
-              </Ellipse>
+              <!-- La posizione di riposo la decidono solo i trigger; SwitchKnob cerca il pomello per nome ("Knob") e
+                   anima una sua TranslateTransform che torna sempre a zero. -->
+              <Ellipse x:Name="Knob" Width="20" Height="20" Fill="White" HorizontalAlignment="Left" Margin="3,0,0,0"/>
             </Border>
-            <ContentPresenter VerticalAlignment="Center" Margin="0,0,16,0" RecognizesAccessKey="True"/>
+            <ContentPresenter x:Name="Label" VerticalAlignment="Center" Margin="0,0,16,0" RecognizesAccessKey="True"/>
           </DockPanel>
           <ControlTemplate.Triggers>
-            <!-- Il Setter di un trigger puo' puntare solo a un elemento del template (MC4111 su una trasformazione con
-                 nome): si sostituisce la RenderTransform del pomello, come per il chevron dell'Expander. -->
             <Trigger Property="IsChecked" Value="True">
               <Setter TargetName="Track" Property="Background" Value="{StaticResource Toggle}"/>
-              <Setter TargetName="Knob" Property="RenderTransform">
-                <Setter.Value><TranslateTransform X="18"/></Setter.Value>
-              </Setter>
+              <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+              <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0"/>
             </Trigger>
+            <!-- Interruttore senza etichetta (i "Monitora" delle Impostazioni): niente spazio vuoto a sinistra, e il
+                 contorno di focus resta centrato sull'interruttore. -->
+            <Trigger Property="HasContent" Value="False"><Setter TargetName="Label" Property="Visibility" Value="Collapsed"/></Trigger>
             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Knob" Property="Opacity" Value="0.92"/></Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
@@ -252,6 +254,13 @@
               </Border>
             </Popup>
           </Grid>
+          <ControlTemplate.Triggers>
+            <!-- Popup non guarda le animazioni di Windows: senza questo trigger la tendina entrerebbe in dissolvenza
+                 anche con le animazioni spente. -->
+            <DataTrigger Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="False">
+              <Setter TargetName="PART_Popup" Property="PopupAnimation" Value="None"/>
+            </DataTrigger>
+          </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
@@ -357,8 +366,8 @@
 
   <!-- ProgressBar da 8 px con il gradiente del tono normale e il riflesso (download degli aggiornamenti). ProgressBar
        dimensiona da solo PART_Indicator rispetto a PART_Track, quindi i due nomi sono obbligatori. Il riflesso gira
-       solo con le animazioni di Windows attive; in modo indeterminato l'indicatore pulsa (anche questo solo con le
-       animazioni attive). -->
+       solo con le animazioni di Windows attive e solo mentre la barra e' visibile; in modo indeterminato l'indicatore
+       pulsa, alle stesse condizioni. -->
   <Style TargetType="ProgressBar">
     <Setter Property="Foreground" Value="{StaticResource ToneNormalBrush}"/>
     <Setter Property="Background" Value="{StaticResource BarTrack}"/>
@@ -369,38 +378,48 @@
         <ControlTemplate TargetType="ProgressBar">
           <Grid x:Name="PART_Track">
             <Border Background="{TemplateBinding Background}" CornerRadius="4"/>
-            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left" ClipToBounds="True">
-              <Border x:Name="Sheen" Width="60" HorizontalAlignment="Left" Opacity="0">
+            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left">
+              <!-- Il riflesso copre tutta la parte piena, con gli stessi angoli arrotondati. La banda sta nel pennello
+                   (il 40 % della larghezza, come in UsageBar) e scorre spostandone la RelativeTransform, in frazioni
+                   della parte piena: da -0,4 (appena fuori a sinistra) a 1 (appena fuori a destra), qualunque sia la
+                   larghezza della barra. -->
+              <Border x:Name="Sheen" CornerRadius="4" Opacity="0">
                 <Border.Background>
                   <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
-                    <GradientStop Offset="0" Color="#00FFFFFF"/>
-                    <GradientStop Offset="0.5" Color="#8CFFFFFF"/>
-                    <GradientStop Offset="1" Color="#00FFFFFF"/>
+                    <LinearGradientBrush.RelativeTransform><TranslateTransform X="-0.4"/></LinearGradientBrush.RelativeTransform>
+                    <GradientStop Offset="0" Color="{StaticResource SheenClearColor}"/>
+                    <GradientStop Offset="0.2" Color="{StaticResource SheenPeakColor}"/>
+                    <GradientStop Offset="0.4" Color="{StaticResource SheenClearColor}"/>
                   </LinearGradientBrush>
                 </Border.Background>
-                <Border.RenderTransform><TranslateTransform x:Name="SheenShift" X="-60"/></Border.RenderTransform>
               </Border>
             </Border>
           </Grid>
           <ControlTemplate.Triggers>
-            <DataTrigger Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True">
+            <!-- Passaggio in 1,7 s, poi pausa fino a 2,8 s (spec, sezione 5). -->
+            <MultiDataTrigger>
+              <MultiDataTrigger.Conditions>
+                <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+                <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+              </MultiDataTrigger.Conditions>
               <Setter TargetName="Sheen" Property="Opacity" Value="1"/>
-              <DataTrigger.EnterActions>
+              <MultiDataTrigger.EnterActions>
                 <BeginStoryboard x:Name="SheenLoop">
-                  <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
-                    <DoubleAnimation Storyboard.TargetName="SheenShift" Storyboard.TargetProperty="X" From="-60" To="420" Duration="0:0:1.7"/>
-                    <DoubleAnimation Storyboard.TargetName="SheenShift" Storyboard.TargetProperty="X" From="420" To="420" BeginTime="0:0:1.7" Duration="0:0:1.1"/>
+                  <Storyboard Duration="0:0:2.8" RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+                    <DoubleAnimation Storyboard.TargetName="Sheen" From="-0.4" To="1" Duration="0:0:1.7"
+                                     Storyboard.TargetProperty="(Border.Background).(Brush.RelativeTransform).(TranslateTransform.X)"/>
                   </Storyboard>
                 </BeginStoryboard>
-              </DataTrigger.EnterActions>
-              <DataTrigger.ExitActions><StopStoryboard BeginStoryboardName="SheenLoop"/></DataTrigger.ExitActions>
-            </DataTrigger>
-            <!-- Anche la pulsazione e' un ciclo: solo con le animazioni di Windows attive e a 30 fps, come il riflesso;
-                 senza animazioni l'indicatore indeterminato resta pieno e fermo. -->
+              </MultiDataTrigger.EnterActions>
+              <MultiDataTrigger.ExitActions><StopStoryboard BeginStoryboardName="SheenLoop"/></MultiDataTrigger.ExitActions>
+            </MultiDataTrigger>
+            <!-- Anche la pulsazione e' un ciclo: solo con le animazioni di Windows attive, a barra visibile e a 30 fps,
+                 come il riflesso; senza animazioni l'indicatore indeterminato resta pieno e fermo. -->
             <MultiDataTrigger>
               <MultiDataTrigger.Conditions>
                 <Condition Binding="{Binding IsIndeterminate, RelativeSource={RelativeSource Self}}" Value="True"/>
                 <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+                <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
               </MultiDataTrigger.Conditions>
               <MultiDataTrigger.EnterActions>
                 <BeginStoryboard x:Name="Pulse">
@@ -462,8 +481,10 @@
     </Setter>
   </Style>
 
-  <!-- Schede segmentate: capsula Tile con le schede a larghezza uguale; la scheda attiva e' una capsula Surface.
-       Il contenuto sta in PART_SelectedContentHost, che la finestra Impostazioni fa entrare in dissolvenza. -->
+  <!-- Schede segmentate: capsula Tile con le schede in una riga; la scheda attiva e' una capsula Surface. SegmentPanel
+       da' a ogni scheda la larghezza della sua intestazione piu' una parte uguale dello spazio che avanza: a colonne
+       uguali "Aggiornamenti" si tagliava, anche alla larghezza di partenza delle Impostazioni (760). Il contenuto sta in
+       PART_SelectedContentHost, che la finestra Impostazioni fa entrare in dissolvenza. -->
   <Style TargetType="TabControl">
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderThickness" Value="0"/>
@@ -471,11 +492,18 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TabControl">
-          <DockPanel>
+          <!-- Tastiera come nel template di sistema, perche' un pannello qualunque non porta le impostazioni di TabPanel.
+               Tab entra una volta sola nella riga delle schede (Once) e poi passa al contenuto: senza, si fermava su
+               ogni scheda e la selezionava, e il contenuto raggiungibile restava solo quello dell'ultima. Le frecce
+               scorrono le schede e dall'ultima tornano alla prima (Cycle); dal contenuto non escono verso le schede
+               (Contained). -->
+          <DockPanel KeyboardNavigation.TabNavigation="Local">
             <Border DockPanel.Dock="Top" Background="{StaticResource Tile}" CornerRadius="14" Padding="4" Margin="0,0,0,16">
-              <UniformGrid Rows="1" IsItemsHost="True" KeyboardNavigation.TabIndex="1"/>
+              <c:SegmentPanel IsItemsHost="True" KeyboardNavigation.TabIndex="1"
+                              KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle"/>
             </Border>
-            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" KeyboardNavigation.TabIndex="2"/>
+            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" KeyboardNavigation.TabIndex="2"
+                              KeyboardNavigation.TabNavigation="Local" KeyboardNavigation.DirectionalNavigation="Contained"/>
           </DockPanel>
         </ControlTemplate>
       </Setter.Value>
@@ -493,7 +521,14 @@
       <Setter.Value>
         <ControlTemplate TargetType="TabItem">
           <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="10,0">
-            <ContentPresenter x:Name="HeaderHost" ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+            <Grid>
+              <!-- Copia invisibile dell'intestazione in semibold (intestazioni di testo, come nelle Impostazioni): la
+                   scheda e' gia' larga quanto la versione in grassetto, quindi quando diventa attiva non si allarga e
+                   SegmentPanel non sposta le altre. -->
+              <TextBlock Text="{Binding Header, RelativeSource={RelativeSource TemplatedParent}}" FontWeight="SemiBold"
+                         Visibility="Hidden" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <ContentPresenter x:Name="HeaderHost" ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+            </Grid>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{StaticResource TextPrimary}"/></Trigger>
