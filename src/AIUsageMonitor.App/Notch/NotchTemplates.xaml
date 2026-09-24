@@ -252,7 +252,20 @@
             <StackPanel Visibility="{Binding NoDataVisibility}">
               <TextBlock Text="—" FontFamily="{StaticResource DisplayFont}" FontWeight="SemiBold" Foreground="{StaticResource TextMuted}"
                          FontSize="{Binding DataContext.HeroFontSize, RelativeSource={RelativeSource AncestorType=Window}}"/>
-              <TextBlock Text="{Binding NoDataCaption}" FontSize="11" Foreground="{StaticResource WarningText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+              <!-- Ambra solo con un messaggio di stato (in attesa, dati vecchi, token scaduto); uno snapshot fresco senza
+                   finestre non e' un problema e resta TextMuted. -->
+              <TextBlock Text="{Binding NoDataCaption}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                    <Setter Property="Foreground" Value="{StaticResource WarningText}"/>
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding StatusMessage}" Value="{x:Null}">
+                        <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
             </StackPanel>
             <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Bottom" Background="Transparent"
                         Visibility="{Binding CostVisibility}" ToolTip="{Binding CostTooltip}">

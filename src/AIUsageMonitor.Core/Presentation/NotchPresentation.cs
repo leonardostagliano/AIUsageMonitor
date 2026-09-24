@@ -55,6 +55,28 @@ public static class NotchPresentation
         return reset <= now ? "reset adesso" : $"reset tra {CountdownFormatter.Until(reset, now)}";
     }
 
+    /// <summary>
+    /// A percent as the whole number every surface shows (hero number, bar rows, tray tooltip): the same
+    /// <c>"0"</c> format as <c>{Percent:0}</c>, so a half rounds away from zero everywhere (12.5 reads "13", not the
+    /// "12" of <see cref="Math.Round(double)"/>).
+    /// </summary>
+    public static string WholePercent(double percent) => percent.ToString("0", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The status text of a card: a wait message before the first snapshot, the snapshot's own message while it is
+    /// not fresh, nothing while it is.
+    /// </summary>
+    public static string? StatusMessage(UsageSnapshot? snapshot) =>
+        snapshot is null ? "In attesa del primo aggiornamento"
+        : snapshot.Status == UsageStatus.Ok ? null
+        : snapshot.StatusMessage;
+
+    /// <summary>
+    /// The caption under the "—" of a card without quota windows: the status text when there is one, otherwise a
+    /// fresh snapshot that simply has no windows.
+    /// </summary>
+    public static string NoDataCaption(string? statusMessage) => statusMessage ?? "Nessuna finestra di quota";
+
     /// <summary>"finestra 5h · reset tra 3h 5m", or just "finestra 5h" without a reset time.</summary>
     public static string HeroCaption(UsageWindow window, DateTimeOffset now) =>
         ResetCaption(window, now) is { } reset ? $"finestra {window.Label} · {reset}" : $"finestra {window.Label}";

@@ -83,6 +83,9 @@ public class NotchPresentationTests
         Assert.Equal("al lavoro · 1m", NotchPresentation.SessionSubtitle(Session("a", SessionPhase.Working, last: Now.AddMinutes(-1)), Now));
         Assert.Equal("attende input · 4m", NotchPresentation.SessionSubtitle(Session("b", SessionPhase.NeedsInput, last: Now.AddMinutes(-4)), Now));
         Assert.Equal("finito · 12m", NotchPresentation.SessionSubtitle(Session("c", SessionPhase.Idle, last: Now.AddMinutes(-12)), Now));
+        Assert.Equal("errore · 3m", NotchPresentation.SessionSubtitle(Session("e", SessionPhase.Error, last: Now.AddMinutes(-3)), Now));
+        // Idle before the first completed turn: no message yet, so "pronto" instead of "finito".
+        Assert.Equal("pronto · 2m", NotchPresentation.SessionSubtitle(Session("f", SessionPhase.Idle, last: Now.AddMinutes(-2)) with { Message = null }, Now));
 
         var withAgents = Session("d", SessionPhase.Working, last: Now.AddMinutes(-1)) with
         {
@@ -106,6 +109,42 @@ public class NotchPresentationTests
             NotchPresentation.Summary([Session("a", SessionPhase.NeedsInput), Session("b", SessionPhase.NeedsInput)]));
         Assert.Equal(new SummaryPill(PhaseTone.Error, "3 in errore"),
             NotchPresentation.Summary([Session("a", SessionPhase.Error), Session("b", SessionPhase.Error), Session("c", SessionPhase.Error)]));
+        Assert.Equal(new SummaryPill(PhaseTone.Working, "1 al lavoro"),
+            NotchPresentation.Summary([Session("a", SessionPhase.Working)]));
+        Assert.Equal(new SummaryPill(PhaseTone.NeedsInput, "1 attende input"),
+            NotchPresentation.Summary([Session("a", SessionPhase.NeedsInput), Session("b", SessionPhase.Working)]));
+        Assert.Equal(new SummaryPill(PhaseTone.NeedsInput, "1 attende input"),
+            NotchPresentation.Summary([Session("a", SessionPhase.Idle), Session("b", SessionPhase.Working), Session("c", SessionPhase.Error), Session("d", SessionPhase.NeedsInput)]));
+    }
+
+    [Theory]
+    [InlineData(12.5, "13")]
+    [InlineData(0.5, "1")]
+    [InlineData(13.5, "14")]
+    [InlineData(12.4, "12")]
+    [InlineData(99.6, "100")]
+    [InlineData(0, "0")]
+    public void The_whole_percent_rounds_halves_like_every_other_percent_text(double percent, string expected)
+    {
+        Assert.Equal(expected, NotchPresentation.WholePercent(percent));
+        // The bar rows and the tray tooltip format with {Percent:0}: the hero number must read the same.
+        Assert.Equal($"{percent:0}", NotchPresentation.WholePercent(percent));
+    }
+
+    [Fact]
+    public void A_card_without_windows_explains_why()
+    {
+        var fresh = UsageSnapshot.Empty(AgentKind.Claude, UsageStatus.Ok, null, Now);
+        var stale = UsageSnapshot.Empty(AgentKind.Claude, UsageStatus.Stale, "Ultimo aggiornamento 01:23", Now);
+
+        Assert.Equal("In attesa del primo aggiornamento", NotchPresentation.StatusMessage(null));
+        Assert.Null(NotchPresentation.StatusMessage(fresh));
+        Assert.Equal("Ultimo aggiornamento 01:23", NotchPresentation.StatusMessage(stale));
+
+        Assert.Equal("In attesa del primo aggiornamento", NotchPresentation.NoDataCaption(NotchPresentation.StatusMessage(null)));
+        // A fresh snapshot can come back without windows (null five_hour/seven_day): it is not "waiting".
+        Assert.Equal("Nessuna finestra di quota", NotchPresentation.NoDataCaption(NotchPresentation.StatusMessage(fresh)));
+        Assert.Equal("Ultimo aggiornamento 01:23", NotchPresentation.NoDataCaption(NotchPresentation.StatusMessage(stale)));
     }
 
     [Fact]

@@ -105,8 +105,11 @@ public sealed class AgentCardViewModel : ObservableObject
     public Visibility HeroVisibility => HasWindows ? Visibility.Visible : Visibility.Collapsed;
     public Visibility NoDataVisibility => HasWindows ? Visibility.Collapsed : Visibility.Visible;
 
-    /// <summary>Senza finestre il messaggio di stato sta sotto il "—" invece che nella pillola.</summary>
-    public string NoDataCaption => StatusMessage ?? "In attesa del primo aggiornamento";
+    /// <summary>
+    /// Senza finestre il messaggio di stato sta sotto il "—" invece che nella pillola; uno snapshot fresco senza
+    /// finestre non ha messaggio e mostra "Nessuna finestra di quota" (in TextMuted, vedi NotchTemplates.xaml).
+    /// </summary>
+    public string NoDataCaption => NotchPresentation.NoDataCaption(StatusMessage);
 
     public Visibility StatusPillVisibility => HasWindows && !string.IsNullOrEmpty(StatusMessage) ? Visibility.Visible : Visibility.Collapsed;
 
@@ -157,9 +160,7 @@ public sealed class AgentCardViewModel : ObservableObject
 
         PlanLabel = snapshot?.PlanLabel;
         ExtraUsage = snapshot?.ExtraUsage;
-        StatusMessage = snapshot is null ? "In attesa del primo aggiornamento"
-            : snapshot.Status == UsageStatus.Ok ? null
-            : snapshot.StatusMessage;
+        StatusMessage = NotchPresentation.StatusMessage(snapshot);
 
         _status = snapshot?.Status ?? UsageStatus.NoData;
         var (hero, others) = NotchPresentation.SplitWindows(snapshot?.Windows ?? Array.Empty<UsageWindow>());

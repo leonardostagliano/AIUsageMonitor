@@ -1,8 +1,8 @@
-using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
 using AIUsageMonitor.Core.Infrastructure;
+using AIUsageMonitor.Core.Presentation;
 
 namespace AIUsageMonitor.App.Controls;
 
@@ -32,7 +32,8 @@ public static class NumberRoll
     public static string Format(double value, NumberRollKind kind) =>
         !double.IsFinite(value) ? ""
         : kind == NumberRollKind.Euro ? CostFormatter.Amount((decimal)value)
-        : Math.Round(value).ToString("0", CultureInfo.InvariantCulture);
+        // Not Math.Round: that rounds a half to even (12.5 -> 12) while every other percent text says 13.
+        : NotchPresentation.WholePercent(value);
 
     private static void OnValueChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
