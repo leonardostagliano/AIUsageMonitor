@@ -7,6 +7,7 @@ using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Presentation;
 using AIUsageMonitor.Core.Pricing;
 using AIUsageMonitor.Core.Usage;
 
@@ -24,17 +25,24 @@ public sealed class AgentCardViewModel : ObservableObject
     private string? _planLabel;
     private string? _extraUsage;
     private string? _statusMessage;
-    private string? _costText;
     private string? _costTooltip;
     private bool _hookWarning;
     private Brush _aggregateBrush = PhaseVisuals.Brush(null);
-    private Brush _aggregateStroke = PhaseVisuals.Brush(SessionPhase.Idle);
+    private UsageWindow? _hero;
+    private UsageStatus _status;
+    private SessionPhase? _phase;
+    private CostDisplay? _cost;
+    private double _heroPercent = double.NaN;
+    private UsageTone _heroTone = UsageTone.Stale;
+    private string _heroCaption = "";
 
     public AgentCardViewModel(AgentKind agent, AppServices services, Geometry icon)
     {
         Agent = agent;
         _services = services;
         Icon = icon;
+        BrandBrush = ThemeBrush(agent == AgentKind.Claude ? "BrandClaude" : "BrandCodex");
+        BrandGlow = ThemeBrush(agent == AgentKind.Claude ? "ClaudeGlow" : "CodexGlow");
         InstallHooksCommand = new RelayCommand(InstallHooks);
         // Sempre abilitato: un Button disabilitato non riceve il click, che finirebbe sul pannello e fisserebbe o
         // sbloccherebbe il notch. Durante refresh e cooldown il click viene ignorato da ManualRefreshGate.
@@ -46,7 +54,6 @@ public sealed class AgentCardViewModel : ObservableObject
     public AgentKind Agent { get; }
     public string Name => Agent.DisplayName();
     public Geometry Icon { get; }
-    public ObservableCollection<WindowRowViewModel> Windows { get; } = new();
     public ObservableCollection<SessionRowViewModel> Sessions { get; } = new();
     public ICommand InstallHooksCommand { get; }
     public ICommand RefreshCommand { get; }
@@ -55,18 +62,68 @@ public sealed class AgentCardViewModel : ObservableObject
     public Visibility PlanVisibility => string.IsNullOrEmpty(PlanLabel) ? Visibility.Collapsed : Visibility.Visible;
     public string? ExtraUsage { get => _extraUsage; private set { if (Set(ref _extraUsage, value)) Raise(nameof(ExtraVisibility)); } }
     public Visibility ExtraVisibility => string.IsNullOrEmpty(ExtraUsage) ? Visibility.Collapsed : Visibility.Visible;
-    public string? StatusMessage { get => _statusMessage; private set { if (Set(ref _statusMessage, value)) Raise(nameof(StatusVisibility)); } }
-    public Visibility StatusVisibility => string.IsNullOrEmpty(StatusMessage) ? Visibility.Collapsed : Visibility.Visible;
+
+    public string? StatusMessage
+    {
+        get => _statusMessage;
+        private set
+        {
+            if (!Set(ref _statusMessage, value)) return;
+            Raise(nameof(NoDataCaption)); Raise(nameof(StatusPillVisibility));
+        }
+    }
+
     public bool HookWarning { get => _hookWarning; private set { if (Set(ref _hookWarning, value)) Raise(nameof(HookWarningVisibility)); } }
     public Visibility HookWarningVisibility => HookWarning ? Visibility.Visible : Visibility.Collapsed;
     public Visibility NoSessionsVisibility => Sessions.Count == 0 && !HookWarning ? Visibility.Visible : Visibility.Collapsed;
     public Brush AggregateBrush { get => _aggregateBrush; private set => Set(ref _aggregateBrush, value); }
-    public Brush AggregateStroke { get => _aggregateStroke; private set => Set(ref _aggregateStroke, value); }
 
-    /// <summary>"Costo API equivalente ≈ 12,40 €": sessioni della card piu' tutti i loro agenti; null con i costi nascosti.</summary>
-    public string? CostText { get => _costText; private set { if (Set(ref _costText, value)) Raise(nameof(CostVisibility)); } }
+    /// <summary>Colore dell'agente: cerchio dell'icona nella card e nella linguetta.</summary>
+    public Brush BrandBrush { get; }
+
+    /// <summary>Alone radiale del colore dell'agente nell'angolo della card (spec 6.3, punto 6).</summary>
+    public Brush BrandGlow { get; }
+
+    /// <summary>Le finestre dopo la prima, come barre (la prima e' il numero grande).</summary>
+    public ObservableCollection<WindowRowViewModel> OtherWindows { get; } = new();
+
+    public double HeroPercent
+    {
+        get => _heroPercent;
+        private set { if (Set(ref _heroPercent, value)) Raise(nameof(TabPercent)); }
+    }
+
+    public UsageTone HeroTone
+    {
+        get => _heroTone;
+        private set { if (Set(ref _heroTone, value)) Raise(nameof(TabTone)); }
+    }
+
+    public string HeroCaption { get => _heroCaption; private set => Set(ref _heroCaption, value); }
+
+    public bool HasWindows => _hero is not null;
+    public Visibility HeroVisibility => HasWindows ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility NoDataVisibility => HasWindows ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>Senza finestre il messaggio di stato sta sotto il "—" invece che nella pillola.</summary>
+    public string NoDataCaption => StatusMessage ?? "In attesa del primo aggiornamento";
+
+    public Visibility StatusPillVisibility => HasWindows && !string.IsNullOrEmpty(StatusMessage) ? Visibility.Visible : Visibility.Collapsed;
+
+    // Linguetta: anello della prima finestra e pallino dello stato aggregato (spec 6.1).
+    public double TabPercent => HeroPercent;
+    public UsageTone TabTone => HeroTone;
+    public Visibility BadgeVisibility => _phase is null ? Visibility.Collapsed : Visibility.Visible;
+    public bool IsWorking => _phase == SessionPhase.Working;
+
+    // Costo della card: lead, importo che scorre, oppure "costo n/d" (NotchPresentation.CostParts).
+    public string CostLead => _cost?.Lead ?? "";
+    public double CostValue => _cost?.Amount is { } amount ? (double)amount : double.NaN;
+    public string? CostFallback => _cost?.Fallback;
     public string? CostTooltip { get => _costTooltip; private set => Set(ref _costTooltip, value); }
-    public Visibility CostVisibility => CostText is null ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility CostVisibility => _cost is null ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility CostAmountVisibility => _cost?.Amount is null ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility CostFallbackVisibility => _cost?.Fallback is null ? Visibility.Collapsed : Visibility.Visible;
 
     /// <summary>Guida la rotazione dell'icona ⟳.</summary>
     public bool IsRefreshing => _refresh.IsRefreshing;
@@ -104,24 +161,40 @@ public sealed class AgentCardViewModel : ObservableObject
             : snapshot.Status == UsageStatus.Ok ? null
             : snapshot.StatusMessage;
 
-        SyncWindows(snapshot?.Windows ?? Array.Empty<UsageWindow>(), snapshot?.Status ?? UsageStatus.NoData, now);
+        _status = snapshot?.Status ?? UsageStatus.NoData;
+        var (hero, others) = NotchPresentation.SplitWindows(snapshot?.Windows ?? Array.Empty<UsageWindow>());
+        SetHero(hero, now);
+        SyncWindows(others, _status, now);
+
         var pricing = _services.CurrentPricing();
         var sessions = _services.Sessions.Sessions.Where(s => s.Agent == Agent).ToList();
         SyncSessions(sessions, now, pricing);
         UpdateCost(sessions, pricing);
 
-        var phase = _services.Sessions.AggregatePhase(Agent);
-        AggregateBrush = PhaseVisuals.Brush(phase);
-        AggregateStroke = phase is null ? PhaseVisuals.Brush(SessionPhase.Idle) : Brushes.Transparent;
+        _phase = _services.Sessions.AggregatePhase(Agent);
+        AggregateBrush = PhaseVisuals.Brush(_phase);
+        Raise(nameof(BadgeVisibility)); Raise(nameof(IsWorking));
 
         HookWarning = _services.HookStatus(Agent).Status != HookStatus.Installed;
         Raise(nameof(NoSessionsVisibility));
     }
 
+    private void SetHero(UsageWindow? hero, DateTimeOffset now)
+    {
+        var had = HasWindows;
+        _hero = hero;
+        HeroPercent = hero?.Percent ?? double.NaN;
+        HeroTone = hero is null ? UsageTone.Stale : NotchPresentation.ToneOf(hero, _status);
+        HeroCaption = hero is null ? "" : NotchPresentation.HeroCaption(hero, now);
+        if (had == HasWindows) return;
+        Raise(nameof(HasWindows)); Raise(nameof(HeroVisibility)); Raise(nameof(NoDataVisibility)); Raise(nameof(StatusPillVisibility));
+    }
+
     public void TickClocks()
     {
         var now = _services.Clock.UtcNow;
-        foreach (var w in Windows) w.Tick(now);
+        if (_hero is not null) HeroCaption = NotchPresentation.HeroCaption(_hero, now);
+        foreach (var w in OtherWindows) w.Tick(now);
         foreach (var s in Sessions) s.Tick(now);
         // Il cooldown finisce senza alcun evento: il tick di 1 s del notch aggiorna icona e tooltip fino alla fine.
         var coolingDown = _refresh.CooldownRemaining > TimeSpan.Zero;
@@ -141,27 +214,32 @@ public sealed class AgentCardViewModel : ObservableObject
 
     private void UpdateCost(IReadOnlyList<SessionState> sessions, PricingSnapshot? pricing)
     {
-        if (pricing is null)
+        CostDisplay? display = null;
+        string? tooltip = null;
+        if (pricing is not null)
         {
-            CostText = null;
-            CostTooltip = null;
-            return;
+            var ledger = sessions.Aggregate(UsageLedger.Empty, (acc, s) => acc + (s.Ledger ?? UsageLedger.Empty) + s.SubagentLedger);
+            var cost = pricing.Cost(ledger);
+            display = NotchPresentation.CostParts(cost);
+            if (display is not null) tooltip = CostTooltips.Card(cost, pricing);
         }
-        var ledger = sessions.Aggregate(UsageLedger.Empty, (acc, s) => acc + (s.Ledger ?? UsageLedger.Empty) + s.SubagentLedger);
-        var cost = pricing.Cost(ledger);
-        var text = CostFormatter.Short(cost);
-        CostText = text is null ? null : $"Costo API equivalente {text}";
-        CostTooltip = text is null ? null : CostTooltips.Card(cost, pricing);
+        CostTooltip = tooltip;
+        if (display == _cost) return;
+        _cost = display;
+        Raise(nameof(CostLead)); Raise(nameof(CostValue)); Raise(nameof(CostFallback));
+        Raise(nameof(CostVisibility)); Raise(nameof(CostAmountVisibility)); Raise(nameof(CostFallbackVisibility));
     }
+
+    private static Brush ThemeBrush(string key) => Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;
 
     private void SyncWindows(IReadOnlyList<UsageWindow> windows, UsageStatus status, DateTimeOffset now)
     {
         for (var i = 0; i < windows.Count; i++)
         {
-            if (i < Windows.Count) Windows[i].Update(windows[i], status, now);
-            else Windows.Add(new WindowRowViewModel(windows[i], status, now));
+            if (i < OtherWindows.Count) OtherWindows[i].Update(windows[i], status, now);
+            else OtherWindows.Add(new WindowRowViewModel(windows[i], status, now));
         }
-        while (Windows.Count > windows.Count) Windows.RemoveAt(Windows.Count - 1);
+        while (OtherWindows.Count > windows.Count) OtherWindows.RemoveAt(OtherWindows.Count - 1);
     }
 
     private void SyncSessions(IReadOnlyList<SessionState> sessions, DateTimeOffset now, PricingSnapshot? pricing)

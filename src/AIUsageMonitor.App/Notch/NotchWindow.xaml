@@ -12,21 +12,33 @@
       </ResourceDictionary.MergedDictionaries>
     </ResourceDictionary>
   </Window.Resources>
-  <!-- Default tipografici della notch sulla radice: si ereditano da pannello, linguetta e template (anche dentro i
-       ContentPresenter), dove Theme.xaml non li impone piu' con lo stile implicito di TextBlock. -->
-  <Grid TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontSize="12">
-    <!-- Pannello espanso. Hidden (non Collapsed) da chiuso, cosi' la finestra conserva l'altezza del pannello e la linguetta non salta sotto il mouse. -->
-    <Border x:Name="Panel" HorizontalAlignment="Right" Width="320" Visibility="Hidden" Opacity="0"
-            CornerRadius="12,0,0,12" Background="{StaticResource NotchBackground}"
-            BorderBrush="{StaticResource NotchBorder}" BorderThickness="1,1,0,1" Padding="14,12"
+  <!-- Default tipografici della notch sulla radice: si ereditano da pannello, linguetta e template. -->
+  <Grid TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontSize="13" TextElement.FontFamily="{StaticResource TextFont}">
+    <!-- Pannello espanso. Hidden (non Collapsed) da chiuso, cosi' la finestra conserva l'altezza del pannello e la
+         linguetta non salta sotto il mouse. E' largo 24 px piu' della finestra e sporge oltre il bordo destro (Margin
+         negativo, Padding destro compensato): la molla dell'apertura puo' superare di qualche pixel la posizione finale
+         senza scoprire il bordo dello schermo, e la parte che sporge resta fuori dalla finestra, quindi invisibile. -->
+    <Border x:Name="Panel" HorizontalAlignment="Right" Width="344" Margin="0,0,-24,0" Visibility="Hidden" Opacity="0"
+            CornerRadius="24,0,0,24" Background="{StaticResource NotchBackground}"
+            BorderBrush="{StaticResource NotchBorder}" BorderThickness="1,1,0,1" Padding="14,14,38,14"
             MouseLeftButtonDown="Tab_MouseLeftButtonDown">
       <Border.RenderTransform>
-        <TranslateTransform x:Name="PanelSlide" X="320"/>
+        <TranslateTransform x:Name="PanelSlide" X="344"/>
       </Border.RenderTransform>
       <DockPanel>
-        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-          <TextBlock x:Name="PinGlyph" DockPanel.Dock="Right" Text="&#x1F4CC;" FontSize="12" Visibility="Collapsed" Foreground="{StaticResource TextMuted}" ToolTip="Fissato: clicca la linguetta o l'icona nella tray per sbloccare"/>
-          <TextBlock Text="AI Usage" FontWeight="SemiBold"/>
+        <DockPanel DockPanel.Dock="Top" Margin="2,0,2,12">
+          <Path x:Name="PinGlyph" DockPanel.Dock="Right" Visibility="Collapsed" Width="13" Height="13" Stretch="Uniform" Margin="8,0,0,0"
+                Data="M9,3 L15,3 L14,9 L17,12 L7,12 L10,9 Z M12,12 L12,21" Stroke="{StaticResource TextMuted}" StrokeThickness="1.6"
+                StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" VerticalAlignment="Center"
+                ToolTip="Fissato: clicca la linguetta o l'icona nella tray per sbloccare"/>
+          <Border DockPanel.Dock="Right" CornerRadius="11" Padding="10,3" Background="{Binding SummaryFill}"
+                  Visibility="{Binding SummaryVisibility}" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal">
+              <Ellipse Width="6" Height="6" Fill="{Binding SummaryDot}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+              <TextBlock Text="{Binding SummaryText}" Foreground="{Binding SummaryForeground}" FontSize="11" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Border>
+          <TextBlock Text="AI Usage" FontFamily="{StaticResource DisplayFont}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
         </DockPanel>
         <ScrollViewer x:Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <ItemsControl ItemsSource="{Binding Agents}" ItemTemplate="{StaticResource AgentCardTemplate}"/>
@@ -34,11 +46,10 @@
       </DockPanel>
     </Border>
 
-    <!-- Linguetta chiusa: 28 px di larghezza, una riga da 36 px per agente, centrata verticalmente sul bordo destro.
-         La visibilita' non cambia mai: durante la transizione la linguetta sfuma in opacita' (e perde l'hit test)
-         insieme al pannello, cosi' le due superfici non sono mai entrambe opache. -->
-    <Border x:Name="Tab" HorizontalAlignment="Right" VerticalAlignment="Center" Width="28" Padding="0,6" Opacity="1"
-            CornerRadius="10,0,0,10" Background="{StaticResource NotchBackground}"
+    <!-- Linguetta chiusa: pillola sul bordo destro, un cerchio per agente (spec 6.1). La visibilita' non cambia mai:
+         durante la transizione la linguetta sfuma in opacita' (e perde l'hit test) insieme al pannello. -->
+    <Border x:Name="Tab" HorizontalAlignment="Right" VerticalAlignment="Center" Width="{Binding TabWidth}" Padding="0,4" Opacity="1"
+            CornerRadius="{Binding TabCornerRadius}" Background="{StaticResource NotchBackground}"
             BorderBrush="{StaticResource NotchBorder}" BorderThickness="1,1,0,1" Cursor="Hand"
             MouseEnter="Tab_MouseEnter" MouseLeftButtonDown="Tab_MouseLeftButtonDown">
       <ItemsControl ItemsSource="{Binding Agents}" ItemTemplate="{StaticResource TabItemTemplate}"/>

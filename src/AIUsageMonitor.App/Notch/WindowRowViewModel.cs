@@ -1,16 +1,20 @@
 using System.Windows;
-using System.Windows.Media;
 using AIUsageMonitor.App.Common;
-using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Presentation;
 
 namespace AIUsageMonitor.App.Notch;
 
+/// <summary>
+/// A secondary quota window of a card (the first one is the hero, see <see cref="AgentCardViewModel"/>): label,
+/// percent, a bar in the tone of the window and the time to its reset. Spec 11: while the snapshot is not fresh the
+/// bar turns to the "stale" tone, the only signal left besides the status pill.
+/// </summary>
 public sealed class WindowRowViewModel : ObservableObject
 {
     private UsageWindow _window;
     private UsageStatus _status;
-    private string _resetText = "";
+    private string? _resetCaption;
 
     public WindowRowViewModel(UsageWindow window, UsageStatus status, DateTimeOffset now)
     {
@@ -20,30 +24,25 @@ public sealed class WindowRowViewModel : ObservableObject
     }
 
     public string Label => _window.Label;
+    public double Percent => _window.Percent;
     public string PercentText => $"{_window.Percent:0}%";
+    public UsageTone Tone => NotchPresentation.ToneOf(_window, _status);
 
-    /// <summary>
-    /// Spec 11: quando lo snapshot non e' aggiornato (token scaduto, Stale, nessun dato) le barre mostrano gli ultimi
-    /// valori in grigio, cosi' i numeri fermi si distinguono a colpo d'occhio da quelli live; <c>UsageService.Merge</c>
-    /// conserva finestre e severita' precedenti proprio in questi casi, quindi il colore e' l'unico segnale rimasto
-    /// oltre alla riga di stato.
-    /// </summary>
-    public Brush BarBrush => _status == UsageStatus.Ok
-        ? PhaseVisuals.SeverityBrush(_window.Severity)
-        : PhaseVisuals.Brush(SessionPhase.Idle);
+    public string? ResetCaption
+    {
+        get => _resetCaption;
+        private set { if (Set(ref _resetCaption, value)) Raise(nameof(ResetVisibility)); }
+    }
 
-    public GridLength FilledStar => new(Math.Max(0.001, _window.Percent), GridUnitType.Star);
-    public GridLength EmptyStar => new(Math.Max(0.001, 100 - _window.Percent), GridUnitType.Star);
-    public string ResetText { get => _resetText; private set => Set(ref _resetText, value); }
+    public Visibility ResetVisibility => ResetCaption is null ? Visibility.Collapsed : Visibility.Visible;
 
     public void Update(UsageWindow window, UsageStatus status, DateTimeOffset now)
     {
         _window = window;
         _status = status;
-        Raise(nameof(Label)); Raise(nameof(PercentText)); Raise(nameof(BarBrush)); Raise(nameof(FilledStar)); Raise(nameof(EmptyStar));
+        Raise(nameof(Label)); Raise(nameof(Percent)); Raise(nameof(PercentText)); Raise(nameof(Tone));
         Tick(now);
     }
 
-    public void Tick(DateTimeOffset now) =>
-        ResetText = _window.ResetsAt is { } reset ? CountdownFormatter.Until(reset, now) : "";
+    public void Tick(DateTimeOffset now) => ResetCaption = NotchPresentation.ResetCaption(_window, now);
 }
