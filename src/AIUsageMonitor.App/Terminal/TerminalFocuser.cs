@@ -1,22 +1,25 @@
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Terminal;
 
 namespace AIUsageMonitor.App.Terminal;
 
 /// <summary>
 /// Porta in primo piano il terminale che ospita una sessione, provando le strategie in ordine di affidabilita':
-/// prima Herdr (che sa spostare il focus sul pane giusto dentro la finestra), poi la finestra risolta quando
-/// l'evento e' arrivato, infine gli indizi d'ambiente. Si ferma alla prima che riesce e non solleva mai eccezioni:
+/// prima i multiplexer che sanno spostare il focus sul pane giusto dentro la finestra (Herdr, wmux), poi la finestra
+/// risolta quando l'evento e' arrivato, infine gli indizi d'ambiente. Si ferma alla prima che riesce e non solleva mai eccezioni:
 /// chi chiama distingue solo fra "fatto" e "terminale non trovato". Tutto il lavoro gira fuori dal thread della UI.
 /// </summary>
 public sealed class TerminalFocuser
 {
     private readonly HerdrClient _herdr;
+    private readonly WmuxClient _wmux;
     private readonly TerminalRegistry _registry;
     private readonly Action<string> _log;
 
-    public TerminalFocuser(HerdrClient herdr, TerminalRegistry registry, Action<string> log)
+    public TerminalFocuser(HerdrClient herdr, WmuxClient wmux, TerminalRegistry registry, Action<string> log)
     {
         _herdr = herdr;
+        _wmux = wmux;
         _registry = registry;
         _log = log;
     }
@@ -41,6 +44,7 @@ public sealed class TerminalFocuser
         _log($"Focus {session.Agent} {session.SessionId}: target {Describe(target)}");
 
         if (TryHerdr(session, target)) return true;
+        if (TryWmux(target)) return true;
         if (TryKnownWindow(target)) return true;
         if (TryHints(target)) return true;
 
@@ -57,7 +61,9 @@ public sealed class TerminalFocuser
     private bool TryHerdr(SessionState session, TerminalTarget? target)
     {
         if (!_herdr.IsAvailable) return false;
-        var pane = target?.HerdrPane ?? _herdr.FindPaneBySession(session.SessionId);
+        // Con un pty di wmux la sessione sta in wmux: lo snapshot di Herdr costerebbe un paio di secondi al click per
+        // nulla. Herdr annidato dentro wmux resta coperto, perche' in quel caso l'hook registra anche il suo pane.
+        var pane = target?.HerdrPane ?? (target?.WmuxPty is null ? _herdr.FindPaneBySession(session.SessionId) : null);
         if (pane is null) { _log("Focus: nessun pane Herdr per questa sessione"); return false; }
 
         var focused = _herdr.FocusAgent(pane);
@@ -69,6 +75,45 @@ public sealed class TerminalFocuser
         if (_herdr.ShellPid(pane) is { } shellPid && ActivateAncestorWindow(shellPid)) return true;
         _log("Focus: pane a fuoco ma finestra non attivata (esito comunque positivo)");
         return true;
+    }
+
+    /// <summary>
+    /// wmux fa girare le shell sotto un daemon senza finestra, e il processo che ha eseguito l'hook e' gia' morto
+    /// quando l'evento arriva: dalla catena dei processi alla finestra non si arriva quasi mai. Il pty registrato
+    /// dall'hook (<c>WMUX_PTY_ID</c>) porta invece dritto al pane. La finestra e' quella dell'unico <c>wmux.exe</c>
+    /// che ne ha una, il processo principale di Electron. Senza pty (eventi di un hook precedente) basta
+    /// <c>TERM_PROGRAM=wmux</c> per portare almeno la finestra in primo piano. Come per Herdr, il pane a fuoco basta
+    /// a considerare riuscita l'operazione anche se Windows rifiuta l'attivazione della finestra.
+    /// </summary>
+    private bool TryWmux(TerminalTarget? target)
+    {
+        if (target is null) return false;
+        if (target.WmuxPty is null && !string.Equals(target.TermProgram, "wmux", StringComparison.OrdinalIgnoreCase)) return false;
+
+        var paneFocused = false;
+        if (target.WmuxPty is { } pty)
+        {
+            paneFocused = _wmux.FocusPtyAsync(pty).GetAwaiter().GetResult();
+            _log(paneFocused ? $"Focus: wmux ha messo a fuoco il pane del pty {pty}" : $"Focus: wmux non ha messo a fuoco il pty {pty}");
+        }
+        if (ActivateWmuxWindow()) return true;
+        if (paneFocused) _log("Focus: pane wmux a fuoco ma finestra non attivata (esito comunque positivo)");
+        return paneFocused;
+    }
+
+    private bool ActivateWmuxWindow()
+    {
+        foreach (var node in ProcessTree.Snapshot().Values)
+        {
+            if (!node.Name.Equals("wmux.exe", StringComparison.OrdinalIgnoreCase)) continue;
+            var hwnd = WindowActivator.FindTopLevelWindow(node.Pid);
+            if (hwnd == IntPtr.Zero) continue;
+            var activated = WindowActivator.Activate(hwnd);
+            _log($"Focus: finestra \"{WindowActivator.WindowTitle(hwnd)}\" di wmux.exe ({node.Pid}) {(activated ? "attivata" : "non attivata")}");
+            return activated;
+        }
+        _log("Focus: nessuna finestra di wmux.exe");
+        return false;
     }
 
     /// <summary>
@@ -187,5 +232,5 @@ public sealed class TerminalFocuser
 
     private static string Describe(TerminalTarget? target) => target is null
         ? "sconosciuto"
-        : $"pane {target.HerdrPane ?? "-"}, agent {target.AgentPid?.ToString() ?? "-"} ({target.AgentPidName ?? "-"}), finestra {target.WindowPid?.ToString() ?? "-"} ({target.WindowPidName ?? "-"}), wt {(target.WtSession is null ? "-" : "si")}, vscode {target.VscodePid?.ToString() ?? "-"}";
+        : $"pane {target.HerdrPane ?? "-"}, wmux {target.WmuxPty ?? (target.TermProgram == "wmux" ? "senza pty" : "-")}, agent {target.AgentPid?.ToString() ?? "-"} ({target.AgentPidName ?? "-"}), finestra {target.WindowPid?.ToString() ?? "-"} ({target.WindowPidName ?? "-"}), wt {(target.WtSession is null ? "-" : "si")}, vscode {target.VscodePid?.ToString() ?? "-"}";
 }

@@ -39,6 +39,7 @@ function buildLine(agent, payload) {
     wt_session: str(process.env.WT_SESSION),
     term_program: str(process.env.TERM_PROGRAM),
     vscode_pid: process.env.VSCODE_PID && /^\d+$/.test(process.env.VSCODE_PID) ? Number(process.env.VSCODE_PID) : null,
+    wmux_pty: str(process.env.WMUX_PTY_ID),
   } : null;
   return JSON.stringify({
     ts: new Date().toISOString(),
