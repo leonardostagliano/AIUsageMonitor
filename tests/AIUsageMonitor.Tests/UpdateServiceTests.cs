@@ -955,7 +955,7 @@ public sealed class UpdateServiceTests : IDisposable
 
         var status = await service.CheckAsync();
 
-        Assert.Equal(true, _installer.Probes[^1]);
+        Assert.True(_installer.Probes[^1]);
         Assert.Equal(InstallationKind.ReadOnlyLocation, status.Installation);
         Assert.Equal(UpdateMessages.Available("1.1.0", UpdateMessages.SuffixReadOnlyLocation), status.Message);
         Assert.False(status.CanDownload);
