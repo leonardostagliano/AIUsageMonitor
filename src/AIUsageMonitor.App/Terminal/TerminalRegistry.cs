@@ -32,6 +32,13 @@ public sealed class TerminalRegistry
     /// <summary>Chiamato con una riga di log a ogni risoluzione; lo imposta AppServices sul FileLogger.</summary>
     public Action<string>? OnLog { get; init; }
 
+    /// <summary>
+    /// Chiamato quando la risalita trova il processo dell'agente di una sessione, solo per eventi appena arrivati: e'
+    /// il processo da sorvegliare per accorgersi che il terminale e' stato chiuso (AppServices lo lega alla sessione).
+    /// Con il replay il ppid puo' essere riciclato e un legame sbagliato chiuderebbe una sessione viva.
+    /// </summary>
+    public Action<AgentKind, string, int>? OnAgentProcess { get; init; }
+
     public TerminalRegistry(IClock clock) => _clock = clock;
 
     public TerminalTarget? Get(AgentKind agent, string sessionId)
@@ -108,6 +115,7 @@ public sealed class TerminalRegistry
 
             var target = new TerminalTarget(host.HerdrPane, agentPid, agentPidName, windowPid, windowPidName, host.WtSession, host.VscodePid, _clock.UtcNow, host.WmuxPty, host.TermProgram);
             lock (_gate) _targets[key] = target;
+            if (ppidIsFresh && agentPid is { } pid) OnAgentProcess?.Invoke(key.Agent, key.SessionId, pid);
         }
         catch (Exception ex)
         {

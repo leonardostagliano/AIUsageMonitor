@@ -91,14 +91,38 @@ public sealed class SessionTracker
             _ => existing?.Message
         };
 
-        // A Stop that lands while background subagents are still running keeps the session Working and
-        // remembers its message: the Idle transition (and the "finito" toast) waits for the last SubagentStop.
+        // Claude Code 2.1+ lists on Stop the backgrounded agents and workflows still in flight. No foreground agent can
+        // outlive the turn, so at that point the list is the whole truth: an agent it leaves out has finished even if
+        // its SubagentStop never reached us (killed, interrupted, hook timed out), and one it names that we never saw
+        // start is running. Without a list (Codex, older versions) the subagents stay as the events left them.
+        var subagents = existing?.Subagents;
+        var pendingWorkflows = existing?.PendingWorkflows ?? 0;
+        var lastSubagentEventAt = existing?.LastSubagentEventAt;
+        if (e.Event == "Stop" && e.BackgroundTasks is { } inFlight)
+        {
+            subagents = ReconcileSubagents(subagents, inFlight, e.Ts);
+            pendingWorkflows = inFlight.Count(t => t.IsWorkflow);
+            // Fresh proof that they are alive: the timeout sweep must not release them on the strength of an old start.
+            if (inFlight.Any(t => t.IsAgent || t.IsWorkflow)) lastSubagentEventAt = e.Ts;
+        }
+        var running = subagents?.Count(s => s.Phase == SubagentPhase.Running) ?? 0;
+
+        // A Stop that lands while background subagents (or a background workflow) are still running keeps the session
+        // Working and remembers its message: the Idle transition (and the "finito" toast) waits for the last of them.
         var awaiting = existing?.AwaitingSubagents ?? false;
         if (e.Event == "UserPromptSubmit") awaiting = false;
-        if (e.Event == "Stop" && existing is { ActiveSubagents: > 0 })
+        if (e.Event == "Stop")
         {
-            phase = SessionPhase.Working;
-            awaiting = true;
+            if (running > 0 || (e.BackgroundTasks is not null && pendingWorkflows > 0))
+            {
+                phase = SessionPhase.Working;
+                awaiting = true;
+            }
+            else
+            {
+                // Nothing left to wait for: a flag kept here would latch and fake a "finito" at the end of a later agent.
+                awaiting = false;
+            }
         }
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
@@ -109,20 +133,28 @@ public sealed class SessionTracker
         // and anything added later) survives every subsequent event instead of being silently reset by a
         // positional rebuild.
         var host = e.Host ?? existing?.Host;
+        var title = e.Title ?? existing?.Title;
+        var origin = OriginOf(e, existing);
         var updated = existing is null
             ? new SessionState(
-                e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
-                phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, AwaitingSubagents: awaiting, Host: host)
+                e.Agent, e.SessionId, NameFor(title, cwd, e.SessionId), cwd,
+                phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, Subagents: subagents, AwaitingSubagents: awaiting,
+                LastSubagentEventAt: lastSubagentEventAt, Host: host, Origin: origin, Title: title, PendingWorkflows: pendingWorkflows)
             : existing with
             {
-                DisplayName = DisplayNameFor(cwd, e.SessionId),
+                DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase.Value,
                 Message = message,
                 LastEventAt = e.Ts,
                 TranscriptPath = transcriptPath,
+                Subagents = subagents,
                 AwaitingSubagents = awaiting,
-                Host = host
+                LastSubagentEventAt = lastSubagentEventAt,
+                Host = host,
+                Origin = origin,
+                Title = title,
+                PendingWorkflows = pendingWorkflows
             };
         _sessions[key] = updated;
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
@@ -141,6 +173,10 @@ public sealed class SessionTracker
         var phase = existing?.Phase ?? SessionPhase.Idle;
         var awaiting = existing?.AwaitingSubagents ?? false;
         var message = existing?.Message;
+        // SubagentStop lists the backgrounded work too, but not the foreground agents running next to the one that
+        // stopped, so only its workflow count is used here: the agents are reconciled on Stop alone.
+        var pendingWorkflows = existing?.PendingWorkflows ?? 0;
+        if (e.Event == "SubagentStop" && e.BackgroundTasks is { } inFlight) pendingWorkflows = inFlight.Count(t => t.IsWorkflow);
 
         if (e.Event == "SubagentStart" && phase == SessionPhase.Idle)
         {
@@ -150,7 +186,10 @@ public sealed class SessionTracker
             phase = SessionPhase.Working;
             awaiting = true;
         }
-        if (e.Event == "SubagentStop" && running == 0 && awaiting)
+        // A background workflow still in flight is between two phases: its next agents are about to start, and the
+        // session wakes up (and sends its own Stop) when the workflow ends. Going Idle here would toast "finito" at
+        // every phase boundary.
+        if (e.Event == "SubagentStop" && running == 0 && awaiting && pendingWorkflows == 0)
         {
             // The deferred Stop is spent as soon as the last agent finishes, exactly like the timeout sweep:
             // keeping the flag with no running agent left would latch it forever (the sweep only visits
@@ -167,14 +206,17 @@ public sealed class SessionTracker
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         var host = e.Host ?? existing?.Host;
+        var title = e.Title ?? existing?.Title;
+        var origin = OriginOf(e, existing);
         var updated = existing is null
             ? new SessionState(
-                e.Agent, e.SessionId, DisplayNameFor(cwd, e.SessionId), cwd,
+                e.Agent, e.SessionId, NameFor(title, cwd, e.SessionId), cwd,
                 phase, message, e.Ts, e.Ts,
-                Subagents: subagents, AwaitingSubagents: awaiting, LastSubagentEventAt: e.Ts, Host: host)
+                Subagents: subagents, AwaitingSubagents: awaiting, LastSubagentEventAt: e.Ts, Host: host,
+                Origin: origin, Title: title, PendingWorkflows: pendingWorkflows)
             : existing with
             {
-                DisplayName = DisplayNameFor(cwd, e.SessionId),
+                DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase,
                 Message = message,
@@ -182,10 +224,46 @@ public sealed class SessionTracker
                 Subagents = subagents,
                 AwaitingSubagents = awaiting,
                 LastSubagentEventAt = e.Ts,
-                Host = host
+                Host = host,
+                Origin = origin,
+                Title = title,
+                PendingWorkflows = pendingWorkflows
             };
         _sessions[key] = updated;
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
+    }
+
+    /// <summary>
+    /// Applies the in-flight list of a Stop: a running agent it leaves out is Done, an agent it names that the session
+    /// never saw start is added as Running. A finished agent it still names is left finished: SubagentStop may well
+    /// have been written a moment before Claude Code updated the task, and bringing it back would pin the session.
+    /// The children synthesised from Codex rollouts are not Claude's to judge. Returns <paramref name="current"/>
+    /// itself when nothing changed.
+    /// </summary>
+    private static IReadOnlyList<SubagentState>? ReconcileSubagents(IReadOnlyList<SubagentState>? current,
+        IReadOnlyList<BackgroundTask> inFlight, DateTimeOffset ts)
+    {
+        var agents = new Dictionary<string, BackgroundTask>(StringComparer.Ordinal);
+        foreach (var task in inFlight.Where(t => t.IsAgent)) agents.TryAdd(task.Id, task);
+        if ((current is null || current.Count == 0) && agents.Count == 0) return current;
+
+        var list = current is null ? new List<SubagentState>() : new List<SubagentState>(current);
+        var changed = false;
+        for (var i = 0; i < list.Count; i++)
+        {
+            var known = list[i];
+            var live = agents.Remove(known.AgentId);
+            if (known.Phase != SubagentPhase.Running || live || known.AgentType == CodexSubagentScanner.SyntheticAgentType) continue;
+            list[i] = known with { Phase = SubagentPhase.Done, EndedAt = ts };
+            changed = true;
+        }
+        foreach (var task in agents.Values)
+        {
+            if (list.Any(s => s.AgentId == task.Id)) continue;
+            list.Add(new SubagentState(task.Id, task.AgentType, SubagentPhase.Running, ts, null, null, TokenUsage.Zero));
+            changed = true;
+        }
+        return changed ? TrimDone(list) : current;
     }
 
     /// <summary>Prefix of the synthetic id given to a subagent event that carries no agent_id.</summary>
@@ -389,45 +467,68 @@ public sealed class SessionTracker
     /// Marks the subagents of every session that has heard nothing from them for <paramref name="timeout"/> as Done,
     /// so a subagent that died without a SubagentStop cannot pin its session to "al lavoro" forever.
     /// </summary>
-    public IReadOnlyList<SessionChange> SweepSubagentTimeouts(TimeSpan timeout)
+    /// <remarks>
+    /// <paramref name="lastActivity"/> tells, per running subagent, when it last showed signs of life (for Claude, the
+    /// last write to its transcript): an agent busy on a single long task sends no event for a long while, and one
+    /// active within <paramref name="timeout"/> keeps running. Null, or a null answer, means "no evidence".
+    /// </remarks>
+    public IReadOnlyList<SessionChange> SweepSubagentTimeouts(TimeSpan timeout,
+        Func<SessionState, SubagentState, DateTimeOffset?>? lastActivity = null)
     {
         List<SessionChange> changes;
-        lock (_gate) changes = SweepSubagentTimeoutsCore(timeout);
+        lock (_gate) changes = SweepSubagentTimeoutsCore(timeout, lastActivity);
         foreach (var change in changes) Raise(change);
         return changes;
     }
 
     /// <summary>Sweeps the subagent timeouts without raising Changed (startup replay).</summary>
-    public void SweepSubagentTimeoutsSilently(TimeSpan timeout)
+    public void SweepSubagentTimeoutsSilently(TimeSpan timeout, Func<SessionState, SubagentState, DateTimeOffset?>? lastActivity = null)
     {
-        lock (_gate) SweepSubagentTimeoutsCore(timeout);
+        lock (_gate) SweepSubagentTimeoutsCore(timeout, lastActivity);
     }
 
-    private List<SessionChange> SweepSubagentTimeoutsCore(TimeSpan timeout)
+    private List<SessionChange> SweepSubagentTimeoutsCore(TimeSpan timeout, Func<SessionState, SubagentState, DateTimeOffset?>? lastActivity)
     {
         var changes = new List<SessionChange>();
         var now = _clock.UtcNow;
         foreach (var (key, session) in _sessions.ToList())
         {
-            if (session.ActiveSubagents == 0 || session.LastSubagentEventAt is not { } last || now - last <= timeout) continue;
+            // A session held Working by a background workflow alone is swept too: a workflow that died without
+            // waking its session would otherwise keep it "al lavoro" until the 12 h removal.
+            var waitsOnWorkflow = session.AwaitingSubagents && session.PendingWorkflows > 0;
+            if (session.ActiveSubagents == 0 && !waitsOnWorkflow) continue;
+            var last = session.LastSubagentEventAt ?? session.LastEventAt;
+            if (now - last <= timeout) continue;
 
-            var subagents = TrimDone(session.Subagents!
-                .Select(s => s.Phase == SubagentPhase.Running ? s with { Phase = SubagentPhase.Done, EndedAt = now } : s)
-                .ToList());
+            var subagents = session.Subagents?
+                .Select(s => s.Phase == SubagentPhase.Running && !IsActive(session, s) ? s with { Phase = SubagentPhase.Done, EndedAt = now } : s)
+                .ToList();
+            var stillRunning = subagents?.Count(s => s.Phase == SubagentPhase.Running) ?? 0;
+            // Every agent is still visibly at work: nothing to change, the next sweep looks again.
+            if (stillRunning > 0 && stillRunning == session.ActiveSubagents) continue;
+
             // Same rule as the last SubagentStop: only a Working session goes Idle, so an error or a pending
             // input that arrived while the agents were running survives the timeout.
-            var release = session.AwaitingSubagents && session.Phase == SessionPhase.Working;
+            var release = stillRunning == 0 && session.AwaitingSubagents && session.Phase == SessionPhase.Working;
             var updated = session with
             {
                 Phase = release ? SessionPhase.Idle : session.Phase,
                 Message = release ? session.Message ?? "Turno completato" : session.Message,
-                Subagents = subagents,
-                AwaitingSubagents = false
+                Subagents = subagents is null ? null : TrimDone(subagents),
+                AwaitingSubagents = stillRunning > 0 && session.AwaitingSubagents,
+                PendingWorkflows = stillRunning > 0 ? session.PendingWorkflows : 0
             };
             _sessions[key] = updated;
             changes.Add(new SessionChange(SessionChangeKind.Updated, updated, session.Phase));
         }
         return changes;
+
+        bool IsActive(SessionState session, SubagentState subagent)
+        {
+            if (lastActivity is null) return false;
+            try { return lastActivity(session, subagent) is { } at && now - at <= timeout; }
+            catch (Exception ex) { Report(ex); return false; }
+        }
     }
 
     /// <summary>Applies events without raising Changed (startup replay).</summary>
@@ -479,6 +580,17 @@ public sealed class SessionTracker
             return SessionPhase.Idle;
         }
     }
+
+    /// <summary>The title a source gave the session, otherwise the name derived from its cwd.</summary>
+    private static string NameFor(string? title, string? cwd, string sessionId) =>
+        string.IsNullOrWhiteSpace(title) ? DisplayNameFor(cwd, sessionId) : title.Trim();
+
+    /// <summary>
+    /// The source that created the event wins (registry, cloud); a hook line says where it runs through the
+    /// entrypoint of its host; otherwise the session keeps what it has, and a new one is a terminal session.
+    /// </summary>
+    private static SessionOrigin OriginOf(HookEvent e, SessionState? existing) =>
+        e.Origin ?? HostInfo.OriginOf(e.Host?.Entrypoint) ?? existing?.Origin ?? SessionOrigin.Terminal;
 
     public static string DisplayNameFor(string? cwd, string sessionId)
     {

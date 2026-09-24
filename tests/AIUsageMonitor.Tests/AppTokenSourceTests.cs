@@ -45,4 +45,23 @@ public class AppTokenSourceTests
         Assert.Equal(new TokenUsage(12, 8, 0, 0), source.SubagentTokens(session)!["a"]);
         Assert.Null(source.SubagentModels(session));
     }
+
+    [Fact]
+    public void Subagent_activity_is_the_last_write_to_its_transcript_found_while_it_runs()
+    {
+        using var dir = new TempDir();
+        var now = DateTimeOffset.UtcNow;
+        var transcript = dir.File("projects/session.jsonl", "");
+        var agentFile = dir.File("projects/session/subagents/agent-live.jsonl", "{}\n");
+        var written = new DateTime(2026, 9, 24, 9, 30, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(agentFile, written);
+        var running = new SubagentState("live", "Explore", SubagentPhase.Running, now, null, null, TokenUsage.Zero);
+        var session = new SessionState(AgentKind.Claude, "session", "demo", null, SessionPhase.Working,
+            null, now, now, TranscriptPath: transcript, Subagents: [running]);
+        var source = new AppTokenSource(new AppPaths(dir.Path, dir.Sub("local")), new FakeClock(now));
+
+        Assert.Equal(new DateTimeOffset(written), source.SubagentLastActivity(session, running));
+        Assert.Null(source.SubagentLastActivity(session, running with { AgentId = "missing" }));
+        Assert.Null(source.SubagentLastActivity(session with { Agent = AgentKind.Codex }, running));
+    }
 }

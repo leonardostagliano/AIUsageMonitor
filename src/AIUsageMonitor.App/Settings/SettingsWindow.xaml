@@ -75,6 +75,8 @@
                   <TextBlock Text="Aggiorna la quota ogni" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
                   <c:NumberStepper Value="{Binding ClaudeRefreshSeconds}" Minimum="30" Maximum="600" Step="10" Unit="s"
                                    AutomationProperties.Name="Secondi tra due aggiornamenti della quota di Claude Code"/>
+                  <CheckBox Content="Sessioni cloud e routine" IsChecked="{Binding ShowCloudSessions}" Margin="0,16,0,0"
+                            ToolTip="Mostra anche le sessioni Claude Code avviate nel cloud (claude.ai/code, app desktop e mobile) e le esecuzioni delle routine, lette con l'account di Claude Code alla stessa cadenza della quota."/>
                 </StackPanel>
               </Border>
             </Border>

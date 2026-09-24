@@ -20,8 +20,13 @@ public sealed class SessionRowViewModel : ObservableObject
     /// </summary>
     private static readonly HashSet<string> ExpandedSessionIds = new(StringComparer.Ordinal);
 
-    /// <summary>Prima riga del tooltip quando la riga porta al terminale; il resto e' il testo cwd/messaggio di sempre.</summary>
-    private const string FocusHint = "Porta in primo piano il terminale";
+    /// <summary>Prima riga del tooltip quando il nome e' cliccabile; il resto e' il testo cwd/messaggio di sempre.</summary>
+    private string FocusHint => IsCloud ? "Apri la sessione su claude.ai"
+        : _session.Origin == SessionOrigin.App ? "Porta in primo piano l'app"
+        : "Porta in primo piano il terminale";
+
+    /// <summary>Sessione nel cloud (claude.ai/code, app, routine): il click apre la sua pagina invece di un terminale.</summary>
+    private bool IsCloud => _session.Origin is SessionOrigin.Cloud or SessionOrigin.Routine;
 
     private readonly AppServices _services;
     private readonly RelayCommand _focusTerminal;
@@ -68,10 +73,11 @@ public sealed class SessionRowViewModel : ObservableObject
     public string Subtitle { get => _subtitle; private set => Set(ref _subtitle, value); }
 
     /// <summary>
-    /// Porta in primo piano il terminale della sessione (click sul nome). Vero solo quando l'evento della sessione ha
-    /// portato un host: senza di esso non c'e' nulla da risolvere e la riga resta una semplice etichetta.
+    /// Porta in primo piano il terminale della sessione (click sul nome). Vero quando l'evento della sessione ha
+    /// portato un host (senza non c'e' nulla da risolvere e la riga resta una semplice etichetta) e per le sessioni nel
+    /// cloud, il cui click apre la pagina su claude.ai.
     /// </summary>
-    public bool CanFocus => _session.Host is not null;
+    public bool CanFocus => _session.Host is not null || IsCloud;
 
     /// <summary>Mano solo quando il click fa qualcosa; il template la lega al <c>TextBlock</c> del nome.</summary>
     public Cursor NameCursor => CanFocus ? Cursors.Hand : Cursors.Arrow;
@@ -181,7 +187,8 @@ public sealed class SessionRowViewModel : ObservableObject
             focused = false;
         }
         if (focused) return;
-        UiDispatcher.Post(() => _services.Notify($"{session.Agent.DisplayName()} · {session.DisplayName}", "Terminale non trovato", NoticeKind.Warning));
+        var text = session.Origin is SessionOrigin.Cloud or SessionOrigin.Routine ? "Pagina della sessione non aperta" : "Terminale non trovato";
+        UiDispatcher.Post(() => _services.Notify($"{session.Agent.DisplayName()} · {session.DisplayName}", text, NoticeKind.Warning));
     }
 
     private void Toggle()

@@ -1,6 +1,7 @@
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Presentation;
 using AIUsageMonitor.Core.Settings;
 using WinForms = System.Windows.Forms;
 
@@ -72,7 +73,11 @@ public sealed class ToastService
         if (session.Agent == AgentKind.Claude && !settings.NotifyClaude) return null;
         if (session.Agent == AgentKind.Codex && !settings.NotifyCodex) return null;
 
-        var title = $"{session.Agent.DisplayName()} · {session.DisplayName}";
+        // "Claude Code · cloud · Deploy": dove gira la sessione quando non e' un terminale (routine, app, cloud).
+        var origin = NotchPresentation.OriginLabel(session.Origin);
+        var title = origin is null
+            ? $"{session.Agent.DisplayName()} · {session.DisplayName}"
+            : $"{session.Agent.DisplayName()} · {origin} · {session.DisplayName}";
         return session.Phase switch
         {
             SessionPhase.NeedsInput when settings.NotifyNeedsInput =>

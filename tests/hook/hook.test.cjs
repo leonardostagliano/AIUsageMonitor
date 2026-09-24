@@ -189,3 +189,49 @@ test('truncation keeps a complete surrogate pair that fits', () => {
   assert.equal(obj.message.length, 200);
   assert.equal(obj.message.slice(198), '\u{1F600}');
 });
+
+test('Stop and SubagentStop carry the in-flight agents and workflows, nothing else', () => {
+  const stop = JSON.parse(buildLine('claude', {
+    hook_event_name: 'Stop', session_id: 's1',
+    background_tasks: [
+      { id: 'a1', type: 'subagent', status: 'running', description: 'Explore the repo', agent_type: 'Explore' },
+      { id: 'b2', type: 'shell', status: 'running', description: 'npm run dev', command: 'npm run dev' },
+      { id: 'w3', type: 'workflow', status: 'running', description: 'review', name: 'review-changes' },
+      { id: 'm4', type: 'monitor', status: 'running', description: 'watch', server: 'x', tool: 'y' },
+    ],
+  }));
+  assert.deepEqual(stop.background_tasks, [
+    { id: 'a1', type: 'subagent', agent_type: 'Explore', name: null },
+    { id: 'w3', type: 'workflow', agent_type: null, name: 'review-changes' },
+  ]);
+  const subStop = JSON.parse(buildLine('claude', { hook_event_name: 'SubagentStop', session_id: 's1', agent_id: 'a1', background_tasks: [] }));
+  assert.deepEqual(subStop.background_tasks, []);
+});
+
+test('background_tasks is null when the payload has no list, and on other events', () => {
+  assert.equal(JSON.parse(buildLine('codex', { hook_event_name: 'Stop', session_id: 's1' })).background_tasks, null);
+  assert.equal(JSON.parse(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1', background_tasks: 'nope' })).background_tasks, null);
+  assert.equal(JSON.parse(buildLine('claude', {
+    hook_event_name: 'UserPromptSubmit', session_id: 's1', background_tasks: [{ id: 'a1', type: 'subagent' }],
+  })).background_tasks, null);
+});
+
+test('a list longer than the cap is dropped instead of cut', () => {
+  const many = Array.from({ length: 101 }, (_, i) => ({ id: `a${i}`, type: 'subagent', status: 'running' }));
+  assert.equal(JSON.parse(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1', background_tasks: many })).background_tasks, null);
+  const fits = many.slice(0, 100);
+  assert.equal(JSON.parse(buildLine('claude', { hook_event_name: 'Stop', session_id: 's1', background_tasks: fits })).background_tasks.length, 100);
+});
+
+test('the host records the Claude Code entrypoint', () => {
+  const saved = process.env.CLAUDE_CODE_ENTRYPOINT;
+  try {
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop';
+    const obj = JSON.parse(buildLine('claude', { hook_event_name: 'SessionStart', session_id: 's1' }));
+    assert.equal(obj.host.entrypoint, 'claude-desktop');
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    assert.equal(JSON.parse(buildLine('claude', { hook_event_name: 'SessionStart', session_id: 's1' })).host.entrypoint, null);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT; else process.env.CLAUDE_CODE_ENTRYPOINT = saved;
+  }
+});

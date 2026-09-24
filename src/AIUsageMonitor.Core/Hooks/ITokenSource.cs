@@ -28,4 +28,11 @@ public interface ITokenSource
 
     /// <summary>Ledger per subagent id (only the ids it knows about), or null. Called right after <see cref="SubagentTokens"/>.</summary>
     IReadOnlyDictionary<string, UsageLedger>? SubagentLedgers(SessionState session) => null;
+
+    /// <summary>
+    /// When a running subagent last showed signs of life (for Claude, the last write to its transcript), or null when
+    /// the source cannot tell. The subagent timeout sweep keeps an agent that is still active: one busy on a single
+    /// long task sends no hook event for as long as that task lasts.
+    /// </summary>
+    DateTimeOffset? SubagentLastActivity(SessionState session, SubagentState subagent) => null;
 }

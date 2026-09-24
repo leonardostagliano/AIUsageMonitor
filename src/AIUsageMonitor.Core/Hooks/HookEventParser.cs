@@ -26,7 +26,7 @@ public static class HookEventParser
                 GetString(root, "cwd"), GetString(root, "notification_type"), GetString(root, "message"), GetString(root, "source"),
                 GetString(root, "agent_id"), GetString(root, "agent_type"),
                 GetString(root, "transcript_path"), GetString(root, "agent_transcript_path"),
-                GetHost(root));
+                GetHost(root), GetBackgroundTasks(root));
         }
         catch (JsonException)
         {
@@ -39,7 +39,27 @@ public static class HookEventParser
         if (!root.TryGetProperty("host", out var host) || host.ValueKind != JsonValueKind.Object) return null;
         return new HostInfo(
             GetInt32(host, "ppid"), GetString(host, "herdr_pane"), GetString(host, "wt_session"),
-            GetString(host, "term_program"), GetInt32(host, "vscode_pid"), GetString(host, "wmux_pty"));
+            GetString(host, "term_program"), GetInt32(host, "vscode_pid"), GetString(host, "wmux_pty"),
+            GetString(host, "entrypoint"));
+    }
+
+    /// <summary>
+    /// The in-flight agents and workflows of a Stop/SubagentStop; null when the line has no list (it then says nothing
+    /// about what is running). An entry without an id or a type is skipped, not fatal.
+    /// </summary>
+    private static IReadOnlyList<BackgroundTask>? GetBackgroundTasks(JsonElement root)
+    {
+        if (!root.TryGetProperty("background_tasks", out var tasks) || tasks.ValueKind != JsonValueKind.Array) return null;
+        var list = new List<BackgroundTask>();
+        foreach (var task in tasks.EnumerateArray())
+        {
+            if (task.ValueKind != JsonValueKind.Object) continue;
+            var id = GetString(task, "id");
+            var type = GetString(task, "type");
+            if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(type)) continue;
+            list.Add(new BackgroundTask(id, type, GetString(task, "agent_type"), GetString(task, "name")));
+        }
+        return list;
     }
 
     private static string? GetString(JsonElement obj, string name) =>
