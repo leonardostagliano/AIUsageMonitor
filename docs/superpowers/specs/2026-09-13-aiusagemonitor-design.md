@@ -219,6 +219,8 @@ La riga della sessione mostra anche il numero dei subagenti e la somma dei loro 
 
 ### 8.2 Notch
 
+Aspetto aggiornato dalla spec 2026-09-24-grafica-premium-design.md (misure della linguetta e del pannello, colori).
+
 - Finestra WPF: `WindowStyle=None`, `AllowsTransparency=true`, `Topmost=true`, `ShowInTaskbar=false`, stile tool window (non compare in Alt+Tab), `ResizeMode=NoResize`. DPI awareness `PerMonitorV2`.
 - Posizione: ancorata al bordo destro del monitor scelto (default: monitor principale), verticalmente centrata con offset configurabile in pixel. Riposizionata su cambio risoluzione o monitor (`SystemEvents.DisplaySettingsChanged`).
 - Collassato: larghezza 28 px, altezza 12 + 36 × numero agenti abilitati. Per agente: icona bianca 18 px e, sotto, un pallino 8 px dello stato aggregato. Angoli sinistri arrotondati 10 px, sfondo `#1B1B1F` al 92 % di opacità, bordo 1 px bianco al 12 %.

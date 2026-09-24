@@ -1,352 +1,403 @@
-# AIUsageMonitor
+<p align="center">
+  <img src="docs/images/logo.png" width="96" height="96" alt="AIUsageMonitor logo">
+</p>
 
-App Windows sempre attiva che mostra in un unico punto, per Claude Code e OpenAI Codex:
+<h1 align="center">AIUsageMonitor</h1>
 
-- la **quota consumata** nelle finestre di rate limit (percentuale e orario di reset);
-- lo **stato live delle sessioni** aperte (al lavoro, attende input, finito, errore);
-- il **costo API equivalente** in euro di ogni sessione, ai prezzi di listino di Anthropic e OpenAI.
+<p align="center">Your Claude Code and Codex usage, live on the edge of your screen.</p>
 
-Due superfici: un'icona nella **tray** con menu e pallino di stato, e un **notch laterale** sul bordo
-destro dello schermo, sempre in primo piano, collassato a una linguetta da 28 px con una riga per
-agente e che si espande al passaggio del mouse (clic sulla linguetta per fissarlo aperto).
+<p align="center">
+  <a href="https://github.com/leonardostagliano/AIUsageMonitor/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/leonardostagliano/AIUsageMonitor?style=flat-square"></a>
+  <a href="https://github.com/leonardostagliano/AIUsageMonitor/actions/workflows/windows-release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/leonardostagliano/AIUsageMonitor/windows-release.yml?branch=main&style=flat-square&label=build"></a>
+  <a href="https://github.com/leonardostagliano/AIUsageMonitor/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/leonardostagliano/AIUsageMonitor/total?style=flat-square"></a>
+  <img alt="Windows 10 | 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?style=flat-square&logo=windows">
+  <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512BD4?style=flat-square&logo=dotnet">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green?style=flat-square"></a>
+</p>
 
-Si aggiorna da sola dalle [release GitHub](#aggiornamenti) di questo repository, per chi ha accesso
-alle release e collega il proprio account GitHub dalle impostazioni.
+<p align="center">
+  <a href="https://github.com/leonardostagliano/AIUsageMonitor/releases/latest"><b>Download</b></a> ·
+  <a href="#features">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#privacy">Privacy</a>
+</p>
 
-Ispirata ad [AgentBar](https://github.com/scari/AgentBar) (macOS), riscritta da zero per Windows.
+<table align="center">
+  <tr>
+    <td align="center" valign="top">
+      <img src="docs/images/notch-panel.png" width="250" alt="The notch expanded on the right edge of the screen, with the Claude Code and Codex cards">
+      <br><sub>The notch, pinned open</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="docs/images/settings-agents.png" width="560" alt="The settings window on the Agents tab">
+      <br><sub>Settings, one section per tab</sub>
+    </td>
+  </tr>
+</table>
 
-> _Screenshot: `docs/screenshot.png` (da aggiungere)._
+## Why
 
-## Aspetto
+When you run Claude Code and OpenAI Codex side by side, the questions are always the same: how much of the 5-hour
+window is left, which session is waiting for you, and what all those tokens would cost at API prices.
+AIUsageMonitor answers them in one place that stays on screen, so you don't have to switch terminals or open a
+usage page. It is inspired by [AgentBar](https://github.com/scari/AgentBar) for macOS and rebuilt from scratch for
+Windows.
 
-Tray, menu della tray e finestra **Impostazioni** condividono la stessa palette scura del notch
-(sfondo `#1B1B1F`, superfici `#2A2A30` con hover `#3A3A42` e stato premuto `#45454E`, testo bianco
-con sottotitoli in grigio chiaro, accento verde `#3FB950`), con contrasto testo/sfondo verificato
-da test automatici (WCAG AA, ≥ 4.5:1). La finestra Impostazioni ha la barra del titolo scura (DWM
-immersive dark mode) oltre ai controlli ristilizzati; l'apertura e la chiusura del notch usano una
-dissolvenza incrociata tra linguetta e pannello, così non si sovrappongono più durante la
-transizione.
+## Features
 
-Per controllare l'aspetto senza passare dal tray, l'eseguibile accetta due argomenti di debug:
-`AIUsageMonitor.exe --settings` apre subito la finestra Impostazioni, `AIUsageMonitor.exe
---tray-menu` apre il menu della tray al centro dello schermo primario.
+- **Quota at a glance.** The 5-hour and weekly windows, per-model weekly limits, extra usage and your plan, with
+  severity colours and a countdown to each reset.
+- **Live sessions.** Every Claude Code and Codex session shows whether it is working, waiting for your input,
+  done or failed, driven by the agents' own hooks. Running workflow agents are listed under their session, with
+  the model they actually use.
+- **Tokens and API-equivalent cost.** Input (with cache) and output per session and per workflow agent, priced
+  with the public [LiteLLM](https://github.com/BerriAI/litellm) price list and converted to euro at the ECB
+  reference rate. It is labelled as an estimate: with a subscription it is not what you pay.
+- **One-click refresh.** A button on each agent card refreshes its quota, tokens and costs right away, then rests
+  for 10 seconds.
+- **Jump to the terminal.** Click a session name to bring its terminal to the front: the exact pane in Herdr or
+  wmux, otherwise the Windows Terminal or VS Code window that hosts it.
+- **Notifications** when a session needs input, finishes or fails, per agent and per kind.
+- **A dark, quiet interface.** The notch is a small pill on the right edge of the screen that opens on hover and
+  stays open on click. Settings use one tab per section. Bars, numbers and status dots move smoothly, and all of
+  it stops when Windows animations are turned off.
+- **Self-updating** from this repository's GitHub releases, with SHA-256 verification and an in-place swap.
 
-Le notifiche Windows usano il logo app esplicito e vengono testate con
-`AIUsageMonitor.exe --test-notification` dopo aver chiuso l'app: il click apre il notch. Il PNG viene
-generato in `%LOCALAPPDATA%\AIUsageMonitor\notifications\app-logo-<hash>.png` e conservato per
-non invalidare i toast già inviati; le notifiche già presenti nel Centro notifiche non vengono
-riscritte né azzerate.
+## Screenshots
 
-## Requisiti
+<table>
+  <tr>
+    <td align="center" valign="top">
+      <img src="docs/images/settings-costs.png" width="420" alt="Settings, Costs tab">
+      <br><sub>Costs: price list, exchange rate and fallback rate</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="docs/images/settings-updates.png" width="420" alt="Settings, Updates tab">
+      <br><sub>Updates from GitHub releases</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" colspan="2">
+      <img src="docs/images/tray-menu.png" width="275" alt="The tray menu">
+      <br><sub>Tray menu</sub>
+    </td>
+  </tr>
+</table>
 
-- Windows 10 versione 2004 (build 10.0.19041.0) o successivo, oppure Windows 11, x64.
-- **.NET 10 Desktop Runtime** per la build framework-dependent (`AIUsageMonitor-<versione>-win-x64.exe`
-  nelle release, quella prodotta di default da `scripts/publish.ps1`). La variante self-contained
-  (`AIUsageMonitor-<versione>-win-x64-selfcontained.exe`, `-SelfContained`) non richiede nulla ma pesa
-  ~180 MB.
-- **Node.js** (già presente se usi Claude Code o Codex): serve solo per lo stato live, perché gli
-  hook degli agenti eseguono uno script `.cjs`.
-- **Git for Windows** con Git Credential Manager (è nell'installer standard): serve solo per
-  collegare l'account GitHub dell'aggiornamento integrato.
-- .NET SDK 10 per compilare dai sorgenti.
+## Getting started
 
-## Come legge la quota
+### Requirements
 
-**Claude Code.** Legge `%USERPROFILE%\.claude\.credentials.json` (campo `claudeAiOauth`) e chiama
-`GET https://api.anthropic.com/api/oauth/usage` con quel token. Ne ricava la finestra 5h, la finestra
-7g, le finestre settimanali per modello, l'eventuale extra usage e l'etichetta del piano. Il file di
-credenziali è solo letto, mai scritto; il token non compare mai nei log né nell'interfaccia. Se il
-token è scaduto o il file manca non viene fatta alcuna chiamata e la card mostra "Apri Claude Code
-per rinnovare la sessione". Refresh ogni 60 s (configurabile 30–600 s).
+- Windows 10 version 2004 (build 19041) or later, or Windows 11, x64.
+- The [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) for the regular build
+  (`AIUsageMonitor-<version>-win-x64.exe`). The self-contained build
+  (`AIUsageMonitor-<version>-win-x64-selfcontained.exe`, about 180 MB) needs nothing else.
+- Node.js, only for live session status: the agents' hooks run a small `.cjs` script. You already have it if you
+  use Claude Code or Codex.
+- Git for Windows with Git Credential Manager (part of the standard installer), only to link a GitHub account for
+  in-app updates.
 
-**Codex.** Non c'è un endpoint di quota: i valori si leggono dai file di sessione
-`%USERPROFILE%\.codex\sessions\YYYY\MM\DD\rollout-*.jsonl`, cercando dalla coda gli ultimi record
-`token_count` con `rate_limits` (finestra primaria e secondaria, `used_percent`, `resets_at`,
-`plan_type`). Vengono considerati i file modificati negli ultimi 7 giorni. Se non c'è nessuna
-sessione recente la card mostra "Nessuna sessione Codex recente". Aggiornamento su modifica della
-cartella (debounce 2 s) più un controllo periodico ogni 30 s.
+### Install and first run
 
-L'ultimo snapshot valido è messo in cache in `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json`, così
-all'avvio le barre sono già popolate (marcate "non aggiornate") finché non arriva il primo refresh.
+1. Download the executable from the [latest release](https://github.com/leonardostagliano/AIUsageMonitor/releases/latest).
+   It is a single file with no installer.
+2. Put it in a folder you can write to, for example `%LOCALAPPDATA%\Programs\AIUsageMonitor`: the updater replaces
+   the file in place, which it cannot do in `Program Files`.
+3. Run it. A tray icon appears and the notch sits on the right edge of the main screen. Hover to open it, click to
+   keep it open.
+4. Choose **Installa hook** from the tray menu (or *Settings → Hook*) to turn on live status.
+5. For Codex, open Codex and run `/hooks` to approve the hook groups the app has just added.
 
-**Aggiornamento a comando.** Il pulsante ⟳ nell'intestazione di ogni card aggiorna subito la quota
-di quell'agente e ricalcola token e costi di tutte le sue sessioni, anche di quelle ferme; l'icona
-gira finché non ha finito (al massimo 15 s) e il pulsante resta attenuato per 10 s prima di
-accettare un nuovo click. "Aggiorna ora" nel menu della tray fa lo stesso per tutti gli agenti
-attivi.
+The interface is in Italian.
 
-## Come funziona lo stato live (hook)
+## How it works
 
-Gli agenti non espongono il loro stato: lo ricaviamo dai loro hook.
+### Quota
 
-1. Dal menu della tray (`Installa hook`) o dalle impostazioni, l'app copia
-   `%USERPROFILE%\.aiusagemonitor\hook.cjs` e registra i propri gruppi di hook nei file di
-   configurazione degli agenti: `~/.claude/settings.json` per Claude Code, `~/.codex/hooks.json`
-   per Codex. Prima di ogni scrittura salva un backup in `~/.aiusagemonitor/backups/`, e riscrive il
-   JSON preservando tutte le altre chiavi. Se un comando dell'app è già presente non viene duplicato.
-2. A ogni evento l'agente esegue `node "<...>\hook.cjs" claude|codex`. Lo script legge stdin,
-   appende **una riga JSON** a `%USERPROFILE%\.aiusagemonitor\events.jsonl` (timestamp, agente,
-   evento, `session_id`, `cwd`, tipo di notifica, messaggio troncato a 200 caratteri) ed esce sempre
-   con codice 0: non può bloccare né rallentare l'agente. Non vengono registrati i prompt.
-3. L'app segue il file in append e ricostruisce la macchina a stati per ogni sessione:
-   `SessionStart` → pronto, `UserPromptSubmit` → al lavoro, `Notification` di tipo
-   `permission_prompt`/`idle_prompt`/… → attende input, `Stop` → finito, `StopFailure` → errore,
-   `SessionEnd` → sessione rimossa. All'avvio rilegge le ultime 24 ore (in silenzio, senza toast).
+**Claude Code.** The app reads the OAuth token in `%USERPROFILE%\.claude\.credentials.json` and calls
+`GET https://api.anthropic.com/api/oauth/usage`. That gives the 5-hour window, the 7-day window, the per-model
+weekly windows, extra usage and the plan name. The credentials file is only read, never written, and the token
+never appears in logs or in the interface. If the token has expired or the file is missing, no call is made and
+the card asks you to open Claude Code to renew the session. The quota refreshes every 60 seconds (30–600,
+configurable).
 
-### Token e workflow attivi
+**Codex.** There is no quota endpoint, so the app reads the session files
+`%USERPROFILE%\.codex\sessions\YYYY\MM\DD\rollout-*.jsonl` from the end and takes the latest `token_count` records
+with `rate_limits` (primary and secondary window, `used_percent`, `resets_at`, `plan_type`). Only files changed in
+the last 7 days count. It refreshes when the folder changes (2-second debounce) and every 30 seconds.
 
-Ogni sessione mostra separatamente **↑ input** (inclusa la cache) e **↓ output**.
-Sono i token cumulativi della conversazione: il contesto inviato di nuovo a ogni richiesta viene
-conteggiato di nuovo, quindi possono superare di molto la lunghezza del testo visibile. Il tooltip
-separa input senza cache, cache letta e cache scritta. Le risposte Claude in streaming vengono
-deduplicate per identificativo del messaggio, con ripiego sull'identificativo della richiesta;
-per Codex si sommano le crescite del totale cumulativo riportato dal thread, contando per intero le
-ripartenze da zero (Codex azzera il totale quando risveglia un thread per un nuovo compito) e
-lasciando fuori la cronologia che un subagente forkato copia dal padre, già contata sul padre.
-Così i token di ogni riga sono esattamente quelli di cui la riga mostra il costo.
+The last good snapshot is cached in `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json`, so the bars are filled at
+start-up and marked as not up to date until the first refresh arrives. The refresh button on a card updates that
+agent's quota at once and recomputes tokens and costs for all its sessions, idle ones included; the icon spins
+until it is done (15 seconds at most) and the button rests for 10 seconds. **Aggiorna ora** in the tray menu does
+the same for every enabled agent.
 
-La lista espandibile dei workflow mostra solo gli agenti **in corso**, con modello effettivo letto
-dal transcript e token ↑ input/↓ output. Gli agenti conclusi escono dalla lista e dal riepilogo attivo.
-Se modello o token non sono ancora disponibili viene mostrato "in attesa"; i totali della sessione
-e quelli dei singoli workflow rimangono distinti.
+### Live status
 
-### Codex: approvazione degli hook
+The agents don't expose their state, so the app reads it from their hooks.
 
-Codex esegue un gruppo di hook **solo dopo che l'utente lo ha approvato**: in `~/.codex/config.toml`
-tiene una sezione `[hooks.state.'<file>:<evento>:<gruppo>:<indice>']` con un `trusted_hash` per ogni
-gruppo approvato. Dopo `Installa hook` bisogna quindi aprire Codex e lanciare **`/hooks`** per
-approvare i gruppi appena aggiunti; finché manca il `trusted_hash` l'app lo segnala nello stato con
-"(da approvare in Codex con /hooks)" e il notch non mostra sessioni Codex.
+1. **Installa hook** copies `%USERPROFILE%\.aiusagemonitor\hook.cjs` and adds the app's hook groups to
+   `~/.claude/settings.json` (Claude Code) and `~/.codex/hooks.json` (Codex). Before every write it saves a backup
+   in `~/.aiusagemonitor/backups/` and rewrites the JSON keeping every other key. A command that is already there
+   is not added twice.
+2. On every event the agent runs `node "<...>\hook.cjs" claude|codex`. The script reads stdin, appends **one JSON
+   line** to `%USERPROFILE%\.aiusagemonitor\events.jsonl` and always exits with code 0, so it can neither block
+   nor slow down the agent. Prompts are never recorded.
+3. The app tails that file and keeps a state machine per session: `SessionStart` → ready, `UserPromptSubmit` →
+   working, a `permission_prompt`/`idle_prompt` notification → waiting for input, `Stop` → done, `StopFailure` →
+   error, `SessionEnd` → removed. At start-up it replays the last 24 hours silently, without toasts.
 
-I gruppi dell'app vengono sempre aggiunti **in coda**, così le chiavi posizionali dei gruppi già
-approvati restano valide. Attenzione al contrario: rimuovendo il gruppo dell'app si spostano gli
-indici dei gruppi aggiunti dopo, che vanno riapprovati con `/hooks`.
+<details>
+<summary>What each event line contains, and how tokens are counted</summary>
 
-Se in `config.toml` gli hook sono disabilitati (`hooks = false`) l'app lo segnala senza modificare
-il file.
+Each line holds a timestamp, the agent, the event name, `session_id`, `cwd`, the notification type and the agent's
+message cut to 200 characters. `SessionStart` and `UserPromptSubmit` also carry a `host` object with a few hints
+about the terminal (see [Jump to the terminal](#jump-to-the-terminal)).
 
-## Costi
+Every session shows **↑ input** (cache included) and **↓ output** separately. They are the conversation's
+cumulative tokens: the context sent again with every request is counted again, so they can be far larger than
+the visible text. The tooltip splits uncached input, cache reads and cache writes. Streamed Claude responses are
+de-duplicated by message id, falling back to the request id. For Codex the app adds up the growth of the
+thread's cumulative total, counts restarts from zero in full (Codex resets the total when it wakes a thread for a
+new task) and leaves out the history a forked subagent copies from its parent, which is already counted on the
+parent. So each row's tokens are exactly the ones whose cost the row shows.
 
-Accanto ai token di ogni sessione e di ogni agente di workflow il notch mostra il **costo API
-equivalente**: quanto costerebbero quei token ai prezzi di listino pubblicati da Anthropic e OpenAI,
-convertiti in euro. Con un piano in abbonamento (Max, Pro) **non è la spesa reale**. La card di ogni
-agente riporta il totale delle sessioni presenti nel notch, compresi tutti i loro agenti; il tooltip
-mostra il dettaglio per modello, la data del listino e il tasso usato.
+The expandable workflow list shows only agents that are **still running**, with the model read from their
+transcript and their input and output tokens. Finished agents leave the list and the running summary. Until the
+model or the tokens are known the row says "in attesa" (pending).
 
-- **Conteggio.** I token sono divisi per modello, per variante di prezzo (fast mode di Claude,
-  priority e flex di OpenAI) e per fascia di contesto (prompt oltre 200k o 272k token), separando
-  input, output, cache letta e cache scritta a 5 minuti o a 1 ora: Claude Code scrive solo cache a 1
-  ora, che costa il 60% in più. Per Codex il costo segue il modello in vigore a ogni richiesta,
-  anche quando cambia a metà thread. Le ricerche web di Claude si pagano a parte.
-- **Listino.** Il listino [LiteLLM](https://github.com/BerriAI/litellm)
-  (`model_prices_and_context_window.json`, ogni voce cita la pagina prezzi del vendor) viene
-  scaricato al massimo una volta al giorno e salvato in `prices-cache.json`; fino al primo download
-  vale la copia imbarcata nell'exe. Un file `prices-override.json` nella stessa cartella, con lo
-  stesso formato per modello di LiteLLM, aggiunge o corregge prezzi:
+</details>
+
+<details>
+<summary>Codex: approving the hooks</summary>
+
+Codex runs a hook group **only after you approve it**: `~/.codex/config.toml` keeps a
+`[hooks.state.'<file>:<event>:<group>:<index>']` section with a `trusted_hash` for each approved group. After
+**Installa hook**, open Codex and run **`/hooks`** to approve the new groups. Until the `trusted_hash` is there the
+app says "(da approvare in Codex con /hooks)" and the notch shows no Codex sessions.
+
+The app always adds its groups **at the end**, so the positional keys of groups you already approved stay valid.
+The reverse is not true: removing the app's group shifts the index of groups added after it, and those need
+approving again with `/hooks`. If hooks are turned off in `config.toml` (`hooks = false`) the app reports it and
+leaves the file alone.
+
+</details>
+
+### Costs
+
+Next to the tokens of every session and workflow agent, the notch shows the **API-equivalent cost**: what those
+tokens would cost at the list prices Anthropic and OpenAI publish, converted to euro. With a subscription plan
+(Max, Pro) **it is not what you pay**. Each agent card shows the total of the sessions in the notch, their agents
+included; the tooltip breaks it down by model and shows the price-list date and the rate used.
+
+<details>
+<summary>How the cost is computed</summary>
+
+- **Counting.** Tokens are split by model, by price variant (Claude fast mode, OpenAI priority and flex) and by
+  context tier (prompts over 200k or 272k tokens), separating input, output, cache reads and cache writes at 5
+  minutes or 1 hour. Claude Code only writes 1-hour cache, which costs 60% more. For Codex the cost follows the
+  model in use at each request, even when it changes mid-thread. Claude's web searches are priced separately.
+- **Price list.** The [LiteLLM](https://github.com/BerriAI/litellm) list (`model_prices_and_context_window.json`;
+  every entry cites the vendor's pricing page) is downloaded at most once a day and saved in `prices-cache.json`;
+  until the first download the copy built into the executable is used. A `prices-override.json` file in the same
+  folder, in LiteLLM's per-model format, adds or corrects prices:
 
   ```json
   { "codex-auto-review": { "input_cost_per_token": 1e-7, "output_cost_per_token": 5e-7 } }
   ```
 
-- **Cambio.** Tasso di riferimento BCE (dollari per euro), scaricato una volta al giorno; senza rete
-  vale l'ultimo scaricato, poi il tasso di riserva delle impostazioni (default 1 € = 1,14 $).
-- **Modelli senza prezzo** (per esempio `codex-auto-review`, che nessun listino pubblica): il costo
-  mostrato è un minimo, `≥ 1,20 €`, e il tooltip dice quale modello manca; se nessun modello ha un
-  prezzo, o la parte con un prezzo resta sotto il centesimo, compare `costo n/d`.
+- **Exchange rate.** The ECB reference rate (dollars per euro), downloaded once a day. Offline, the last
+  downloaded rate is used, then the fallback rate from the settings (default 1 € = 1.14 $).
+- **Models without a price** (for example `codex-auto-review`, which no list publishes): the cost shown is a
+  minimum, `≥ 1,20 €`, and the tooltip names the missing model. If no model has a price, or the priced part stays
+  under a cent, the notch shows `costo n/d`.
 
-Dalle impostazioni (gruppo COSTI) si nascondono i costi — e con loro ogni download di listino e
-tasso — e si imposta il tasso di riserva.
+In *Settings → Costi* you can hide costs, which also stops every price-list and rate download, and set the
+fallback rate.
 
-## Vai al terminale
+</details>
 
-Nel notch, cliccando il nome di una sessione (il cursore diventa una manina) l'app porta in primo
-piano il terminale che ospita quella sessione di Claude Code o Codex, senza scollegare il pin del
-notch.
+### Jump to the terminal
 
-1. L'hook (`hook.cjs`) registra, solo sugli eventi `SessionStart` e `UserPromptSubmit`, un oggetto
-   `host` con l'ambiente del processo che lo ha eseguito: `HERDR_PANE_ID`, `WMUX_PTY_ID`,
-   `WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID` e il ppid. Le sessioni avviate prima di installare questa versione
-   non hanno `host` finché non emettono il prompt successivo: fino ad allora il nome non è
-   cliccabile.
-2. Quando l'evento arriva, l'app risale l'albero dei processi a partire da quel ppid — il processo
-   che ha eseguito l'hook vive pochi secondi, la finestra del terminale resta — e tiene per ogni
-   sessione il pid dell'agente e il pid del primo antenato con una finestra top-level.
-3. Al click la catena di strategie è: prima **Herdr** (`herdr agent focus <pane>`, con
-   `herdr tab focus` come ripiego se il pane non risponde più), poi **wmux** (workspace, pane e
-   tab del pty via la pipe di controllo di wmux, poi la sua finestra), poi la finestra risolta al
-   passo precedente, infine gli indizi residui (`VSCODE_PID`, `WT_SESSION`). Se nessuna strategia
-   funziona compare il toast "Terminale non trovato".
+Click a session name in the notch (the pointer turns into a hand) and the app brings the terminal hosting that
+Claude Code or Codex session to the front, without unpinning the notch.
 
-**Herdr** e **wmux** sono le strategie che arrivano al pane: portano in primo piano il pane esatto
-anche se si trova in un'altra tab o in un altro workspace. wmux fa girare le shell sotto un daemon
-senza finestra e il processo che esegue l'hook è già terminato quando l'evento arriva, quindi la
-risalita dei processi lì non funziona quasi mai: è il `WMUX_PTY_ID` registrato dall'hook a portare
-al pane, e l'app parla con wmux sulla sua named pipe di controllo con il token di
-`%USERPROFILE%\.wmux-auth-token`, come fa la CLI `wmux`. **Senza Herdr** l'app attiva la finestra risolta
-risalendo i processi quando l'evento è arrivato: è quella giusta anche con più finestre di Windows
-Terminal aperte, perché non dipende da quante sono ma dall'antenato del processo che ha eseguito
-l'hook. Quello che non può fare è scegliere la tab — l'attivazione agisce sulla finestra top-level —
-quindi con più tab in una stessa finestra il click porta in primo piano la finestra giusta con la
-tab che era attiva. In **VS Code**, se la risalita non arriva a una finestra, resta l'indizio
-`VSCODE_PID` e l'app attiva la finestra di quel processo: le finestre di VS Code appartengono tutte
-allo stesso processo, quindi con più finestre aperte può venire in primo piano una finestra diversa
-da quella della sessione, senza alcun avviso. L'unico caso in cui l'app rinuncia davvero è il
-ripiego su `WT_SESSION`: quando la risalita non è disponibile (sessione ricostruita dal replay senza
-`host`, o pid già riciclato) e sono aperte più finestre di Windows Terminal, `WT_SESSION` non dice
-quale sia e compare il toast "Terminale non trovato". Nessuna chiamata a `herdr` né risalita dei
-processi blocca mai l'interfaccia: girano su thread separati con un timeout di 3 s, e il click non
-ruba mai il fuoco allo schermo se non come conseguenza diretta del click stesso.
+1. On `SessionStart` and `UserPromptSubmit` the hook records a `host` object from its own environment:
+   `HERDR_PANE_ID`, `WMUX_PTY_ID`, `WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID` and its parent pid. Sessions started
+   before this version get it with their next prompt.
+2. When the event arrives the app walks up the process tree from that parent pid and keeps, per session, the
+   agent's pid and the first ancestor that owns a top-level window.
+3. On click it tries, in order: **Herdr** (`herdr agent focus <pane>`, with `herdr tab focus` as a fallback),
+   **wmux** (the workspace, pane and tab of the pty, then the wmux window), the window found in step 2, and
+   finally the `VSCODE_PID` and `WT_SESSION` hints. If nothing works, a "Terminale non trovato" toast appears.
 
-Per verificare senza passare dal notch, `AIUsageMonitor.exe --focus-session <sessionId>` aspetta il
-replay iniziale della coda eventi e prova a portare in primo piano il terminale di quella sessione,
-scrivendo l'esito nel log.
+<details>
+<summary>What each strategy can and cannot do</summary>
 
-Chi ha già installato gli hook non deve reinstallarli per usare questa funzione: se risultano già
-installati per almeno un agente, a ogni avvio l'app riallinea `hook.cjs` alla versione imbarcata
-nell'eseguibile (lo riscrive solo quando il contenuto è cambiato). Se il file è bloccato o non
-scrivibile l'app parte lo stesso: annota l'errore nel log, tiene la versione precedente dello script
-e riprova al riavvio successivo.
+**Herdr** and **wmux** reach the pane itself, even in another tab or workspace. wmux runs its shells under a
+daemon without a window, and the process that ran the hook has already exited when the event arrives, so the
+process walk rarely works there: the `WMUX_PTY_ID` recorded by the hook leads to the pane. The app talks to wmux
+on its control named pipe with the token in `%USERPROFILE%\.wmux-auth-token`, like the `wmux` CLI does.
 
-## Aggiornamenti
+**Without a multiplexer** the app activates the window found by walking the processes when the event arrived.
+That is the right window even with several Windows Terminal windows open, because it depends on the ancestor of
+the hook's process, not on how many windows there are. It cannot pick the tab, since activation works on the
+top-level window: with several tabs in one window you get the right window with whichever tab was active. In
+**VS Code**, if the walk finds no window, the app falls back to `VSCODE_PID`; all VS Code windows belong to one
+process, so with several windows open a different one may come to the front. The one case where the app gives up
+is the `WT_SESSION` fallback with several Windows Terminal windows open, because `WT_SESSION` does not say which
+one it is.
 
-Ogni push su `main` pubblica una release del repository (vedi [Rilasci](#rilasci)); l'app la trova,
-la scarica e si sostituisce da sola. Serve un account GitHub che **veda le release del repository**:
-senza accesso non c'è niente da controllare né da scaricare.
+Herdr calls and process walks never block the interface: they run on background threads with a 3-second timeout.
+To test without the notch, `AIUsageMonitor.exe --focus-session <sessionId>` waits for the initial replay, tries
+to focus that session's terminal and writes the outcome to the log.
 
-1. **Collegamento.** In *Impostazioni → AGGIORNAMENTI* il pulsante **Collega GitHub e controlla**
-   avvia Git Credential Manager in modalità browser: GitHub chiede di scegliere l'account e, la prima
-   volta, di autorizzare Git Credential Manager. Ogni collegamento usa un namespace GCM nuovo, quindi
-   non riusa né modifica gli account salvati in Gestione credenziali di Windows. La sessione
-   restituita viene cifrata con DPAPI (utente Windows corrente) in
-   `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json`, ed è l'**unica** credenziale usata: mai PAT,
-   account di GitHub Desktop o credential helper di git. **Scollega account** la elimina.
-2. **Controllo.** Con un account collegato e *Controlla automaticamente gli aggiornamenti* attivo
-   (default, vale dopo *Salva*) l'app controlla 15 secondi dopo l'avvio e poi ogni 6 ore; **Controlla
-   ora** lo fa subito. Legge le 100 release più recenti e sceglie la versione SemVer stabile più alta
-   (non l'etichetta "Latest"), purché contenga esattamente l'eseguibile della **stessa variante**
-   in esecuzione (framework-dependent o self-contained, registrata nella build).
-3. **Proposta.** Quando c'è una versione nuova compare una notifica Windows (una volta per versione)
-   e in cima al menu della tray la voce **Aggiorna alla versione X…**. Entrambe aprono una conferma
-   con un solo consenso per scaricare e riavviare; **Più tardi** ignora quella versione fino al
-   riavvio dell'app. Dalle impostazioni gli stessi passi sono separati (**Scarica**, **Installa e
-   riavvia**) e **Apri release** mostra la pagina GitHub con le note.
-4. **Download verificato.** Prima di scaricare l'app rilegge la release scelta, per accorgersi di un
-   asset sostituito nel frattempo. Gli indirizzi ammessi sono solo l'API del repository, i download
-   delle sue release e le CDN degli asset di GitHub; i redirect vengono seguiti uno alla volta e
-   ricontrollati, e il token va solo ad `api.github.com`. Lo SHA-256 del file scaricato deve
-   coincidere con `SHA256SUMS.txt` della release e con il digest pubblicato da GitHub (se ci sono
-   entrambi devono coincidere anche fra loro); il file deve essere un eseguibile Windows e la versione
-   scritta nell'eseguibile deve essere quella della release.
-5. **Installazione.** L'eseguibile è un file singolo senza installer: l'app lo verifica di nuovo,
-   rinomina l'exe in esecuzione in `AIUsageMonitor.exe.old-<id>` (Windows permette di rinominare un
-   exe in uso, non di sovrascriverlo), mette la nuova versione **nello stesso percorso** e la avvia con
-   `--updated <pid>`, poi si chiude. La nuova istanza aspetta che la precedente sia uscita prima di
-   prendere il mutex di istanza singola e mostra la notifica "AIUsageMonitor aggiornato". Avvio
-   automatico, pin sulla barra e notifiche restano validi perché il percorso non cambia; impostazioni,
-   hook e cache non vengono toccati. Se un passo fallisce l'exe precedente torna al suo posto. Se
-   chiudi l'app (Esci, fine sessione) mentre la sostituzione è in corso, l'app aspetta che finisca e
-   non si riapre: la nuova versione parte al prossimo avvio. I file `.old-*` vengono eliminati
-   all'avvio successivo.
+If the hooks are already installed you don't need to reinstall them for new versions: at every start the app
+aligns `hook.cjs` with the copy built into the executable, rewriting it only when the content changed. If the
+file is locked, the app starts anyway, logs the error, keeps the old script and tries again next time.
 
-L'installazione integrata richiede una cartella dell'eseguibile scrivibile dall'utente: da una
-cartella protetta (es. `Program Files`) o da `dotnet run` l'app segnala comunque la nuova versione,
-ma va scaricata dalla pagina della release e sostituita a mano. La prova di scrittura (un file
-temporaneo accanto all'exe) si fa solo quando c'è una versione da installare o quando scarichi o
-installi, mai all'avvio: con *Accesso controllato alle cartelle* di Windows attivo e l'exe sul
-Desktop o in Documenti, Windows Security può segnalarla in quei momenti. `AIUsageMonitor.exe --updates` apre
-le impostazioni già sul gruppo AGGIORNAMENTI.
+</details>
 
-## Dove finiscono i file
+### Updates
 
-| Percorso | Contenuto |
-|---|---|
-| `%LOCALAPPDATA%\AIUsageMonitor\settings.json` | impostazioni dell'app |
-| `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json` | ultimo snapshot di quota per agente |
-| `%LOCALAPPDATA%\AIUsageMonitor\prices-cache.json` | listino prezzi LiteLLM scaricato (solo modelli Anthropic e OpenAI) |
-| `%LOCALAPPDATA%\AIUsageMonitor\prices-override.json` | prezzi aggiunti o corretti a mano (facoltativo) |
-| `%LOCALAPPDATA%\AIUsageMonitor\exchange-rate.json` | ultimo tasso di riferimento BCE |
-| `%LOCALAPPDATA%\AIUsageMonitor\logs\app-<data>.log` | log (7 giorni, livello Info) |
-| `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json` | sessione GitHub dell'updater, cifrata con DPAPI |
-| `%LOCALAPPDATA%\AIUsageMonitor\updates\` | nuova versione scaricata in attesa di installazione (i file obsoleti o più vecchi di 7 giorni vengono eliminati) |
-| `<cartella dell'exe>\AIUsageMonitor.exe.old-<id>` | versione precedente dopo un aggiornamento, eliminata all'avvio successivo |
-| `%USERPROFILE%\.aiusagemonitor\hook.cjs` | script hook installato |
-| `%USERPROFILE%\.aiusagemonitor\events.jsonl` | eventi degli agenti (ruotato a 5 MB) |
-| `%USERPROFILE%\.aiusagemonitor\backups\` | backup dei file di configurazione prima di ogni modifica |
+Every push to `main` publishes a release of this repository (see [Releases](#releases)); the app finds it,
+downloads it and replaces itself.
 
-Impostazioni disponibili: agenti attivi e intervallo di refresh, monitor e offset verticale del
-notch, ritardo di chiusura, modalità compatta, quali notifiche mostrare e per quali agenti, controllo
-automatico degli aggiornamenti, costi (mostra o nascondi, tasso di riserva), avvio automatico (valore
-`AIUsageMonitor` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+1. **Link.** *Settings → Aggiornamenti → Collega GitHub e controlla* starts Git Credential Manager in browser
+   mode: GitHub asks you to pick an account and, the first time, to authorise Git Credential Manager. Each link
+   uses a fresh GCM namespace, so it neither reuses nor changes the accounts saved in Windows Credential Manager.
+   The session is encrypted with DPAPI (current Windows user) in `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json`
+   and is the **only** credential used: never a PAT, a GitHub Desktop account or git's credential helper.
+   **Scollega account** deletes it.
+2. **Check.** With an account linked and automatic checks on (the default), the app checks 15 seconds after start
+   and then every 6 hours; **Controlla ora** checks at once. It reads the 100 most recent releases and picks the
+   highest stable SemVer version (not the "Latest" label) that ships the executable of the **same variant** you
+   are running (framework-dependent or self-contained).
+3. **Offer.** A new version brings a Windows notification (once per version) and an **Aggiorna alla versione X…**
+   item at the top of the tray menu. Both open a confirmation that downloads and restarts with one consent;
+   **Più tardi** skips that version until the app restarts. In the settings the steps are separate (**Scarica**,
+   **Installa e riavvia**) and **Apri release** opens the GitHub page with the notes.
 
-## Build, test, publish
+<details>
+<summary>How the download is verified and the executable swapped</summary>
 
-```powershell
-dotnet build AIUsageMonitor.slnx
-dotnet test AIUsageMonitor.slnx          # test del Core
-node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs   # test dello script hook e dei rilasci
-dotnet run --project src/AIUsageMonitor.App
+Before downloading, the app reads the chosen release again, to notice an asset replaced in the meantime. The only
+allowed addresses are the repository API, its release downloads and GitHub's asset CDNs; redirects are followed
+one at a time and checked again, and the token only goes to `api.github.com`. The SHA-256 of the downloaded file
+must match the release's `SHA256SUMS.txt` and the digest published by GitHub (when both exist they must also
+match each other); the file must be a Windows executable whose embedded version is the release's version.
 
-pwsh scripts/publish.ps1                     # -> publish/AIUsageMonitor.exe (serve il .NET 10 Desktop Runtime)
-pwsh scripts/publish.ps1 -SelfContained -Output publish-sc   # eseguibile autonomo (~180 MB)
-pwsh scripts/publish.ps1 -Version 0.2.0      # stessa build con la versione indicata, come fa la CI
+The executable is a single file with no installer. The app verifies it again, renames the running exe to
+`AIUsageMonitor.exe.old-<id>` (Windows lets you rename a running exe, not overwrite it), puts the new version
+**at the same path**, starts it with `--updated <pid>` and exits. The new instance waits for the old one to exit
+before taking the single-instance mutex and shows an "AIUsageMonitor aggiornato" notification. Autostart, taskbar
+pins and notifications keep working because the path does not change; settings, hooks and caches are untouched.
+If a step fails, the previous exe goes back in place. If you quit the app while the swap is running, it waits for
+it to finish and does not reopen: the new version starts next time. The `.old-*` files are deleted at the next
+start.
 
-dotnet run --project tools/MakeIcon       # rigenera src/AIUsageMonitor.App/Assets/app.ico
-dotnet run --project src/AIUsageMonitor.Probe -- --update-price-snapshot   # rigenera la copia del listino imbarcata
-```
+In-app installation needs a folder you can write to: from a protected folder (for example `Program Files`) or
+from `dotnet run` the app still reports the new version, but you download it from the release page and replace
+it by hand. The write test (a temporary file next to the exe) only runs when there is a version to install or
+when you download or install, never at start-up; with Windows *Controlled folder access* on and the exe on the
+Desktop or in Documents, Windows Security may flag it at those moments. `AIUsageMonitor.exe --updates` opens the
+settings on the updates tab.
 
-Per la build framework-dependent lo script usa `--no-self-contained`: con l'SDK .NET 10 e
-`PublishSingleFile`, `--self-contained false` produce comunque un eseguibile self-contained.
-
-L'app è a istanza singola (mutex `Local\AIUsageMonitor`): un secondo avvio fissa aperto il notch
-dell'istanza già in esecuzione invece di aprirne un'altra.
-
-### Rilasci
-
-Le build locali non pubblicano nulla. `.github/workflows/windows-release.yml` gira a ogni push su
-`main` (e a mano con *Run workflow*) su un runner Windows:
-
-1. `node scripts/windows-release.mjs prepare` calcola la versione: parte dall'ultima release
-   pubblicata (o dalla `<Version>` di `src/AIUsageMonitor.App/AIUsageMonitor.App.csproj` se è più
-   alta) e la incrementa secondo i conventional commit arrivati da allora: `feat:` → minor, `!` o
-   `BREAKING CHANGE:` → major, tutto il resto → patch. Un commit già contenuto in una release non ne
-   crea un'altra.
-2. Test .NET e Node, poi `dotnet publish -p:Version=<versione>` delle due varianti single-file
-   win-x64 e uno smoke test che controlla header, versione scritta nell'eseguibile e variante.
-3. `node scripts/windows-release.mjs publish` crea la release `v<versione>` in bozza con
-   `AIUsageMonitor-<versione>-win-x64.exe`, `AIUsageMonitor-<versione>-win-x64-selfcontained.exe` e
-   `SHA256SUMS.txt`, verifica gli upload e solo allora la pubblica come *Latest*.
-
-La versione vive nei tag e nelle release: il workflow non fa commit né push sul repository.
-
-## Limiti noti
-
-- **Claude Code, permessi:** quando concedi un permesso l'agente non emette alcun hook, quindi la
-  sessione resta "attende input" fino al `Stop` successivo, cioè fino a fine turno. Fa eccezione
-  `AskUserQuestion`, dove il `PostToolUse` riporta subito la sessione ad "al lavoro".
-- **Codex, attende input:** Codex espone `PermissionRequest`, ma nella v1 non lo registriamo per non
-  interferire con il flusso di approvazione. Di conseguenza le sessioni Codex non mostrano mai
-  "attende input": passano da "al lavoro" a "finito".
-- Lo stato live dipende dagli hook: senza installazione (e, per Codex, senza approvazione con
-  `/hooks`) le card mostrano "Stato live non attivo: installa hook".
-- Le quote Codex si aggiornano solo quando una sessione Codex scrive un nuovo `token_count`.
+</details>
 
 ## Privacy
 
-L'app **legge soltanto file locali** (credenziali Claude, sessioni Codex, configurazioni hook,
-eventi) e per la quota fa **una sola chiamata di rete**: l'endpoint usage di Anthropic, con il token
-OAuth già presente sulla macchina. Con i costi attivi (default) fa anche due richieste anonime, al
-massimo una volta al giorno e senza inviare alcun dato: il listino prezzi LiteLLM da
-`raw.githubusercontent.com` e il tasso di riferimento da `www.ecb.europa.eu`. L'unica altra rete è
-quella dell'updater, e solo dopo che hai collegato un account GitHub: l'API release di questo
-repository e il download dei suoi asset, con la sessione creata dall'app (mai scritta nei log né
-mostrata). Nessun prompt, nessun contenuto di conversazione e nessun token viene inviato, registrato
-o mostrato da nessuna parte: gli eventi tracciati sono nomi di evento, identificativo di sessione,
-cartella di lavoro, un messaggio breve dell'agente e, sugli eventi di avvio e di prompt, qualche
-indizio sul terminale che ospita la sessione (ppid, pane di Herdr, pty di wmux, `WT_SESSION`,
-`TERM_PROGRAM`, `VSCODE_PID`), che serve solo al click "vai al terminale" e non lascia mai la macchina. Non c'è
-telemetria.
+- **Read locally only:** Claude credentials, Codex session files, the hook configuration and the event file.
+- **Network:** the Anthropic usage endpoint, with the OAuth token already on your machine. With costs on (the
+  default), also two anonymous requests at most once a day that send no data: the LiteLLM price list from
+  `raw.githubusercontent.com` and the reference rate from `www.ecb.europa.eu`. The updater talks to GitHub only
+  after you link an account: this repository's release API and its asset downloads, with the session the app
+  created (never logged or shown).
+- **Never sent, logged or shown:** prompts, conversation content and tokens. Recorded events hold event names,
+  the session id, the working folder, a short message from the agent and, on start and prompt events, a few hints
+  about the hosting terminal (parent pid, Herdr pane, wmux pty, `WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID`),
+  used only by the jump-to-terminal click. They never leave the machine.
+- **No telemetry.**
 
-## Licenza
+## Files
 
-MIT — vedi [LICENSE](LICENSE). Note su icone, listino prezzi e ispirazione in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+| Path | Contents |
+|---|---|
+| `%LOCALAPPDATA%\AIUsageMonitor\settings.json` | app settings |
+| `%LOCALAPPDATA%\AIUsageMonitor\usage-cache.json` | last quota snapshot per agent |
+| `%LOCALAPPDATA%\AIUsageMonitor\prices-cache.json` | downloaded LiteLLM price list (Anthropic and OpenAI models only) |
+| `%LOCALAPPDATA%\AIUsageMonitor\prices-override.json` | prices you add or correct (optional) |
+| `%LOCALAPPDATA%\AIUsageMonitor\exchange-rate.json` | last ECB reference rate |
+| `%LOCALAPPDATA%\AIUsageMonitor\logs\app-<date>.log` | logs (7 days, Info level) |
+| `%LOCALAPPDATA%\AIUsageMonitor\updates-auth.json` | the updater's GitHub session, DPAPI-encrypted |
+| `%LOCALAPPDATA%\AIUsageMonitor\updates\` | downloaded version waiting to be installed (stale files or files older than 7 days are deleted) |
+| `<exe folder>\AIUsageMonitor.exe.old-<id>` | previous version after an update, deleted at the next start |
+| `%USERPROFILE%\.aiusagemonitor\hook.cjs` | installed hook script |
+| `%USERPROFILE%\.aiusagemonitor\events.jsonl` | agent events (rotated at 5 MB) |
+| `%USERPROFILE%\.aiusagemonitor\backups\` | backups of the configuration files before every change |
+
+The settings cover: enabled agents and refresh intervals, the notch's monitor, vertical offset, close delay and
+compact mode, which notifications to show and for which agents, automatic update checks, costs (show or hide,
+fallback rate) and autostart (the `AIUsageMonitor` value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+
+## Build from source
+
+You need the .NET 10 SDK.
+
+```powershell
+dotnet build AIUsageMonitor.slnx
+dotnet test AIUsageMonitor.slnx
+node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs   # hook script and release tests
+dotnet run --project src/AIUsageMonitor.App
+
+pwsh scripts/publish.ps1                                     # -> publish/AIUsageMonitor.exe (needs the .NET 10 Desktop Runtime)
+pwsh scripts/publish.ps1 -SelfContained -Output publish-sc   # self-contained executable (~180 MB)
+pwsh scripts/publish.ps1 -Version 0.2.0                      # same build with the given version, as CI does
+
+dotnet run --project tools/MakeIcon                          # regenerates src/AIUsageMonitor.App/Assets/app.ico
+dotnet run --project src/AIUsageMonitor.Probe -- --update-price-snapshot   # regenerates the built-in price list
+```
+
+For the framework-dependent build the script uses `--no-self-contained`: with the .NET 10 SDK and
+`PublishSingleFile`, `--self-contained false` still produces a self-contained executable.
+
+The app is single-instance (mutex `Local\AIUsageMonitor`): starting it again pins the running instance's notch
+open instead of opening a second one. A few switches help when checking the interface: `--settings` opens the
+settings window, `--tray-menu` opens the tray menu in the middle of the main screen, and `--test-notification`
+(with the app closed) sends a test notification.
+
+### Releases
+
+Local builds publish nothing. `.github/workflows/windows-release.yml` runs on every push to `main` (and by hand
+with *Run workflow*) on a Windows runner:
+
+1. `node scripts/windows-release.mjs prepare` works out the version: it starts from the last published release
+   (or from `<Version>` in `src/AIUsageMonitor.App/AIUsageMonitor.App.csproj` if that is higher) and bumps it
+   according to the conventional commits since then: `feat:` → minor, `!` or `BREAKING CHANGE:` → major,
+   everything else → patch. A commit already contained in a release does not create another one.
+2. .NET and Node tests, then `dotnet publish -p:Version=<version>` of the two single-file win-x64 variants and a
+   smoke test that checks the header, the embedded version and the variant.
+3. `node scripts/windows-release.mjs publish` creates the `v<version>` release as a draft with
+   `AIUsageMonitor-<version>-win-x64.exe`, `AIUsageMonitor-<version>-win-x64-selfcontained.exe` and
+   `SHA256SUMS.txt`, verifies the uploads and only then publishes it as *Latest*.
+
+The version lives in tags and releases: the workflow never commits or pushes to the repository.
+
+## Known limitations
+
+- **Claude Code, permissions:** granting a permission fires no hook, so the session stays "waiting for input"
+  until the next `Stop`, that is until the end of the turn. `AskUserQuestion` is the exception: its
+  `PostToolUse` puts the session back to "working" at once.
+- **Codex, waiting for input:** Codex exposes `PermissionRequest`, but the app does not register it, to stay out
+  of the approval flow. Codex sessions therefore never show "waiting for input": they go from "working" to "done".
+- Live status depends on the hooks: without them (and, for Codex, without approval through `/hooks`) the cards
+  say "Stato live non attivo: installa hook".
+- Codex quotas only update when a Codex session writes a new `token_count`.
+
+## Credits and license
+
+Inspired by [AgentBar](https://github.com/scari/AgentBar) (macOS). Agent icons from
+[lobe-icons](https://github.com/lobehub/lobe-icons); price data from [LiteLLM](https://github.com/BerriAI/litellm).
+Details in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+MIT — see [LICENSE](LICENSE).

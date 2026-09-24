@@ -1,7 +1,7 @@
 # Grafica Premium — Design
 
 Data: 2026-09-24
-Stato: approvato in brainstorming, in attesa di revisione della spec scritta
+Stato: implementata
 Estende: [2026-09-13-aiusagemonitor-design.md](2026-09-13-aiusagemonitor-design.md) (sezioni 8.1, 8.2, 8.3)
 Mockup: canvas "AIUsageMonitor · direzioni visive" (claude.ai, privato), direzione **C · Premium**.
 
@@ -120,7 +120,8 @@ Regole:
 
 ### 6.2 Pannello
 
-- Larghezza 320, raggio 24 a sinistra, sfondo `NotchBackground`, bordo `NotchBorder`, ombra morbida.
+- Larghezza 320, raggio 24 a sinistra, sfondo `NotchBackground`, bordo `NotchBorder`, nessuna ombra: la finestra è larga
+  quanto il pannello e un'ombra verrebbe tagliata.
 - Intestazione: "AI Usage" (15, semibold) e a destra una pillola di sintesi, scelta così:
   1. almeno una sessione attende input → ambra, "1 attende input" / "N attendono input";
   2. altrimenti almeno una in errore → rossa, "1 in errore" / "N in errore";
