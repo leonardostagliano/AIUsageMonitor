@@ -151,8 +151,8 @@
               <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
               <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0"/>
             </Trigger>
-            <!-- Interruttore senza etichetta (i "Monitora" delle Impostazioni): niente spazio vuoto a sinistra, e il
-                 contorno di focus resta centrato sull'interruttore. -->
+            <!-- Interruttore senza etichetta: niente spazio vuoto a sinistra, e il contorno di focus resta centrato
+                 sull'interruttore. -->
             <Trigger Property="HasContent" Value="False"><Setter TargetName="Label" Property="Visibility" Value="Collapsed"/></Trigger>
             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Knob" Property="Opacity" Value="0.92"/></Trigger>
             <Trigger Property="IsEnabled" Value="False">
@@ -510,7 +510,8 @@
                scorrono le schede e dall'ultima tornano alla prima (Cycle); dal contenuto non escono verso le schede
                (Contained). -->
           <DockPanel KeyboardNavigation.TabNavigation="Local">
-            <Border DockPanel.Dock="Top" Background="{StaticResource Tile}" CornerRadius="14" Padding="4" Margin="0,0,0,16">
+            <!-- Capsula: schede alte 32 piu' 4 + 4 di padding, raggio 20. -->
+            <Border DockPanel.Dock="Top" Background="{StaticResource Tile}" CornerRadius="20" Padding="4" Margin="0,0,0,16">
               <c:SegmentPanel IsItemsHost="True" KeyboardNavigation.TabIndex="1"
                               KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle"/>
             </Border>
@@ -528,11 +529,12 @@
     <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
     <Setter Property="FontSize" Value="13"/>
     <Setter Property="Height" Value="32"/>
-    <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TabItem">
-          <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="10,0">
+          <!-- Mano solo sull'intestazione: un Cursor sul TabItem varrebbe anche per il contenuto della scheda, che e'
+               suo figlio logico e riceve QueryCursor passando da lui. Raggio 16: capsula alta 32. -->
+          <Border x:Name="Bd" Background="Transparent" CornerRadius="16" Padding="10,0" Cursor="Hand">
             <Grid>
               <!-- Copia invisibile dell'intestazione in semibold (intestazioni di testo, come nelle Impostazioni): la
                    scheda e' gia' larga quanto la versione in grassetto, quindi quando diventa attiva non si allarga e

@@ -62,13 +62,13 @@
               <Border CornerRadius="18" Background="{StaticResource ClaudeGlow}" Padding="18">
                 <StackPanel>
                   <DockPanel Margin="0,0,0,18">
-                    <CheckBox DockPanel.Dock="Right" IsChecked="{Binding ClaudeEnabled}" Margin="0" AutomationProperties.Name="Monitora Claude Code"/>
+                    <CheckBox DockPanel.Dock="Right" Content="Monitora" IsChecked="{Binding ClaudeEnabled}" Margin="0" AutomationProperties.Name="Monitora Claude Code"/>
                     <Grid Width="40" Height="40" Margin="0,0,12,0">
                       <Ellipse Fill="{StaticResource BrandClaude}"/>
                       <Path Data="{StaticResource ClaudeIcon}" Fill="White" Width="20" Height="20" Stretch="Uniform"/>
                     </Grid>
                     <StackPanel VerticalAlignment="Center">
-                      <TextBlock Text="Claude Code" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="Claude Code" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                       <TextBlock Text="{Binding ClaudePlan, Mode=OneWay}" Style="{StaticResource Caption}" Visibility="{Binding ClaudePlanVisibility, Mode=OneWay}"/>
                     </StackPanel>
                   </DockPanel>
@@ -82,13 +82,13 @@
               <Border CornerRadius="18" Background="{StaticResource CodexGlow}" Padding="18">
                 <StackPanel>
                   <DockPanel Margin="0,0,0,18">
-                    <CheckBox DockPanel.Dock="Right" IsChecked="{Binding CodexEnabled}" Margin="0" AutomationProperties.Name="Monitora Codex"/>
+                    <CheckBox DockPanel.Dock="Right" Content="Monitora" IsChecked="{Binding CodexEnabled}" Margin="0" AutomationProperties.Name="Monitora Codex"/>
                     <Grid Width="40" Height="40" Margin="0,0,12,0">
                       <Ellipse Fill="{StaticResource BrandCodex}"/>
                       <Path Data="{StaticResource CodexIcon}" Fill="White" Width="20" Height="20" Stretch="Uniform"/>
                     </Grid>
                     <StackPanel VerticalAlignment="Center">
-                      <TextBlock Text="Codex" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="Codex" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                       <TextBlock Text="{Binding CodexPlan, Mode=OneWay}" Style="{StaticResource Caption}" Visibility="{Binding CodexPlanVisibility, Mode=OneWay}"/>
                     </StackPanel>
                   </DockPanel>
@@ -128,7 +128,8 @@
               <c:NumberStepper Grid.Row="2" Grid.Column="1" Width="240" HorizontalAlignment="Left" Margin="0,16,0,0"
                                Value="{Binding CollapseDelayMs}" Minimum="0" Maximum="5000" Step="50" Unit="ms"
                                AutomationProperties.Name="Ritardo di chiusura in millisecondi"/>
-              <CheckBox Grid.Row="3" Grid.ColumnSpan="2" Content="Modalità compatta (icone più piccole)" IsChecked="{Binding Compact}" Margin="0,18,0,0"/>
+              <CheckBox Grid.Row="3" Grid.ColumnSpan="2" Content="Modalità compatta" IsChecked="{Binding Compact}" Margin="0,18,0,0"
+                        ToolTip="Notch più piccolo: linguetta e icone, numero principale, avatar delle sessioni e spaziature delle card."/>
             </Grid>
           </Border>
         </ScrollViewer>

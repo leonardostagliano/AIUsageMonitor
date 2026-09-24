@@ -26,8 +26,12 @@
         </Setter.Value>
       </Setter>
     </Style>
-    <!-- Campo del valore senza cornice: il numero grande e' il campo stesso (si puo' scrivere, Invio o uscita confermano). -->
+    <!-- Campo del valore senza cornice: il numero grande e' il campo stesso (si puo' scrivere, Invio o uscita confermano).
+         Senza cornice non c'e' un bordo che diventi Focus: con Tab compare il contorno di focus comune (FocusVisual),
+         come sugli altri controlli delle Impostazioni. Cifre tabulari: il numero non cambia larghezza mentre scorre. -->
     <Style x:Key="BareInput" TargetType="TextBox">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
+      <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
