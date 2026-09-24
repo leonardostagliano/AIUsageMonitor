@@ -14,7 +14,8 @@
   <SolidColorBrush x:Key="NotchBorder" Color="#12FFFFFF"/>
   <SolidColorBrush x:Key="Hairline" Color="#0FFFFFFF"/>
   <SolidColorBrush x:Key="BarTrack" Color="#14FFFFFF"/>
-  <SolidColorBrush x:Key="RingTrack" Color="#1AFFFFFF"/>
+  <!-- Anello della linguetta: Idle al 30 %, sia come traccia sia come anello spento senza dati (spec 6.1). -->
+  <SolidColorBrush x:Key="RingTrack" Color="#4D71717A"/>
 
   <!-- Testo e accenti -->
   <SolidColorBrush x:Key="TextPrimary" Color="#FFF5F5F7"/>
@@ -49,7 +50,8 @@
   <SolidColorBrush x:Key="Grey" Color="#FF71717A"/>
   <SolidColorBrush x:Key="Badge" Color="#14FFFFFF"/>
 
-  <!-- Gradienti delle barre per tono, da sinistra a destra. -->
+  <!-- Gradienti delle barre per tono, da sinistra a destra. Ogni stop supera 3:1 su Card (WCAG 1.4.11, spec 10):
+       ThemePaletteTests li fissa e li misura. Per questo il "non aggiornato" parte da #68686F e non da #52525B (2,2:1). -->
   <LinearGradientBrush x:Key="ToneNormalBrush" StartPoint="0,0.5" EndPoint="1,0.5">
     <GradientStop Offset="0" Color="#FF22C55E"/>
     <GradientStop Offset="1" Color="#FF86EFAC"/>
@@ -63,7 +65,7 @@
     <GradientStop Offset="1" Color="#FFFCA5A5"/>
   </LinearGradientBrush>
   <LinearGradientBrush x:Key="ToneStaleBrush" StartPoint="0,0.5" EndPoint="1,0.5">
-    <GradientStop Offset="0" Color="#FF52525B"/>
+    <GradientStop Offset="0" Color="#FF68686F"/>
     <GradientStop Offset="1" Color="#FF71717A"/>
   </LinearGradientBrush>
 

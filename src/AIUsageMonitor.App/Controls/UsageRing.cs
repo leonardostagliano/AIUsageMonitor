@@ -5,8 +5,9 @@ using AIUsageMonitor.Core.Presentation;
 namespace AIUsageMonitor.App.Controls;
 
 /// <summary>
-/// Thin ring around an agent's icon in the notch tab: a faint full track and, from twelve o'clock clockwise, an arc as
-/// long as <see cref="Value"/> percent in the solid colour of its <see cref="Tone"/>. NaN draws the track only.
+/// Thin ring around an agent's icon in the notch tab: a full track (<c>RingTrack</c>, Idle at 30 %) and, from twelve
+/// o'clock clockwise, an arc as long as <see cref="Value"/> percent in the solid colour of its <see cref="Tone"/>. NaN
+/// draws the track only, which is the "off" ring of spec 6.1.
 /// </summary>
 public sealed class UsageRing : FrameworkElement
 {

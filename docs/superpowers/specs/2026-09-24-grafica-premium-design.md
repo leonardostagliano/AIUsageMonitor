@@ -66,7 +66,10 @@ Gradienti delle barre per tono (da sinistra a destra):
 | Normale | `#22C55E` → `#86EFAC` |
 | Attenzione | `#F59E0B` → `#FCD34D` |
 | Critico | `#EF4444` → `#FCA5A5` |
-| Non aggiornato | `#52525B` → `#71717A` |
+| Non aggiornato | `#68686F` → `#71717A` |
+
+Ogni stop dei gradienti supera 3:1 su `Card` (sezione 10). Per questo il tono "non aggiornato" parte da `#68686F`
+(3,1:1) e non da `#52525B` (2,2:1).
 
 Il tono segue le regole di oggi: `Severity` della finestra quando lo snapshot è `Ok`, "non aggiornato" altrimenti.
 
