@@ -176,9 +176,11 @@ public partial class NotchWindow : Window, INotchHost
 
     /// <summary>
     /// Apertura in dissolvenza incrociata: la linguetta sparisce nei primi 90 ms mentre il pannello scivola dentro in
-    /// 260 ms con una molla leggera (BackEase 0,3) e diventa opaco solo dopo (fade ritardato di 30 ms), cosi' non
-    /// esiste un fotogramma con le due superfici opache una accanto all'altra. La linguetta non viene piu' nascosta con
-    /// <c>Visibility</c>: resta nel layout a opacita' 0 e perde l'hit test, quindi non puo' scatenare
+    /// 260 ms e diventa opaco solo dopo (fade ritardato di 30 ms), cosi' non esiste un fotogramma con le due superfici
+    /// opache una accanto all'altra. Lo scorrimento frena forte (QuinticEase) ma non supera la posizione finale: una
+    /// molla (BackEase 0,3 superava di circa 18 DIP) spingerebbe il bordo sinistro del pannello oltre quello della
+    /// finestra, larga 320 senza margine a sinistra, che ne taglierebbe gli angoli arrotondati. La linguetta non viene
+    /// piu' nascosta con <c>Visibility</c>: resta nel layout a opacita' 0 e perde l'hit test, quindi non puo' scatenare
     /// <c>MouseEnter</c> mentre e' invisibile ne' rubare il click al pannello (che nella Grid le sta sotto).
     /// </summary>
     private void Expand()
@@ -191,7 +193,7 @@ public partial class NotchWindow : Window, INotchHost
         if (ViewModel is { } vm) vm.IsPanelOpen = true;
         RunStoryboard(
             Fade(Tab, 0, TimeSpan.Zero),
-            Slide(0, OpenDuration, new BackEase { Amplitude = 0.3, EasingMode = EasingMode.EaseOut }),
+            Slide(0, OpenDuration, new QuinticEase { EasingMode = EasingMode.EaseOut }),
             Fade(Panel, 1, TimeSpan.FromMilliseconds(30)),
             completed: null);
     }

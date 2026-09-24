@@ -94,7 +94,7 @@ sull'interfaccia del notch oltre a quella del pannello: gli aloni sono gradienti
 | Numeri che scorrono | numero principale e costo della card | 400 ms dal valore precedente al nuovo, solo se cambia la cifra mostrata. |
 | Riflesso sulle barre | barre del notch | una banda chiara che attraversa la parte piena ogni 2,8 s. |
 | Pulsazione | avatar e pallini delle sessioni al lavoro, stato nella linguetta | anello che si allarga e sfuma, 2 s. |
-| Apertura del pannello | notch | scorrimento con molla leggera (`BackEase`, ampiezza 0,3) e dissolvenza, 260 ms; chiusura 160 ms ease-in. |
+| Apertura del pannello | notch | scorrimento con frenata decisa senza rimbalzo (`QuinticEase` ease-out) e dissolvenza, 260 ms; chiusura 160 ms ease-in. Niente molla: la finestra è larga 320 senza margine a sinistra, e una `BackEase` 0,3 porterebbe il bordo del pannello circa 18 px oltre, tagliandone gli angoli. |
 | Rotazione ⟳ | intestazione card | come oggi, durante il refresh. |
 | Cambio scheda | Impostazioni | dissolvenza del contenuto, 150 ms. |
 

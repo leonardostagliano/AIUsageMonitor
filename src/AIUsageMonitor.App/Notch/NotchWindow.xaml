@@ -16,8 +16,9 @@
   <Grid TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontSize="13" TextElement.FontFamily="{StaticResource TextFont}">
     <!-- Pannello espanso. Hidden (non Collapsed) da chiuso, cosi' la finestra conserva l'altezza del pannello e la
          linguetta non salta sotto il mouse. E' largo 24 px piu' della finestra e sporge oltre il bordo destro (Margin
-         negativo, Padding destro compensato): la molla dell'apertura puo' superare di qualche pixel la posizione finale
-         senza scoprire il bordo dello schermo, e la parte che sporge resta fuori dalla finestra, quindi invisibile. -->
+         negativo, Padding destro compensato): la parte che sporge resta fuori dalla finestra, quindi invisibile, e lo
+         scorrimento non scopre mai il bordo dello schermo. A sinistra invece non c'e' margine (la finestra resta larga
+         320): l'apertura non deve superare la posizione finale, o la finestra taglierebbe gli angoli arrotondati. -->
     <Border x:Name="Panel" HorizontalAlignment="Right" Width="344" Margin="0,0,-24,0" Visibility="Hidden" Opacity="0"
             CornerRadius="24,0,0,24" Background="{StaticResource NotchBackground}"
             BorderBrush="{StaticResource NotchBorder}" BorderThickness="1,1,0,1" Padding="14,14,38,14"
