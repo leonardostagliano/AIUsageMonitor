@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using AIUsageMonitor.App.Common;
+using AIUsageMonitor.App.Controls;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Notch;
 using Microsoft.Win32;
@@ -23,7 +24,8 @@ public partial class NotchWindow : Window, INotchHost
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
-    private static readonly Duration SlideDuration = new(TimeSpan.FromMilliseconds(150));
+    private static readonly Duration OpenDuration = new(TimeSpan.FromMilliseconds(260));
+    private static readonly Duration CloseDuration = new(TimeSpan.FromMilliseconds(160));
     private static readonly Duration FadeDuration = new(TimeSpan.FromMilliseconds(90));
 
     private readonly AppServices _services;
@@ -75,6 +77,8 @@ public partial class NotchWindow : Window, INotchHost
     }
 
     public bool IsNotchVisible => IsVisible;
+
+    private NotchViewModel? ViewModel => DataContext as NotchViewModel;
 
     protected override void OnSourceInitialized(EventArgs e)
     {
@@ -151,6 +155,7 @@ public partial class NotchWindow : Window, INotchHost
             _collapseTimer.Stop();
             _pinned = false;
             _expanded = false;
+            if (ViewModel is { } hidden) hidden.IsPanelOpen = false;
             PinGlyph.Visibility = Visibility.Collapsed;
             PanelSlide.BeginAnimation(TranslateTransform.XProperty, null);
             Panel.BeginAnimation(OpacityProperty, null);
@@ -171,10 +176,12 @@ public partial class NotchWindow : Window, INotchHost
 
     /// <summary>
     /// Apertura in dissolvenza incrociata: la linguetta sparisce nei primi 90 ms mentre il pannello scivola dentro in
-    /// 150 ms e diventa opaco solo dopo (fade ritardato di 30 ms), cosi' non esiste un fotogramma con le due superfici
-    /// opache una accanto all'altra. La linguetta non viene piu' nascosta con <c>Visibility</c>: resta nel layout a
-    /// opacita' 0 e perde l'hit test, quindi non puo' scatenare <c>MouseEnter</c> mentre e' invisibile ne' rubare il
-    /// click al pannello (che nella Grid le sta sotto).
+    /// 260 ms e diventa opaco solo dopo (fade ritardato di 30 ms), cosi' non esiste un fotogramma con le due superfici
+    /// opache una accanto all'altra. Lo scorrimento frena forte (QuinticEase) ma non supera la posizione finale: una
+    /// molla (BackEase 0,3 superava di circa 18 DIP) spingerebbe il bordo sinistro del pannello oltre quello della
+    /// finestra, larga 320 senza margine a sinistra, che ne taglierebbe gli angoli arrotondati. La linguetta non viene
+    /// piu' nascosta con <c>Visibility</c>: resta nel layout a opacita' 0 e perde l'hit test, quindi non puo' scatenare
+    /// <c>MouseEnter</c> mentre e' invisibile ne' rubare il click al pannello (che nella Grid le sta sotto).
     /// </summary>
     private void Expand()
     {
@@ -183,9 +190,10 @@ public partial class NotchWindow : Window, INotchHost
         _collapseTimer.Stop();
         Panel.Visibility = Visibility.Visible;
         Tab.IsHitTestVisible = false;
+        if (ViewModel is { } vm) vm.IsPanelOpen = true;
         RunStoryboard(
             Fade(Tab, 0, TimeSpan.Zero),
-            Slide(0),
+            Slide(0, OpenDuration, new QuinticEase { EasingMode = EasingMode.EaseOut }),
             Fade(Panel, 1, TimeSpan.FromMilliseconds(30)),
             completed: null);
     }
@@ -202,13 +210,14 @@ public partial class NotchWindow : Window, INotchHost
         _expanded = false;
         RunStoryboard(
             Fade(Panel, 0, TimeSpan.Zero),
-            Slide(Panel.ActualWidth > 0 ? Panel.ActualWidth : Width),
+            Slide(Panel.ActualWidth > 0 ? Panel.ActualWidth : Width, CloseDuration, new CubicEase { EasingMode = EasingMode.EaseIn }),
             Fade(Tab, 1, TimeSpan.FromMilliseconds(60)),
             completed: () =>
             {
                 if (_expanded) return;
                 Panel.Visibility = Visibility.Hidden;
                 Tab.IsHitTestVisible = true;
+                if (ViewModel is { } vm) vm.IsPanelOpen = false;
             });
     }
 
@@ -238,9 +247,9 @@ public partial class NotchWindow : Window, INotchHost
     /// <c>(RenderTransform).(TranslateTransform.X)</c> arriva alla trasformata come farebbe lo XAML. Il clock finisce
     /// comunque sulla <c>X</c> della trasformata, percio' <c>PanelSlide.BeginAnimation(X, null)</c> lo rimuove.
     /// </summary>
-    private DoubleAnimation Slide(double to)
+    private DoubleAnimation Slide(double to, Duration duration, IEasingFunction easing)
     {
-        var animation = new DoubleAnimation(to, SlideDuration) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        var animation = new DoubleAnimation(to, duration) { EasingFunction = easing };
         Storyboard.SetTarget(animation, Panel);
         Storyboard.SetTargetProperty(animation, new PropertyPath("(0).(1)", UIElement.RenderTransformProperty, TranslateTransform.XProperty));
         return animation;
@@ -260,6 +269,14 @@ public partial class NotchWindow : Window, INotchHost
         storyboard.Children.Add(first);
         storyboard.Children.Add(second);
         storyboard.Children.Add(third);
+        // Animazioni di Windows spente: stessi passaggi, durata zero. Il completamento parte comunque, quindi lo stato
+        // finale (Hidden, hit test, IsPanelOpen) resta quello di sempre.
+        if (!MotionSettings.IsEnabled)
+            foreach (var child in storyboard.Children)
+            {
+                child.BeginTime = TimeSpan.Zero;
+                child.Duration = new Duration(TimeSpan.Zero);
+            }
         if (completed is not null) storyboard.Completed += (_, _) => completed();
         storyboard.Begin(this);
     }

@@ -1,0 +1,74 @@
+<UserControl x:Class="AIUsageMonitor.App.Controls.NumberStepper"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="Root" Focusable="False">
+  <UserControl.Resources>
+    <!-- Pulsanti rotondi da 36 px: tenere premuto ripete (RepeatButton), come le frecce di un campo numerico. -->
+    <Style x:Key="StepButton" TargetType="RepeatButton">
+      <Setter Property="Width" Value="36"/>
+      <Setter Property="Height" Value="36"/>
+      <Setter Property="Delay" Value="400"/>
+      <Setter Property="Interval" Value="80"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RepeatButton">
+            <Border x:Name="Bd" CornerRadius="18" Background="{StaticResource Surface}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfacePressed}"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Bd" Property="Opacity" Value="0.4"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Campo del valore senza cornice: il numero grande e' il campo stesso (si puo' scrivere, Invio o uscita confermano).
+         Senza cornice non c'e' un bordo che diventi Focus: con Tab compare il contorno di focus comune (FocusVisual),
+         come sugli altri controlli delle Impostazioni. Cifre tabulari: il numero non cambia larghezza mentre scorre. -->
+    <Style x:Key="BareInput" TargetType="TextBox">
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
+      <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="CaretBrush" Value="{StaticResource TextPrimary}"/>
+      <Setter Property="FontFamily" Value="{StaticResource DisplayFont}"/>
+      <Setter Property="FontSize" Value="28"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="MinWidth" Value="44"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </UserControl.Resources>
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto"/>
+      <ColumnDefinition Width="*"/>
+      <ColumnDefinition Width="Auto"/>
+    </Grid.ColumnDefinitions>
+    <RepeatButton x:Name="Minus" Style="{StaticResource StepButton}" Click="Minus_Click" AutomationProperties.Name="Diminuisci">
+      <Path Data="M0,0 L10,0" Stroke="{StaticResource TextPrimary}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+    </RepeatButton>
+    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+      <TextBox x:Name="Input" Style="{StaticResource BareInput}"
+               AutomationProperties.Name="{Binding (AutomationProperties.Name), ElementName=Root}"
+               LostKeyboardFocus="Input_LostKeyboardFocus" PreviewKeyDown="Input_PreviewKeyDown"/>
+      <!-- Margine in basso di 4: la linea di base dell'unita' (13) cade su quella del numero (28). -->
+      <TextBlock Text="{Binding Unit, ElementName=Root}" Foreground="{StaticResource TextMuted}" FontSize="13"
+                 VerticalAlignment="Bottom" Margin="4,0,0,4"/>
+    </StackPanel>
+    <RepeatButton x:Name="Plus" Grid.Column="2" Style="{StaticResource StepButton}" Click="Plus_Click" AutomationProperties.Name="Aumenta">
+      <Path Data="M0,5 L10,5 M5,0 L5,10" Stroke="{StaticResource TextPrimary}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+    </RepeatButton>
+  </Grid>
+</UserControl>

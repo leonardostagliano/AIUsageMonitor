@@ -6,6 +6,7 @@ using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Presentation;
 using AIUsageMonitor.Core.Pricing;
 
 namespace AIUsageMonitor.App.Notch;
@@ -26,7 +27,7 @@ public sealed class SessionRowViewModel : ObservableObject
     private readonly RelayCommand _focusTerminal;
     private SessionState _session;
     private PricingSnapshot? _pricing;
-    private string _elapsedText = "";
+    private string _subtitle = "";
 
     public SessionRowViewModel(SessionState session, AppServices services, DateTimeOffset now, PricingSnapshot? pricing)
     {
@@ -42,7 +43,15 @@ public sealed class SessionRowViewModel : ObservableObject
     public string SessionId => _session.SessionId;
     public string Name => _session.DisplayName;
     public string PhaseLabel => _session.PhaseLabel;
-    public Brush DotBrush => PhaseVisuals.Brush(_session.Phase);
+
+    /// <summary>Lettera dell'avatar (spec 6.3): prima lettera o cifra del nome, "•" altrimenti.</summary>
+    public string Initial => NotchPresentation.Initial(_session.DisplayName);
+
+    private PhaseTone Tone => NotchPresentation.ToneOf(_session.Phase);
+    public Brush ToneBrush => PhaseVisuals.ToneBrush(Tone);
+    public Brush ToneFill => PhaseVisuals.ToneFill(Tone);
+    public Brush ToneTextBrush => PhaseVisuals.ToneText(Tone);
+
     public bool IsPulsing => _session.Phase == SessionPhase.Working;
 
     public string Tooltip
@@ -55,7 +64,8 @@ public sealed class SessionRowViewModel : ObservableObject
         }
     }
 
-    public string ElapsedText { get => _elapsedText; private set => Set(ref _elapsedText, value); }
+    /// <summary>"al lavoro · 2 agenti · 1m": aggiornato a ogni tick come il tempo trascorso.</summary>
+    public string Subtitle { get => _subtitle; private set => Set(ref _subtitle, value); }
 
     /// <summary>
     /// Porta in primo piano il terminale della sessione (click sul nome). Vero solo quando l'evento della sessione ha
@@ -71,16 +81,12 @@ public sealed class SessionRowViewModel : ObservableObject
     /// <summary>Cost of the tokens on this row — the session itself, not its agents, like the token counts; null while costs are hidden.</summary>
     private CostResult? OwnCost => _pricing?.Cost(_session.Ledger);
 
-    /// <summary>Processed input and output of the conversation, including input served from cache, then the cost.</summary>
-    public string TokensText
-    {
-        get
-        {
-            if (_session.Tokens is not { } tokens) return "Token in attesa";
-            var text = TokenFormatter.InputOutput(tokens);
-            return OwnCost is { } cost && CostFormatter.Short(cost) is { } costText ? $"{text} · {costText}" : text;
-        }
-    }
+    /// <summary>Costo dei soli token della riga, testo breve di oggi; null con i costi nascosti.</summary>
+    public string? CostText => OwnCost is { } cost ? CostFormatter.Short(cost) : null;
+    public Visibility CostVisibility => CostText is null ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>Processed input and output of the conversation, including input served from cache.</summary>
+    public string TokensShort => _session.Tokens is { } tokens ? TokenFormatter.InputOutput(tokens) : "Token in attesa";
 
     /// <summary>Breakdown for the tooltip of the token column (plus the cost block); null (no tooltip) when there is no total yet.</summary>
     public string? TokensTooltip
@@ -131,8 +137,10 @@ public sealed class SessionRowViewModel : ObservableObject
     {
         _session = session;
         _pricing = pricing;
-        Raise(nameof(Name)); Raise(nameof(PhaseLabel)); Raise(nameof(DotBrush)); Raise(nameof(IsPulsing)); Raise(nameof(Tooltip));
-        Raise(nameof(TokensText)); Raise(nameof(TokensTooltip));
+        Raise(nameof(Name)); Raise(nameof(PhaseLabel));
+        Raise(nameof(Initial)); Raise(nameof(ToneBrush)); Raise(nameof(ToneFill)); Raise(nameof(ToneTextBrush));
+        Raise(nameof(IsPulsing)); Raise(nameof(Tooltip));
+        Raise(nameof(CostText)); Raise(nameof(CostVisibility)); Raise(nameof(TokensShort)); Raise(nameof(TokensTooltip));
         // L'host arriva col primo SessionStart/UserPromptSubmit: una riga nata senza puo' diventare cliccabile dopo.
         Raise(nameof(CanFocus)); Raise(nameof(NameCursor));
         _focusTerminal.RaiseCanExecuteChanged();
@@ -143,7 +151,7 @@ public sealed class SessionRowViewModel : ObservableObject
 
     public void Tick(DateTimeOffset now)
     {
-        ElapsedText = CountdownFormatter.Since(_session.LastEventAt, now);
+        Subtitle = NotchPresentation.SessionSubtitle(_session, now);
         foreach (var subagent in Subagents) subagent.Tick(now);
     }
 

@@ -18,8 +18,12 @@ public sealed record TokenUsage(long Input, long Output, long CacheRead, long Ca
         new(a.Input + b.Input, a.Output + b.Output, a.CacheRead + b.CacheRead, a.CacheWrite + b.CacheWrite);
 }
 
-/// <summary>Terminal host of a session, as read by the hook from its own environment and parent pid.</summary>
-public sealed record HostInfo(int? Ppid, string? HerdrPane, string? WtSession, string? TermProgram, int? VscodePid);
+/// <summary>
+/// Terminal host of a session, as read by the hook from its own environment and parent pid. <see cref="WmuxPty"/>
+/// is the <c>WMUX_PTY_ID</c> of the wmux pane: wmux runs its shells under a daemon without a window, so it is the
+/// only handle that still leads to the pane once the hook's short-lived parent has exited.
+/// </summary>
+public sealed record HostInfo(int? Ppid, string? HerdrPane, string? WtSession, string? TermProgram, int? VscodePid, string? WmuxPty = null);
 
 public enum SubagentPhase { Running, Done }
 

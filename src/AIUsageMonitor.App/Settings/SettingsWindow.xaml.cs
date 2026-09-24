@@ -1,8 +1,10 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Threading;
+using System.Windows.Media.Animation;
 using AIUsageMonitor.App.Common;
+using AIUsageMonitor.App.Controls;
 using AIUsageMonitor.App.Startup;
 using WinForms = System.Windows.Forms;
 
@@ -10,6 +12,9 @@ namespace AIUsageMonitor.App.Settings;
 
 public partial class SettingsWindow : Window
 {
+    /// <summary>Indice della scheda Aggiornamenti nel TabControl della XAML.</summary>
+    public const int UpdatesTabIndex = 5;
+
     private static SettingsWindow? _instance;
 
     private SettingsWindow(AppServices services)
@@ -27,22 +32,21 @@ public partial class SettingsWindow : Window
         };
     }
 
-    /// <param name="showUpdates">Scorre al gruppo AGGIORNAMENTI (argomento --updates, notifica di una release passata).</param>
+    /// <param name="showUpdates">Apre la scheda Aggiornamenti (argomento --updates, notifica di una release passata).</param>
     public static void ShowSingleton(AppServices services, bool showUpdates = false)
     {
         if (_instance is null)
         {
             var window = new SettingsWindow(services);
             _instance = window;
-            // Dopo Loaded la ScrollViewer ha misure e tetto all'altezza definitivi: prima non saprebbe dove scorrere.
-            if (showUpdates) window.Loaded += (_, _) => window.Dispatcher.BeginInvoke(() => window.ScrollToUpdates(), DispatcherPriority.Loaded);
+            if (showUpdates) ((SettingsViewModel)window.DataContext).SelectedTabIndex = UpdatesTabIndex;
             window.Show();
         }
         else
         {
             if (_instance.WindowState == WindowState.Minimized) _instance.WindowState = WindowState.Normal;
             _instance.Activate();
-            if (showUpdates) _instance.ScrollToUpdates();
+            if (showUpdates) ((SettingsViewModel)_instance.DataContext).SelectedTabIndex = UpdatesTabIndex;
         }
     }
 
@@ -60,11 +64,13 @@ public partial class SettingsWindow : Window
         window.Topmost = false;
     }
 
-    /// <summary>Porta l'intestazione del gruppo AGGIORNAMENTI in cima all'area visibile (o il piu' in alto possibile).</summary>
-    private void ScrollToUpdates()
+    /// <summary>Il contenuto della scheda nuova entra in dissolvenza (150 ms); niente con le animazioni di Windows spente.</summary>
+    private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        var height = Math.Max(1, Scroll.ViewportHeight);
-        UpdatesGroup.BringIntoView(new Rect(0, 0, Math.Max(1, UpdatesGroup.ActualWidth), height));
+        // SelectionChanged risale anche dalle ComboBox dentro le schede: conta solo quello del TabControl.
+        if (!ReferenceEquals(e.OriginalSource, Tabs) || !MotionSettings.IsEnabled) return;
+        if (Tabs.Template?.FindName("PART_SelectedContentHost", Tabs) is UIElement host)
+            host.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, new Duration(TimeSpan.FromMilliseconds(150))));
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -82,8 +88,8 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Limita l'altezza auto-dimensionata all'area di lavoro del monitor su cui la finestra e' apparsa, cosi' la
-    /// <c>ScrollViewer</c> della XAML mostra la barra invece di far tagliare il contenuto. Va calcolato qui e non con
+    /// Limita l'altezza della finestra all'area di lavoro del monitor su cui e' apparsa, cosi' le
+    /// <c>ScrollViewer</c> delle schede mostrano la barra invece di far tagliare il contenuto. Va calcolato qui e non con
     /// <c>SystemParameters.WorkArea</c> (sempre il monitor primario) perche' su un secondo schermo piu' basso o con una
     /// scala DPI diversa il tetto sarebbe sbagliato. L'area di lavoro e' in pixel fisici: si converte in DIP con la
     /// scala del monitor corrente, disponibile dopo che la finestra ha un HWND.

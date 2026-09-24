@@ -39,7 +39,7 @@ public static class HookEventParser
         if (!root.TryGetProperty("host", out var host) || host.ValueKind != JsonValueKind.Object) return null;
         return new HostInfo(
             GetInt32(host, "ppid"), GetString(host, "herdr_pane"), GetString(host, "wt_session"),
-            GetString(host, "term_program"), GetInt32(host, "vscode_pid"));
+            GetString(host, "term_program"), GetInt32(host, "vscode_pid"), GetString(host, "wmux_pty"));
     }
 
     private static string? GetString(JsonElement obj, string name) =>

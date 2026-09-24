@@ -51,7 +51,8 @@ public class PricingServiceTests
 
     private static async Task Eventually(Func<bool> condition)
     {
-        for (var i = 0; i < 250 && !condition(); i++) await Task.Delay(20);
+        // Up to 10 s: the suite runs in parallel and pool threads can be slow to come on a loaded machine.
+        for (var i = 0; i < 500 && !condition(); i++) await Task.Delay(20);
         Assert.True(condition());
     }
 

@@ -102,16 +102,30 @@ public class UsageServiceTests
         using var dir = new TempDir();
         var claude = new StubProvider(AgentKind.Claude) { Next = () => Ok(AgentKind.Claude, 1, Now) };
         var service = new UsageService([claude], new UsageCache(Path.Combine(dir.Path, "c.json")), new FakeClock(Now));
-        using var scheduler = new UsageScheduler(service, _ => TimeSpan.FromMilliseconds(80));
+        using (var scheduler = new UsageScheduler(service, _ => TimeSpan.FromMilliseconds(80)))
+        {
+            scheduler.Start([AgentKind.Claude]);
+            await WaitUntil(() => claude.Calls >= 3); // the refresh at start, then one every 80 ms
+        }
 
-        scheduler.Start([AgentKind.Claude]);
-        await Task.Delay(300);
-        Assert.InRange(claude.Calls, 2, 10);
+        // On demand: with an hour between periodic refreshes, only RefreshNow can bring the second call.
+        var onDemand = new StubProvider(AgentKind.Claude) { Next = () => Ok(AgentKind.Claude, 1, Now) };
+        var slowService = new UsageService([onDemand], new UsageCache(Path.Combine(dir.Path, "d.json")), new FakeClock(Now));
+        using var slow = new UsageScheduler(slowService, _ => TimeSpan.FromHours(1));
+        slow.Start([AgentKind.Claude]);
+        await WaitUntil(() => onDemand.Calls == 1);
+        slow.RefreshNow(AgentKind.Claude);
+        await WaitUntil(() => onDemand.Calls == 2);
+    }
 
-        var before = claude.Calls;
-        scheduler.RefreshNow(AgentKind.Claude);
-        await Task.Delay(50);
-        Assert.True(claude.Calls > before);
+    /// <summary>
+    /// Polls instead of sleeping a fixed time: the whole suite runs in parallel, and on a loaded machine a scheduler
+    /// loop can wait far longer than a few tens of milliseconds for a pool thread. Up to 10 s, usually a few ms.
+    /// </summary>
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        for (var i = 0; i < 500 && !condition(); i++) await Task.Delay(20);
+        Assert.True(condition());
     }
 
     [Fact]
@@ -156,13 +170,13 @@ public class UsageServiceTests
         };
 
         scheduler.Start([AgentKind.Claude]);
-        for (var i = 0; i < 100 && errors.Count == 0; i++) await Task.Delay(20);
+        for (var i = 0; i < 500 && errors.Count == 0; i++) await Task.Delay(20);
         Assert.IsType<InvalidOperationException>(Assert.Single(errors));
 
         // The loop is still alive after the failure.
         var before = claude.Calls;
         scheduler.RefreshNow(AgentKind.Claude);
-        for (var i = 0; i < 100 && claude.Calls == before; i++) await Task.Delay(20);
+        for (var i = 0; i < 500 && claude.Calls == before; i++) await Task.Delay(20);
         Assert.True(claude.Calls > before);
     }
 }

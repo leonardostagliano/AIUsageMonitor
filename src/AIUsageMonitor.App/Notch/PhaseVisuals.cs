@@ -1,14 +1,17 @@
+using System.Windows;
 using System.Windows.Media;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Presentation;
 
 namespace AIUsageMonitor.App.Notch;
 
 public static class PhaseVisuals
 {
-    public static readonly Color Green = Color.FromRgb(0x3F, 0xB9, 0x50);
-    public static readonly Color Amber = Color.FromRgb(0xD2, 0x99, 0x22);
-    public static readonly Color Red = Color.FromRgb(0xF8, 0x51, 0x49);
-    public static readonly Color Grey = Color.FromRgb(0x8B, 0x8B, 0x93);
+    // Uguali a Success, Warning, Danger e Idle di Theme.xaml: pallini della tray e pennelli di fase costruiti in codice.
+    public static readonly Color Green = Color.FromRgb(0x4A, 0xDE, 0x80);
+    public static readonly Color Amber = Color.FromRgb(0xFB, 0xBF, 0x24);
+    public static readonly Color Red = Color.FromRgb(0xF8, 0x71, 0x71);
+    public static readonly Color Grey = Color.FromRgb(0x71, 0x71, 0x7A);
 
     public static string Label(SessionPhase? phase) => phase switch
     {
@@ -43,6 +46,35 @@ public static class PhaseVisuals
         Severity.Warning => Frozen(Amber),
         _ => Frozen(Green)
     };
+
+    /// <summary>Solid colour of a tone: avatar ring, dots, summary pill dot.</summary>
+    public static Brush ToneBrush(PhaseTone tone) => Theme(tone switch
+    {
+        PhaseTone.Working => "Success",
+        PhaseTone.NeedsInput => "Warning",
+        PhaseTone.Error => "Danger",
+        _ => "Idle"
+    });
+
+    /// <summary>Text colour of a tone (subtitle, pill text); 4.5:1 on cards and tiles per ColorContrastTests.</summary>
+    public static Brush ToneText(PhaseTone tone) => Theme(tone switch
+    {
+        PhaseTone.Working => "SuccessText",
+        PhaseTone.NeedsInput => "WarningText",
+        PhaseTone.Error => "DangerText",
+        _ => "TextMuted"
+    });
+
+    /// <summary>14 % fill of a tone: avatar background, summary pill background.</summary>
+    public static Brush ToneFill(PhaseTone tone) => Theme(tone switch
+    {
+        PhaseTone.Working => "SuccessFill",
+        PhaseTone.NeedsInput => "WarningFill",
+        PhaseTone.Error => "DangerFill",
+        _ => "IdleFill"
+    });
+
+    private static Brush Theme(string key) => Application.Current?.TryFindResource(key) as Brush ?? Brushes.Gray;
 
     private static SolidColorBrush Frozen(Color color)
     {

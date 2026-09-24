@@ -4,13 +4,14 @@ using AIUsageMonitor.Core.Models;
 namespace AIUsageMonitor.App.Terminal;
 
 /// <summary>
-/// Dove vive una sessione: pane di Herdr, processo dell'agente, processo che possiede la finestra, indizi d'ambiente.
+/// Dove vive una sessione: pane di Herdr, pty di wmux, processo dell'agente, processo che possiede la finestra,
+/// indizi d'ambiente.
 /// Accanto a ogni pid si tiene il nome dell'immagine vista al momento della risoluzione: chiudere un terminale non
 /// emette <c>SessionEnd</c>, quindi il target sopravvive fino allo sweep (12 ore) e nel frattempo Windows puo' aver
 /// riciclato quel pid per un altro processo. Il nome e' il modo piu' economico per accorgersene prima di attivare
 /// una finestra che non c'entra nulla.
 /// </summary>
-public sealed record TerminalTarget(string? HerdrPane, int? AgentPid, string? AgentPidName, int? WindowPid, string? WindowPidName, string? WtSession, int? VscodePid, DateTimeOffset ResolvedAt);
+public sealed record TerminalTarget(string? HerdrPane, int? AgentPid, string? AgentPidName, int? WindowPid, string? WindowPidName, string? WtSession, int? VscodePid, DateTimeOffset ResolvedAt, string? WmuxPty = null, string? TermProgram = null);
 
 /// <summary>
 /// Tiene, per sessione, il terminale che la ospita. La risoluzione va fatta quando l'evento arriva, non al click:
@@ -98,14 +99,14 @@ public sealed class TerminalRegistry
                     OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: ppid {ppid} non porta a un agente (pid riciclato dopo il replay), finestra {windowPid} ({windowPidName}) ignorata");
                     (windowPid, windowPidName) = (null, null);
                 }
-                OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: ppid {ppid} → {chain.Count} antenati, agent {agentPid?.ToString() ?? "-"}, finestra {windowPid?.ToString() ?? "-"} ({windowPidName ?? "-"}), pane {host.HerdrPane ?? "-"}");
+                OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: ppid {ppid} → {chain.Count} antenati, agent {agentPid?.ToString() ?? "-"}, finestra {windowPid?.ToString() ?? "-"} ({windowPidName ?? "-"}), pane {host.HerdrPane ?? "-"}, wmux {host.WmuxPty ?? "-"}");
             }
             else
             {
-                OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: nessun ppid, pane {host.HerdrPane ?? "-"}");
+                OnLog?.Invoke($"Terminal resolve {key.Agent} {key.SessionId}: nessun ppid, pane {host.HerdrPane ?? "-"}, wmux {host.WmuxPty ?? "-"}");
             }
 
-            var target = new TerminalTarget(host.HerdrPane, agentPid, agentPidName, windowPid, windowPidName, host.WtSession, host.VscodePid, _clock.UtcNow);
+            var target = new TerminalTarget(host.HerdrPane, agentPid, agentPidName, windowPid, windowPidName, host.WtSession, host.VscodePid, _clock.UtcNow, host.WmuxPty, host.TermProgram);
             lock (_gate) _targets[key] = target;
         }
         catch (Exception ex)

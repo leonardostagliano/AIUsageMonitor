@@ -8,6 +8,7 @@ using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
 using AIUsageMonitor.Core.Pricing;
 using AIUsageMonitor.Core.Settings;
+using AIUsageMonitor.Core.Terminal;
 using AIUsageMonitor.Core.Updates;
 using AIUsageMonitor.Core.Usage;
 
@@ -132,7 +133,8 @@ public sealed class AppServices : IDisposable
         // il processo che ha eseguito l'hook vive pochi secondi mentre la finestra del terminale resta.
         var herdr = new HerdrClient { OnLog = Log.Info };
         Terminals = new TerminalRegistry(Clock) { OnLog = Log.Info };
-        _focuser = new TerminalFocuser(herdr, Terminals, Log.Info);
+        var wmux = new WmuxClient(WmuxPipeTransport.ForCurrentUser(Log.Info).SendAsync, Log.Info);
+        _focuser = new TerminalFocuser(herdr, wmux, Terminals, Log.Info);
 
         Usage.UsageUpdated += _ => StateChanged?.Invoke();
         // Removed arriva dallo sweep della pump, cioe' dallo stesso thread che chiama il token source: e' il punto
