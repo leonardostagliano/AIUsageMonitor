@@ -1,36 +1,90 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <SolidColorBrush x:Key="NotchBackground" Color="#EB1B1B1F"/>
-  <SolidColorBrush x:Key="NotchBorder" Color="#1FFFFFFF"/>
-  <SolidColorBrush x:Key="TextPrimary" Color="#FFFFFFFF"/>
-  <SolidColorBrush x:Key="TextMuted" Color="#FFA0A0A8"/>
-  <SolidColorBrush x:Key="BarTrack" Color="#33FFFFFF"/>
-  <SolidColorBrush x:Key="Green" Color="#FF3FB950"/>
-  <SolidColorBrush x:Key="Amber" Color="#FFD29922"/>
-  <SolidColorBrush x:Key="Red" Color="#FFF85149"/>
-  <SolidColorBrush x:Key="Grey" Color="#FF8B8B93"/>
-  <SolidColorBrush x:Key="Badge" Color="#22FFFFFF"/>
+  <!-- Palette "Premium" (spec 2026-09-24, sezione 4). I valori sono fissati da ThemePaletteTests e i rapporti di
+       contrasto da ColorContrastTests: cambiarne uno qui senza aggiornare i test fa fallire la build. -->
 
-  <!-- Superfici e accenti dei controlli scuri (Controls.xaml). I rapporti di contrasto sono fissati da ColorContrastTests. -->
-  <SolidColorBrush x:Key="Surface" Color="#FF2A2A30"/>
-  <SolidColorBrush x:Key="SurfaceHover" Color="#FF3A3A42"/>
-  <SolidColorBrush x:Key="SurfacePressed" Color="#FF45454E"/>
-  <SolidColorBrush x:Key="WindowBackground" Color="#FF1B1B1F"/>
-  <SolidColorBrush x:Key="Accent" Color="#FF3FB950"/>
-  <SolidColorBrush x:Key="AccentText" Color="#FF0B1A10"/>
-  <SolidColorBrush x:Key="TextDisabled" Color="#FF7A7A82"/>
-  <!-- Sfondo delle card (GroupBox): traslucido, quindi i contrasti si calcolano sul composito su WindowBackground
-       (#2D2D31) - vedi ColorContrast.Over e ThemePaletteTests. -->
-  <SolidColorBrush x:Key="Card" Color="#14FFFFFF"/>
+  <!-- Superfici -->
+  <SolidColorBrush x:Key="NotchBackground" Color="#F5121216"/>
+  <SolidColorBrush x:Key="WindowBackground" Color="#FF121216"/>
+  <SolidColorBrush x:Key="Card" Color="#FF1B1B21"/>
+  <SolidColorBrush x:Key="Tile" Color="#0AFFFFFF"/>
+  <SolidColorBrush x:Key="Surface" Color="#FF26262E"/>
+  <SolidColorBrush x:Key="SurfaceHover" Color="#FF30303A"/>
+  <SolidColorBrush x:Key="SurfacePressed" Color="#FF3A3A45"/>
+  <SolidColorBrush x:Key="NotchBorder" Color="#12FFFFFF"/>
+  <SolidColorBrush x:Key="Hairline" Color="#0FFFFFFF"/>
+  <SolidColorBrush x:Key="BarTrack" Color="#14FFFFFF"/>
+  <SolidColorBrush x:Key="RingTrack" Color="#1AFFFFFF"/>
+
+  <!-- Testo e accenti -->
+  <SolidColorBrush x:Key="TextPrimary" Color="#FFF5F5F7"/>
+  <SolidColorBrush x:Key="TextMuted" Color="#FFA1A1AA"/>
+  <SolidColorBrush x:Key="TextDisabled" Color="#FF71717A"/>
+  <SolidColorBrush x:Key="Accent" Color="#FFF5F5F7"/>
+  <SolidColorBrush x:Key="AccentText" Color="#FF121216"/>
+  <SolidColorBrush x:Key="Toggle" Color="#FF22C55E"/>
   <SolidColorBrush x:Key="Focus" Color="#FF7AA2F7"/>
+
+  <!-- Colori degli agenti: solo cerchio dell'icona e alone della card. -->
+  <SolidColorBrush x:Key="BrandClaude" Color="#FFD97757"/>
+  <SolidColorBrush x:Key="BrandCodex" Color="#FF10A37F"/>
+
+  <!-- Stati: colore pieno (anelli, pallini), testo, riempimento al 14 % (avatar, pillole). -->
+  <SolidColorBrush x:Key="Success" Color="#FF4ADE80"/>
+  <SolidColorBrush x:Key="SuccessText" Color="#FF86EFAC"/>
+  <SolidColorBrush x:Key="SuccessFill" Color="#244ADE80"/>
+  <SolidColorBrush x:Key="Warning" Color="#FFFBBF24"/>
+  <SolidColorBrush x:Key="WarningText" Color="#FFFCD34D"/>
+  <SolidColorBrush x:Key="WarningFill" Color="#24FBBF24"/>
+  <SolidColorBrush x:Key="Danger" Color="#FFF87171"/>
+  <SolidColorBrush x:Key="DangerText" Color="#FFFCA5A5"/>
+  <SolidColorBrush x:Key="DangerFill" Color="#24F87171"/>
+  <SolidColorBrush x:Key="Idle" Color="#FF71717A"/>
+  <SolidColorBrush x:Key="IdleFill" Color="#2471717A"/>
+
+  <!-- Chiavi della palette precedente ancora referenziate da template non ancora rifatti: stessi colori di stato. -->
+  <SolidColorBrush x:Key="Green" Color="#FF4ADE80"/>
+  <SolidColorBrush x:Key="Amber" Color="#FFFBBF24"/>
+  <SolidColorBrush x:Key="Red" Color="#FFF87171"/>
+  <SolidColorBrush x:Key="Grey" Color="#FF71717A"/>
+  <SolidColorBrush x:Key="Badge" Color="#14FFFFFF"/>
+
+  <!-- Gradienti delle barre per tono, da sinistra a destra. -->
+  <LinearGradientBrush x:Key="ToneNormalBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Offset="0" Color="#FF22C55E"/>
+    <GradientStop Offset="1" Color="#FF86EFAC"/>
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="ToneWarningBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Offset="0" Color="#FFF59E0B"/>
+    <GradientStop Offset="1" Color="#FFFCD34D"/>
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="ToneCriticalBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Offset="0" Color="#FFEF4444"/>
+    <GradientStop Offset="1" Color="#FFFCA5A5"/>
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="ToneStaleBrush" StartPoint="0,0.5" EndPoint="1,0.5">
+    <GradientStop Offset="0" Color="#FF52525B"/>
+    <GradientStop Offset="1" Color="#FF71717A"/>
+  </LinearGradientBrush>
+
+  <!-- Alone dell'agente nell'angolo in alto a sinistra della card: 160x130 px assoluti, dal 30 % a zero. -->
+  <RadialGradientBrush x:Key="ClaudeGlow" MappingMode="Absolute" Center="0,0" GradientOrigin="0,0" RadiusX="160" RadiusY="130">
+    <GradientStop Offset="0" Color="#4DD97757"/>
+    <GradientStop Offset="1" Color="#00D97757"/>
+  </RadialGradientBrush>
+  <RadialGradientBrush x:Key="CodexGlow" MappingMode="Absolute" Center="0,0" GradientOrigin="0,0" RadiusX="160" RadiusY="130">
+    <GradientStop Offset="0" Color="#4D10A37F"/>
+    <GradientStop Offset="1" Color="#0010A37F"/>
+  </RadialGradientBrush>
+
+  <!-- Caratteri: Display per numeri grandi e titoli, Text per il resto; Segoe UI su Windows 10. -->
+  <FontFamily x:Key="DisplayFont">Segoe UI Variable Display, Segoe UI</FontFamily>
+  <FontFamily x:Key="TextFont">Segoe UI Variable Text, Segoe UI</FontFamily>
 
   <!-- Solo FontFamily. Foreground/FontSize NON vanno qui: il testo-stringa di Button, CheckBox, Label e header di
        GroupBox passa da un ContentPresenter che genera un TextBlock, e un setter di stile batte l'ereditarieta' nella
-       precedenza WPF; con quei due setter ogni Foreground/FontSize dei controlli (AccentText del PrimaryButton,
-       TextMuted di Label e header, TextDisabled dei trigger IsEnabled=False) resterebbe invisibile.
-       I default di corpo stanno sulle radici che li possiedono: la Grid di NotchWindow e la Window delle
-       impostazioni (TextElement.Foreground / TextElement.FontSize), da cui si ereditano fin dentro i template. -->
+       precedenza WPF. I default di corpo stanno sulle radici che li possiedono (notch, finestre). -->
   <Style TargetType="TextBlock">
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
   </Style>
 </ResourceDictionary>

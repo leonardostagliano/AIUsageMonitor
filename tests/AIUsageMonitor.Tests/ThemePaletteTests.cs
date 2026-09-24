@@ -13,23 +13,35 @@ public class ThemePaletteTests
     /// <summary>Brush key to the colour the contrast tests assume. Keys not listed here are not pinned.</summary>
     private static readonly Dictionary<string, string> Pinned = new(StringComparer.Ordinal)
     {
-        ["NotchBackground"] = "#EB1B1B1F",
-        ["NotchBorder"] = "#1FFFFFFF",
-        ["TextPrimary"] = "#FFFFFFFF",
-        ["TextMuted"] = "#FFA0A0A8",
-        ["Green"] = "#FF3FB950",
-        ["Amber"] = "#FFD29922",
-        // Added by Task 2; the disabled text is #7A7A82 (3.35:1 on Surface), not the plan's #6E6E76 (2.82:1).
-        ["WindowBackground"] = "#FF1B1B1F",
-        ["Surface"] = "#FF2A2A30",
-        ["SurfaceHover"] = "#FF3A3A42",
-        ["SurfacePressed"] = "#FF45454E",
-        ["Accent"] = "#FF3FB950",
-        ["AccentText"] = "#FF0B1A10",
-        ["TextDisabled"] = "#FF7A7A82",
+        ["NotchBackground"] = "#F5121216",
+        ["WindowBackground"] = "#FF121216",
+        ["Card"] = "#FF1B1B21",
+        ["Tile"] = "#0AFFFFFF",
+        ["Surface"] = "#FF26262E",
+        ["SurfaceHover"] = "#FF30303A",
+        ["SurfacePressed"] = "#FF3A3A45",
+        ["NotchBorder"] = "#12FFFFFF",
+        ["Hairline"] = "#0FFFFFFF",
+        ["TextPrimary"] = "#FFF5F5F7",
+        ["TextMuted"] = "#FFA1A1AA",
+        ["TextDisabled"] = "#FF71717A",
+        ["Accent"] = "#FFF5F5F7",
+        ["AccentText"] = "#FF121216",
+        ["Toggle"] = "#FF22C55E",
         ["Focus"] = "#FF7AA2F7",
-        ["Grey"] = "#FF8B8B93",
-        ["Card"] = "#14FFFFFF",
+        ["BrandClaude"] = "#FFD97757",
+        ["BrandCodex"] = "#FF10A37F",
+        ["Success"] = "#FF4ADE80",
+        ["SuccessText"] = "#FF86EFAC",
+        ["Warning"] = "#FFFBBF24",
+        ["WarningText"] = "#FFFCD34D",
+        ["Danger"] = "#FFF87171",
+        ["DangerText"] = "#FFFCA5A5",
+        ["Idle"] = "#FF71717A",
+        ["Green"] = "#FF4ADE80",
+        ["Amber"] = "#FFFBBF24",
+        ["Red"] = "#FFF87171",
+        ["Grey"] = "#FF71717A",
     };
 
     [Fact]
@@ -49,18 +61,26 @@ public class ThemePaletteTests
     [Theory]
     [InlineData("TextPrimary", "WindowBackground", 4.5)]
     [InlineData("TextPrimary", "NotchBackground", 4.5)]
+    [InlineData("TextPrimary", "Card", 4.5)]
     [InlineData("TextPrimary", "Surface", 4.5)]
     [InlineData("TextPrimary", "SurfaceHover", 4.5)]
     [InlineData("TextPrimary", "SurfacePressed", 4.5)]
     [InlineData("TextMuted", "WindowBackground", 4.5)]
+    [InlineData("TextMuted", "Card", 4.5)]
     [InlineData("TextMuted", "Surface", 4.5)]
     [InlineData("AccentText", "Accent", 4.5)]
+    [InlineData("SuccessText", "Card", 4.5)]
+    [InlineData("WarningText", "Card", 4.5)]
+    [InlineData("DangerText", "Card", 4.5)]
     [InlineData("Amber", "WindowBackground", 4.5)]
+    [InlineData("WarningText", "WindowBackground", 4.5)]
     [InlineData("TextDisabled", "Surface", 3.0)]
-    [InlineData("TextPrimary", "Card", 4.5)]
-    [InlineData("TextMuted", "Card", 4.5)]
-    // WCAG 1.4.11: il contorno della CheckBox a riposo (Grey) e in hover (TextMuted) deve staccarsi dalla card.
-    // Con NotchBorder, che il template usava prima, il rapporto era 1.48:1 e la casella non spuntata spariva.
+    // WCAG 1.4.11: colori che identificano uno stato o un controllo (anelli, pallini, barre, interruttore acceso).
+    [InlineData("Success", "Card", 3.0)]
+    [InlineData("Warning", "Card", 3.0)]
+    [InlineData("Danger", "Card", 3.0)]
+    [InlineData("Idle", "Card", 3.0)]
+    [InlineData("Toggle", "Card", 3.0)]
     [InlineData("Grey", "Card", 3.0)]
     public void Theme_pairs_meet_their_floor(string foreground, string background, double floor)
     {
