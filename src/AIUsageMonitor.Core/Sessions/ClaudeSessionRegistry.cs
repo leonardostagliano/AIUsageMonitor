@@ -23,10 +23,14 @@ public sealed record ClaudeSessionRecord(
     string? WaitingFor,
     string? Name,
     long? StatusUpdatedAt,
-    string? BridgeSessionId)
+    string? BridgeSessionId,
+    bool Spare = false)
 {
-    /// <summary>The supervisor of background sessions is not a conversation of its own.</summary>
-    public bool IsConversation => !string.IsNullOrEmpty(SessionId) && Kind is not ("daemon" or "daemon-worker");
+    /// <summary>
+    /// The supervisor of background sessions is not a conversation of its own, and neither is a spare process started
+    /// ahead of time and not yet claimed by anyone.
+    /// </summary>
+    public bool IsConversation => !string.IsNullOrEmpty(SessionId) && Kind is not ("daemon" or "daemon-worker") && !Spare;
 }
 
 /// <summary>Reads <c>~/.claude/sessions</c>. Never throws: a torn or unreadable record is skipped until the next read.</summary>
@@ -88,7 +92,8 @@ public sealed class ClaudeSessionRegistryReader
                 Text(root, "waitingFor"),
                 Text(root, "name"),
                 Number(root, "statusUpdatedAt"),
-                Text(root, "bridgeSessionId"));
+                Text(root, "bridgeSessionId"),
+                root.TryGetProperty("spare", out var spare) && spare.ValueKind == JsonValueKind.True);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {

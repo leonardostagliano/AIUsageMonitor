@@ -53,6 +53,13 @@ public sealed class ClaudeRegistrySessionFeed
     public TimeSpan AdoptAfter { get; init; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
+    /// How long an idle app session is shown after its last turn. The desktop app keeps the process of a conversation
+    /// open long after it is over: an idle record older than this is not adopted (the pump removes the ones already
+    /// shown after the same time), and the conversation comes back as soon as it works again.
+    /// </summary>
+    public TimeSpan IdleWindow { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// Reads the registry and returns the events for the sessions this feed drives, plus every live session so the
     /// caller can tie the tracked ones to their process. <paramref name="hookOwned"/> tells which session ids the
     /// hooks have reported.
@@ -60,7 +67,7 @@ public sealed class ClaudeRegistrySessionFeed
     public ClaudeRegistrySync Sync(IReadOnlyCollection<SessionState> sessions, Func<string, bool> hookOwned)
     {
         var now = _clock.UtcNow;
-        var tracked = sessions.Where(s => s.Agent == AgentKind.Claude).Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
+        var tracked = sessions.Where(s => s.Agent == AgentKind.Claude).ToDictionary(s => s.SessionId, StringComparer.Ordinal);
 
         var live = new Dictionary<string, LiveClaudeSession>(StringComparer.Ordinal);
         var stale = new HashSet<string>(StringComparer.Ordinal);
@@ -83,14 +90,20 @@ public sealed class ClaudeRegistrySessionFeed
         var events = new List<HookEvent>();
         foreach (var (sessionId, session) in live)
         {
+            var record = session.Record;
+            var status = Normalize(record.Status);
             if (hookOwned(sessionId))
             {
                 _owned.Remove(sessionId);
+                // Granting a permission fires no hook: the session would read "attende input" until the end of the
+                // turn, even with an agent at work. Its record goes back to busy the moment the prompt is answered.
+                if (tracked.TryGetValue(sessionId, out var state) && state.Phase == SessionPhase.NeedsInput
+                    && status is "busy" or "shell" && record.StatusUpdatedAt is { } busySince
+                    && state.WaitingSince is { } waiting && busySince > waiting.ToUnixTimeMilliseconds())
+                    events.Add(new HookEvent(now, AgentKind.Claude, "PostToolUse", sessionId, null, null, null, "registry"));
                 continue;
             }
-            var record = session.Record;
-            var status = Normalize(record.Status);
-            if (_owned.TryGetValue(sessionId, out var last) && tracked.Contains(sessionId))
+            if (_owned.TryGetValue(sessionId, out var last) && tracked.ContainsKey(sessionId))
             {
                 if (last == status) continue;
                 if (Transition(record, status, last, now) is { } change) events.Add(change);
@@ -98,8 +111,9 @@ public sealed class ClaudeRegistrySessionFeed
                 continue;
             }
             // A session tracked from another source is not taken over.
-            if (tracked.Contains(sessionId)) continue;
+            if (tracked.ContainsKey(sessionId)) continue;
             if (record.StartedAt > 0 && now - DateTimeOffset.FromUnixTimeMilliseconds(record.StartedAt) < AdoptAfter) continue;
+            if (status == "idle" && HostInfo.OriginOf(record.Entrypoint) == SessionOrigin.App && !RecentlyActive(record, now)) continue;
 
             events.Add(Start(record, now));
             if (Transition(record, status, null, now) is { } phase) events.Add(phase);
@@ -109,7 +123,7 @@ public sealed class ClaudeRegistrySessionFeed
         foreach (var sessionId in _owned.Keys.Where(id => !live.ContainsKey(id)).ToList())
         {
             _owned.Remove(sessionId);
-            if (tracked.Contains(sessionId))
+            if (tracked.ContainsKey(sessionId))
                 events.Add(new HookEvent(now, AgentKind.Claude, "SessionEnd", sessionId, null, null, null, "registry"));
         }
 
@@ -139,6 +153,13 @@ public sealed class ClaudeRegistrySessionFeed
 
         HookEvent Event(string name, string? notificationType = null, string? message = null) =>
             new(now, AgentKind.Claude, name, record.SessionId!, record.Cwd, notificationType, message, "registry", TranscriptPath: transcript);
+    }
+
+    /// <summary>Whether the record changed status (or started) within <see cref="IdleWindow"/>.</summary>
+    private bool RecentlyActive(ClaudeSessionRecord record, DateTimeOffset now)
+    {
+        var at = record.StatusUpdatedAt ?? record.StartedAt;
+        return at > 0 && now - DateTimeOffset.FromUnixTimeMilliseconds(at) <= IdleWindow;
     }
 
     private static string Normalize(string? status) => status is "busy" or "shell" or "waiting" ? status : "idle";

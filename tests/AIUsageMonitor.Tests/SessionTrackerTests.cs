@@ -180,7 +180,10 @@ public class SessionTrackerTests
         Assert.Equal(SessionPhase.Idle, tracker.AggregatePhase(AgentKind.Claude));
         tracker.Apply(Ev("UserPromptSubmit", sid: "b"));
         Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
+        // Waiting only for the next prompt does not hide a session at work; a permission prompt does.
         tracker.Apply(Ev("Notification", sid: "c", notificationType: "idle_prompt"));
+        Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
+        tracker.Apply(Ev("Notification", sid: "e", notificationType: "permission_prompt"));
         Assert.Equal(SessionPhase.NeedsInput, tracker.AggregatePhase(AgentKind.Claude));
         tracker.Apply(Ev("StopFailure", sid: "d"));
         Assert.Equal(SessionPhase.Error, tracker.AggregatePhase(AgentKind.Claude));

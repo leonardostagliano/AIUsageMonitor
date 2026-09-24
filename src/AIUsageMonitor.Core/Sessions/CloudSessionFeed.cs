@@ -12,8 +12,8 @@ namespace AIUsageMonitor.Core.Sessions;
 /// </summary>
 /// <remarks>
 /// A cloud session is shown while it works or waits (for at most <see cref="ActiveWindow"/> without news, a backstop
-/// against one that stopped reporting) and for <see cref="IdleWindow"/> after its last activity: the sessions API keeps
-/// them for weeks, and the notch is about what is going on now.
+/// against one that stopped reporting) and for <see cref="IdleWindow"/> after its last activity, long enough to see
+/// it finish: the sessions API keeps finished sessions for weeks, and the notch is about what is going on now.
 /// <para><see cref="Diff"/> and <see cref="Clear"/> are called by one poller at a time; <see cref="UsageOf"/> and
 /// <see cref="ModelOf"/> may be read from the pump thread meanwhile.</para>
 /// </remarks>
@@ -22,7 +22,7 @@ public sealed class CloudSessionFeed
     private readonly Dictionary<string, (string Id, CloudSessionStatus Status, SessionOrigin Origin, string? Title)> _shown = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (CloudUsage? Usage, string? Model)> _usage = new(StringComparer.Ordinal);
 
-    public TimeSpan IdleWindow { get; init; } = TimeSpan.FromHours(6);
+    public TimeSpan IdleWindow { get; init; } = TimeSpan.FromMinutes(10);
     public TimeSpan ActiveWindow { get; init; } = TimeSpan.FromHours(24);
 
     /// <summary>Whether any cloud session is on show (the poller clears them when the option goes off).</summary>

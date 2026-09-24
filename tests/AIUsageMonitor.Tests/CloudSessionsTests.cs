@@ -117,8 +117,9 @@ public class CloudSessionsTests
         Apply(tracker, feed.Diff(
         [
             Cloud("session_a", CloudSessionStatus.Working, Now.AddMinutes(-1), "Raccolta"),
-            Cloud("session_b", CloudSessionStatus.Idle, Now.AddHours(-2), "Fix", message: "PR aggiornata"),
+            Cloud("session_b", CloudSessionStatus.Idle, Now.AddMinutes(-5), "Fix", message: "PR aggiornata"),
             Cloud("session_old", CloudSessionStatus.Idle, Now.AddHours(-7)),
+            Cloud("session_done", CloudSessionStatus.Idle, Now.AddMinutes(-20)),     // finished: shown only 10 minutes
             Cloud("session_stuck", CloudSessionStatus.Working, Now.AddHours(-25)),
             Cloud("session_arch", CloudSessionStatus.Archived, Now)
         ], true, Now));
@@ -130,11 +131,11 @@ public class CloudSessionsTests
         Assert.Equal(SessionPhase.Working, sessions["session_a"].Phase);
         Assert.Equal("finito", sessions["session_b"].PhaseLabel);
         Assert.Equal("PR aggiornata", sessions["session_b"].Message);
-        Assert.Equal(Now.AddHours(-2), sessions["session_b"].LastEventAt);
+        Assert.Equal(Now.AddMinutes(-5), sessions["session_b"].LastEventAt);
         Assert.DoesNotContain(changes, c => c.Session.Phase == SessionPhase.Idle && c.PreviousPhase == SessionPhase.Working);
 
         // Unchanged: nothing to say. Then a turn ends and another waits for the user.
-        Assert.Empty(feed.Diff([Cloud("session_a", CloudSessionStatus.Working, Now, "Raccolta"), Cloud("session_b", CloudSessionStatus.Idle, Now.AddHours(-2), "Fix")], true, Now));
+        Assert.Empty(feed.Diff([Cloud("session_a", CloudSessionStatus.Working, Now, "Raccolta"), Cloud("session_b", CloudSessionStatus.Idle, Now.AddMinutes(-5), "Fix")], true, Now));
         Apply(tracker, feed.Diff([Cloud("session_a", CloudSessionStatus.Idle, Now, "Raccolta"), Cloud("session_b", CloudSessionStatus.NeedsInput, Now, "Fix", message: "Permesso richiesto: Bash")], true, Now));
         sessions = tracker.Sessions.ToDictionary(s => s.SessionId);
         Assert.Equal(SessionPhase.Idle, sessions["session_a"].Phase);

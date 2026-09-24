@@ -108,16 +108,24 @@ public static class NotchPresentation
         _ => null
     };
 
-    /// <summary>Waiting for input beats errors, errors beat work; nothing when no session is busy or in trouble.</summary>
+    /// <summary>
+    /// A pending permission or question beats errors, errors beat work, and work beats a session that only waits for its
+    /// next prompt (idle_prompt); nothing when no session is busy or in trouble.
+    /// </summary>
     public static SummaryPill? Summary(IEnumerable<SessionState> sessions)
     {
         var list = sessions.ToList();
-        var needsInput = list.Count(s => s.Phase == SessionPhase.NeedsInput);
-        if (needsInput > 0) return new SummaryPill(PhaseTone.NeedsInput, needsInput == 1 ? "1 attende input" : $"{needsInput} attendono input");
+        var blocked = list.Count(s => s.Phase == SessionPhase.NeedsInput && !s.AwaitsPrompt);
+        if (blocked > 0) return WaitingPill(blocked);
         var errors = list.Count(s => s.Phase == SessionPhase.Error);
         if (errors > 0) return new SummaryPill(PhaseTone.Error, $"{errors} in errore");
         var working = list.Count(s => s.Phase == SessionPhase.Working);
-        return working > 0 ? new SummaryPill(PhaseTone.Working, $"{working} al lavoro") : null;
+        if (working > 0) return new SummaryPill(PhaseTone.Working, $"{working} al lavoro");
+        var waiting = list.Count(s => s.Phase == SessionPhase.NeedsInput);
+        return waiting > 0 ? WaitingPill(waiting) : null;
+
+        static SummaryPill WaitingPill(int count) =>
+            new(PhaseTone.NeedsInput, count == 1 ? "1 attende input" : $"{count} attendono input");
     }
 
     /// <summary>The same rules as <see cref="CostFormatter.Short"/>, split so the amount can roll on its own.</summary>

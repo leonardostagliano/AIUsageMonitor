@@ -71,10 +71,22 @@ Estende: [2026-09-13-aiusagemonitor-design.md](2026-09-13-aiusagemonitor-design.
 
 - Lettura alla cadenza della quota di Claude (minimo 30 s), opzione *Sessioni cloud e routine* (attiva di
   default). Token rifiutato o endpoint assente: nuovo tentativo dopo 10 minuti.
-- Visibili mentre lavorano o attendono (al piu' 24 h senza notizie) e per 6 h dopo l'ultima attivita'; archiviate,
+- Visibili mentre lavorano o attendono (al piu' 24 h senza notizie) e per 10 minuti dopo la fine; archiviate,
   sparite dalla lista o troppo vecchie → fine. Le sessioni Remote Control (`bridge`) sono locali e si saltano.
 - Gli eventi passano dalla pump (`Inject`), la prima lettura in silenzio. Token e costo dall'`usage` dichiarato
   dalla sessione. Click → `https://claude.ai/code/session_<id>`.
+
+### 3.5 Revisione dopo v0.4.0
+
+- **Icona gialla con un agente al lavoro.** Claude Code manda `idle_prompt` quando la sessione principale resta ferma,
+  anche con agenti in background al lavoro. `idle_prompt` e' ignorato finche' la sessione ha agenti o workflow in
+  corso; un'attesa da `idle_prompt` (`AwaitsPrompt`) viene dopo "al lavoro" nello stato aggregato (tray, pallino
+  della card, pillola) e un `SubagentStart` la chiude come chiude Idle. Un permesso concesso non manda hook: se il
+  record del registro torna `busy` dopo la notifica (`WaitingSince`), la sessione torna al lavoro.
+- **Sessioni finite che restano.** Le sessioni cloud e le routine finite restano 10 minuti (erano 6 ore). L'app
+  desktop tiene aperto il processo di una conversazione finita: una sessione `app` Idle o in errore esce 10 minuti
+  dopo l'ultimo evento, un record `idle` piu' vecchio non viene adottato, e i processi `spare` non ancora assegnati
+  si ignorano.
 
 ## 4. Interfaccia
 

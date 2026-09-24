@@ -17,7 +17,8 @@ public sealed class SessionTracker
 
     private static readonly HashSet<string> NeedsInputNotifications = new(StringComparer.OrdinalIgnoreCase)
     {
-        "permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog"
+        "permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog",
+        "worker_permission_prompt"
     };
 
     private readonly IClock _clock;
@@ -67,6 +68,12 @@ public sealed class SessionTracker
 
         if (e.Event is "SubagentStart" or "SubagentStop")
             return ApplySubagentEvent(e, key, existing);
+
+        // idle_prompt ("Claude is waiting for your input") fires once the main session has been quiet for a while,
+        // whether or not its background agents are still at work: while they work, so is the session.
+        var idlePrompt = e.Event == "Notification" && string.Equals(e.NotificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase);
+        if (idlePrompt && existing is { } busy && (busy.ActiveSubagents > 0 || busy.AwaitingSubagents && busy.PendingWorkflows > 0))
+            return null;
 
         SessionPhase? phase = e.Event switch
         {
@@ -125,6 +132,10 @@ public sealed class SessionTracker
             }
         }
 
+        // SessionStart keeps the phase, and with it the reason of a wait; a notification (re)starts the wait.
+        var awaitsPrompt = phase == SessionPhase.NeedsInput && (e.Event == "SessionStart" ? existing?.AwaitsPrompt ?? false : idlePrompt);
+        DateTimeOffset? waitingSince = phase != SessionPhase.NeedsInput ? null : e.Event == "Notification" ? e.Ts : existing?.WaitingSince ?? e.Ts;
+
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         // Every Claude hook payload carries the session transcript; an event without one (Codex, an older hook)
         // must not clear the path the token counter is already reading.
@@ -139,12 +150,15 @@ public sealed class SessionTracker
             ? new SessionState(
                 e.Agent, e.SessionId, NameFor(title, cwd, e.SessionId), cwd,
                 phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, Subagents: subagents, AwaitingSubagents: awaiting,
-                LastSubagentEventAt: lastSubagentEventAt, Host: host, Origin: origin, Title: title, PendingWorkflows: pendingWorkflows)
+                LastSubagentEventAt: lastSubagentEventAt, Host: host, Origin: origin, Title: title, PendingWorkflows: pendingWorkflows,
+                AwaitsPrompt: awaitsPrompt, WaitingSince: waitingSince)
             : existing with
             {
                 DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase.Value,
+                AwaitsPrompt = awaitsPrompt,
+                WaitingSince = waitingSince,
                 Message = message,
                 LastEventAt = e.Ts,
                 TranscriptPath = transcriptPath,
@@ -178,7 +192,9 @@ public sealed class SessionTracker
         var pendingWorkflows = existing?.PendingWorkflows ?? 0;
         if (e.Event == "SubagentStop" && e.BackgroundTasks is { } inFlight) pendingWorkflows = inFlight.Count(t => t.IsWorkflow);
 
-        if (e.Event == "SubagentStart" && phase == SessionPhase.Idle)
+        // A session merely waiting for its next prompt (idle_prompt) is back at work when an agent starts, like an Idle
+        // one; a permission or a question still pending is not cleared by an agent a workflow happens to start.
+        if (e.Event == "SubagentStart" && (phase == SessionPhase.Idle || phase == SessionPhase.NeedsInput && existing!.AwaitsPrompt))
         {
             // The session is Idle because the turn's Stop was already seen: an agent that starts afterwards
             // (a workflow step, a background task) re-arms the deferred Idle, so its SubagentStop takes the
@@ -219,6 +235,8 @@ public sealed class SessionTracker
                 DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase,
+                AwaitsPrompt = phase == SessionPhase.NeedsInput && existing.AwaitsPrompt,
+                WaitingSince = phase == SessionPhase.NeedsInput ? existing.WaitingSince : null,
                 Message = message,
                 LastEventAt = e.Ts,
                 Subagents = subagents,
@@ -567,18 +585,54 @@ public sealed class SessionTracker
         return removed;
     }
 
-    /// <summary>Worst phase among the agent's sessions: Error > NeedsInput > Working > Idle; null when there are none.</summary>
+    /// <summary>
+    /// Most urgent phase among the agent's sessions: Error > NeedsInput (a permission or a question) > Working >
+    /// NeedsInput (only waiting for the next prompt) > Idle; null when there are none. A session that finished its turn
+    /// and waits for the next prompt must not paint the icon amber while another one is at work.
+    /// </summary>
     public SessionPhase? AggregatePhase(AgentKind agent)
     {
         lock (_gate)
         {
-            var phases = _sessions.Values.Where(s => s.Agent == agent).Select(s => s.Phase).ToList();
-            if (phases.Count == 0) return null;
-            if (phases.Contains(SessionPhase.Error)) return SessionPhase.Error;
-            if (phases.Contains(SessionPhase.NeedsInput)) return SessionPhase.NeedsInput;
-            if (phases.Contains(SessionPhase.Working)) return SessionPhase.Working;
-            return SessionPhase.Idle;
+            SessionState? worst = null;
+            foreach (var session in _sessions.Values.Where(s => s.Agent == agent))
+                if (worst is null || Urgency(session) > Urgency(worst)) worst = session;
+            return worst?.Phase;
         }
+    }
+
+    /// <summary>Ranks a session for <see cref="AggregatePhase"/> and the notch summary.</summary>
+    public static int Urgency(SessionState session) => session.Phase switch
+    {
+        SessionPhase.Error => 4,
+        SessionPhase.NeedsInput when !session.AwaitsPrompt => 3,
+        SessionPhase.Working => 2,
+        SessionPhase.NeedsInput => 1,
+        _ => 0
+    };
+
+    /// <summary>
+    /// Removes the finished (Idle or Error) sessions of <paramref name="origin"/> quiet for longer than
+    /// <paramref name="maxIdle"/>. An app keeps the process of a conversation open long after it is over, so an app
+    /// session is shown while it works and for a while after its last turn, not until the app closes; it comes back
+    /// with its next event. <paramref name="silent"/> removes them without raising Changed (startup replay).
+    /// </summary>
+    public IReadOnlyList<SessionChange> RemoveIdle(SessionOrigin origin, TimeSpan maxIdle, bool silent = false)
+    {
+        var removed = new List<SessionChange>();
+        lock (_gate)
+        {
+            var cutoff = _clock.UtcNow - maxIdle;
+            foreach (var (key, session) in _sessions.ToList())
+            {
+                if (session.Origin != origin || session.Phase is not (SessionPhase.Idle or SessionPhase.Error)) continue;
+                if (session.ActiveSubagents > 0 || session.AwaitingSubagents || session.LastEventAt >= cutoff) continue;
+                _sessions.Remove(key);
+                removed.Add(new SessionChange(SessionChangeKind.Removed, session, session.Phase));
+            }
+        }
+        if (!silent) foreach (var change in removed) Raise(change);
+        return removed;
     }
 
     /// <summary>The title a source gave the session, otherwise the name derived from its cwd.</summary>

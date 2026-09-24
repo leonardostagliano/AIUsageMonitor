@@ -151,6 +151,11 @@ The agents don't expose their state, so the app reads it from their hooks.
 3. The app tails that file and keeps a state machine per session: `SessionStart` → ready, `UserPromptSubmit` →
    working, a `permission_prompt`/`idle_prompt` notification → waiting for input, `Stop` → done, `StopFailure` →
    error, `SessionEnd` → removed. At start-up it replays the last 24 hours silently, without toasts.
+   `idle_prompt` only means the finished turn waits for the next prompt: it is ignored while the session's
+   background agents or workflows are still running, and in the card's dot and the tray icon a session waiting that
+   way never hides one that is working (a permission prompt still does). Granting a permission fires no hook, so
+   for Claude Code the app watches the session's status in Claude Code's own registry (see below) and goes back
+   to "working" as soon as the prompt is answered.
 4. **Subagents.** `SubagentStart`/`SubagentStop` keep the list of running agents. On `Stop`, Claude Code (2.1 and
    later) also lists the background agents and workflows still in flight: an agent missing from that list has
    finished even if its `SubagentStop` never arrived (interrupted, killed), an agent in the list the app never saw
@@ -331,13 +336,16 @@ a record in `%USERPROFILE%\.claude\sessions\<pid>.json` with its session id, fol
 8 seconds (typically a desktop app session, or any session while the hooks are not installed) is adopted from its
 record and follows its status: busy → working, waiting → waiting for input, back to idle → done. Sessions started
 from the desktop app are tagged `app`, and clicking them brings the app window to the front. Their tokens and costs
-come from their transcript, like any other session. Sessions reported by the hooks are left to the hooks.
+come from their transcript, like any other session. Sessions reported by the hooks are left to the hooks. The
+desktop app keeps a conversation's process open long after it is over, so a finished `app` session leaves the notch
+10 minutes after its last turn and comes back as soon as it works again; processes started ahead of time and not
+yet used by any conversation are ignored.
 
 **Cloud sessions and routines.** With *Settings → Agenti → Sessioni cloud e routine* on (the default), the app also
 reads, at the same pace as the Claude quota, the Claude Code sessions of your account that run in Anthropic's cloud
 (`GET /v1/code/sessions`, the list `claude --teleport` shows) and the latest run of each routine
 (`GET /v1/code/triggers`), with the OAuth token Claude Code already keeps on your machine. A cloud session is shown
-while it works or waits for you, and for 6 hours after its last activity; it shows the tokens and API-equivalent
+while it works or waits for you, and for 10 minutes after it finishes; it shows the tokens and API-equivalent
 cost the session reports about itself. Clicking its name opens it on claude.ai. Remote Control sessions are skipped:
 they are local sessions the hooks already report. The first read after start-up raises no notifications.
 
@@ -432,9 +440,10 @@ The version lives in tags and releases: the workflow never commits or pushes to 
 - **Desktop app sessions without hooks:** their status comes from Claude Code's session registry, so they show
   "waiting for input" and "done" but no agent list and no message.
 
-- **Claude Code, permissions:** granting a permission fires no hook, so the session stays "waiting for input"
-  until the next `Stop`, that is until the end of the turn. `AskUserQuestion` is the exception: its
-  `PostToolUse` puts the session back to "working" at once.
+- **Claude Code, permissions:** granting a permission fires no hook. With Claude Code 2.1 and later the app sees
+  the answer in Claude Code's session registry within about 3 seconds; with older versions the session stays
+  "waiting for input" until the next `Stop`, that is until the end of the turn. `AskUserQuestion` is the
+  exception: its `PostToolUse` puts the session back to "working" at once.
 - **Codex, waiting for input:** Codex exposes `PermissionRequest`, but the app does not register it, to stay out
   of the approval flow. Codex sessions therefore never show "waiting for input": they go from "working" to "done".
 - Live status depends on the hooks: without them (and, for Codex, without approval through `/hooks`) the cards

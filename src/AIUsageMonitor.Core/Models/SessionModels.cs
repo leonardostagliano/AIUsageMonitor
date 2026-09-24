@@ -116,7 +116,12 @@ public sealed record SessionState(
     string? Title = null,
     // Background workflows still in flight according to the latest Stop/SubagentStop: while the session waits on
     // them, the gap between two phases of a workflow (no agent running) is not the end of the turn.
-    int PendingWorkflows = 0)
+    int PendingWorkflows = 0,
+    // NeedsInput only because Claude Code's idle_prompt says the finished turn waits for the next prompt: less urgent
+    // than a permission, so it never hides a session at work in the aggregate state (tray icon, notch tab).
+    bool AwaitsPrompt = false,
+    // When the notification that put the session in NeedsInput arrived; null in any other phase.
+    DateTimeOffset? WaitingSince = null)
 {
     /// <summary>Italian label shown in the UI. Idle is "pronto" before the first completed turn, "finito" after.</summary>
     public string PhaseLabel => Phase switch

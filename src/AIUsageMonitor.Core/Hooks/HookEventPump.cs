@@ -116,6 +116,13 @@ public sealed class HookEventPump : IDisposable
     /// <summary>How often the processes of the sessions are checked.</summary>
     public TimeSpan LivenessSweepEvery { get; init; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// How long a finished session of the desktop app (or of an SDK host) stays after its last event. Those apps keep
+    /// the process of a conversation open long after it is over, so neither its process nor a SessionEnd says when it
+    /// is done; it comes back with its next event. Swept at the <see cref="LivenessSweepEvery"/> cadence.
+    /// </summary>
+    public TimeSpan AppIdleWindow { get; init; } = TimeSpan.FromMinutes(10);
+
     /// <summary>Where unexpected failures go (the App wires a FileLogger): the pump never lets one escape a thread-pool callback.</summary>
     public Action<Exception>? OnError { get; init; }
 
@@ -150,6 +157,7 @@ public sealed class HookEventPump : IDisposable
                 // process is gone, and the replay must not bring them back.
                 Processes?.Load();
                 EndDeadSessions(silent: true);
+                _tracker.RemoveIdle(SessionOrigin.App, AppIdleWindow, silent: true);
                 // The sessions of the desktop app that are open right now, without toasting them as new.
                 SyncClaudeRegistry(silent: true);
                 _lastRegistryScan = _clock.UtcNow;
@@ -220,10 +228,11 @@ public sealed class HookEventPump : IDisposable
                     foreach (var session in _tracker.Sessions.Where(s => s.Phase is SessionPhase.Working or SessionPhase.NeedsInput))
                         RefreshTokens(session);
                 }
-                if (Processes is not null && _clock.UtcNow - _lastLivenessSweep >= LivenessSweepEvery)
+                if (_clock.UtcNow - _lastLivenessSweep >= LivenessSweepEvery)
                 {
                     _lastLivenessSweep = _clock.UtcNow;
                     EndDeadSessions(silent: false);
+                    _tracker.RemoveIdle(SessionOrigin.App, AppIdleWindow);
                 }
                 if (_clock.UtcNow - _lastStaleSweep >= StaleSweepEvery)
                 {
