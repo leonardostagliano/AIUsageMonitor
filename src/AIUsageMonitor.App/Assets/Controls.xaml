@@ -1,38 +1,35 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <!-- Stili impliciti scuri per i controlli standard: ogni template e' esplicito, cosi' non resta nessuna cromatura
-       chiara di default (bordi grigi, sfondi bianchi, popup della ComboBox). I pennelli arrivano da Theme.xaml, che
-       va unito PRIMA di questo dizionario in App.xaml. -->
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:c="clr-namespace:AIUsageMonitor.App.Controls">
+  <!-- Stili "Premium" (spec 2026-09-24, sezione 7.2). Ogni template e' esplicito, cosi' non resta nessuna cromatura
+       chiara di default. I pennelli arrivano da Theme.xaml, unito PRIMA di questo dizionario in App.xaml. -->
 
   <Style x:Key="FocusVisual">
     <Setter Property="Control.Template">
       <Setter.Value>
         <ControlTemplate>
-          <Border BorderBrush="{StaticResource Focus}" BorderThickness="1.5" CornerRadius="8" Margin="-2"/>
+          <Border BorderBrush="{StaticResource Focus}" BorderThickness="1.5" CornerRadius="12" Margin="-3"/>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
   </Style>
 
-  <!-- Button -->
+  <!-- Button: capsula secondaria -->
   <Style TargetType="Button">
     <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
     <Setter Property="Background" Value="{StaticResource Surface}"/>
-    <Setter Property="BorderBrush" Value="{StaticResource NotchBorder}"/>
-    <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="Padding" Value="14,6"/>
-    <Setter Property="MinWidth" Value="96"/>
-    <Setter Property="MinHeight" Value="30"/>
-    <Setter Property="Margin" Value="0,2,8,2"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="Padding" Value="16,0"/>
+    <Setter Property="MinWidth" Value="88"/>
+    <Setter Property="Height" Value="32"/>
+    <Setter Property="Margin" Value="0,0,8,0"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
-          <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+          <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="16" Padding="{TemplateBinding Padding}">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
           </Border>
           <ControlTemplate.Triggers>
@@ -40,7 +37,6 @@
             <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfacePressed}"/></Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
-              <Setter TargetName="Bd" Property="Opacity" Value="0.7"/>
               <Setter Property="Cursor" Value="Arrow"/>
             </Trigger>
           </ControlTemplate.Triggers>
@@ -49,58 +45,120 @@
     </Setter>
   </Style>
 
+  <!-- Primario: capsula bianca con testo scuro -->
   <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="Background" Value="{StaticResource Accent}"/>
     <Setter Property="Foreground" Value="{StaticResource AccentText}"/>
-    <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
-          <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+          <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="16" Padding="{TemplateBinding Padding}">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
           </Border>
           <ControlTemplate.Triggers>
-            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.88"/></Trigger>
-            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.76"/></Trigger>
-            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Bd" Property="Opacity" Value="0.45"/></Trigger>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.9"/></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.78"/></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Bd" Property="Opacity" Value="0.4"/></Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
   </Style>
 
-  <!-- CheckBox -->
+  <!-- Pulsanti del notch: non prendono il focus (la finestra non si attiva mai) e, essendo Button, marcano il click
+       Handled, quindi non arrivano al pannello e non lo fissano/sbloccano. -->
+  <Style x:Key="IconButton" TargetType="Button">
+    <Setter Property="Width" Value="32"/>
+    <Setter Property="Height" Value="32"/>
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Background" Value="{StaticResource Tile}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="16">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfacePressed}"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="PillButton" TargetType="Button">
+    <Setter Property="Height" Value="24"/>
+    <Setter Property="Padding" Value="12,0"/>
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+    <Setter Property="Background" Value="{StaticResource Surface}"/>
+    <Setter Property="FontSize" Value="11"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
+            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfacePressed}"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="CardBorder" TargetType="Border">
+    <Setter Property="Background" Value="{StaticResource Card}"/>
+    <Setter Property="BorderBrush" Value="{StaticResource Hairline}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="18"/>
+    <Setter Property="Padding" Value="18"/>
+    <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
+
+  <!-- CheckBox come interruttore: etichetta a sinistra, interruttore 44x26 a destra della riga. Il pomello bianco
+       (spento) e la traccia Toggle (acceso) superano 3:1 sulla card: ColorContrastTests. -->
   <Style TargetType="CheckBox">
     <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
-    <Setter Property="Margin" Value="0,4"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Margin" Value="0,6"/>
     <Setter Property="Cursor" Value="Hand"/>
+    <!-- Scorrimento del pomello (150 ms) al cambio di stato: 18 = 44 - 20 - 3 - 3, la distanza fra le due posizioni
+         di riposo qui sotto. Vedi Controls/SwitchKnob.cs. -->
+    <Setter Property="c:SwitchKnob.Travel" Value="18"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="CheckBox">
-          <StackPanel Orientation="Horizontal" Background="Transparent">
-            <!-- Il contorno NON puo' essere NotchBorder (#1FFFFFFF): su una card composita #2D2D31 misura 1.48:1 e la
-                 casella non spuntata sparisce, mentre quella spuntata e' Accent a 5.4:1, quindi il pannello sembra
-                 "tutto acceso". Grey (4.06:1) supera il minimo 3:1 di WCAG 1.4.11 per i bordi dei controlli e resta
-                 piu' spento di TextMuted, che e' il colore dell'hover. Il rapporto e' fissato da ThemePaletteTests. -->
-            <Border x:Name="Box" Width="18" Height="18" CornerRadius="5" Background="{StaticResource Surface}"
-                    BorderBrush="{StaticResource Grey}" BorderThickness="1" VerticalAlignment="Center">
-              <Path x:Name="Check" Data="M3,9 L7,13 L15,5" Stroke="{StaticResource AccentText}" StrokeThickness="2"
-                    StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+          <DockPanel Background="Transparent" LastChildFill="True">
+            <Border x:Name="Track" DockPanel.Dock="Right" Width="44" Height="26" CornerRadius="13"
+                    Background="{StaticResource SurfacePressed}" VerticalAlignment="Center">
+              <!-- La posizione di riposo la decidono solo i trigger; SwitchKnob cerca il pomello per nome ("Knob") e
+                   anima una sua TranslateTransform che torna sempre a zero. -->
+              <Ellipse x:Name="Knob" Width="20" Height="20" Fill="White" HorizontalAlignment="Left" Margin="3,0,0,0"/>
             </Border>
-            <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
-          </StackPanel>
+            <ContentPresenter x:Name="Label" VerticalAlignment="Center" Margin="0,0,16,0" RecognizesAccessKey="True"/>
+          </DockPanel>
           <ControlTemplate.Triggers>
             <Trigger Property="IsChecked" Value="True">
-              <Setter TargetName="Box" Property="Background" Value="{StaticResource Accent}"/>
-              <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource Accent}"/>
-              <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+              <Setter TargetName="Track" Property="Background" Value="{StaticResource Toggle}"/>
+              <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+              <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0"/>
             </Trigger>
-            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource TextMuted}"/></Trigger>
-            <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{StaticResource TextDisabled}"/></Trigger>
+            <!-- Interruttore senza etichetta (i "Monitora" delle Impostazioni): niente spazio vuoto a sinistra, e il
+                 contorno di focus resta centrato sull'interruttore. -->
+            <Trigger Property="HasContent" Value="False"><Setter TargetName="Label" Property="Visibility" Value="Collapsed"/></Trigger>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Knob" Property="Opacity" Value="0.92"/></Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Foreground" Value="{StaticResource TextDisabled}"/>
+              <Setter TargetName="Track" Property="Opacity" Value="0.5"/>
+            </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
@@ -111,27 +169,29 @@
   <Style TargetType="TextBox">
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
     <Setter Property="Background" Value="{StaticResource Surface}"/>
-    <Setter Property="BorderBrush" Value="{StaticResource NotchBorder}"/>
+    <Setter Property="BorderBrush" Value="{StaticResource Hairline}"/>
     <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="CaretBrush" Value="{StaticResource TextPrimary}"/>
     <Setter Property="SelectionBrush" Value="{StaticResource Focus}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
-    <Setter Property="Padding" Value="8,5"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Padding" Value="10,0"/>
     <Setter Property="MinWidth" Value="80"/>
-    <Setter Property="Margin" Value="6,2"/>
+    <Setter Property="MinHeight" Value="36"/>
     <Setter Property="VerticalContentAlignment" Value="Center"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TextBox">
           <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
-            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10">
+            <!-- Niente Margin="{TemplateBinding Padding}": TextBox passa gia' il suo Padding a PART_ContentHost, e
+                 applicarlo due volte spingeva il testo a 20 px dal bordo invece di 10. -->
+            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
           </Border>
           <ControlTemplate.Triggers>
-            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Focus}"/></Trigger>
             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource TextMuted}"/></Trigger>
-            <Trigger Property="Validation.HasError" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Red}"/></Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Focus}"/></Trigger>
+            <Trigger Property="Validation.HasError" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Danger}"/></Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
@@ -140,8 +200,9 @@
 
   <!-- ComboBox (popup scuro incluso) -->
   <ControlTemplate x:Key="ComboToggle" TargetType="ToggleButton">
-    <Border x:Name="Bd" Background="{StaticResource Surface}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" CornerRadius="8">
-      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0" Data="M0,0 L5,5 L10,0" Stroke="{StaticResource TextMuted}" StrokeThickness="1.5"/>
+    <Border x:Name="Bd" Background="{StaticResource Surface}" BorderBrush="{StaticResource Hairline}" BorderThickness="1" CornerRadius="10">
+      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" Data="M0,0 L5,5 L10,0"
+            Stroke="{StaticResource TextMuted}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
     </Border>
     <ControlTemplate.Triggers>
       <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
@@ -151,13 +212,13 @@
 
   <Style TargetType="ComboBoxItem">
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
-    <Setter Property="Padding" Value="10,6"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Padding" Value="10,7"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ComboBoxItem">
-          <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}" Margin="4,1">
+          <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}" Margin="4,1">
             <ContentPresenter/>
           </Border>
           <ControlTemplate.Triggers>
@@ -172,10 +233,9 @@
   <Style TargetType="ComboBox">
     <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
-    <Setter Property="MinHeight" Value="30"/>
-    <Setter Property="Margin" Value="6,2"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="MinHeight" Value="36"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ComboBox">
@@ -183,35 +243,42 @@
             <ToggleButton x:Name="Toggle" Template="{StaticResource ComboToggle}" Focusable="False" ClickMode="Press"
                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"/>
             <ContentPresenter Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
-                              Margin="10,0,28,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                              Margin="12,0,32,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
             <Popup x:Name="PART_Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True"
                    PopupAnimation="Fade" Focusable="False">
-              <Border Background="{StaticResource WindowBackground}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" CornerRadius="8"
-                      MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,4,0,0" Padding="0,4">
+              <Border Background="{StaticResource Card}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" CornerRadius="12"
+                      MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,6,0,0" Padding="0,4">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                   <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
                 </ScrollViewer>
               </Border>
             </Popup>
           </Grid>
+          <ControlTemplate.Triggers>
+            <!-- Popup non guarda le animazioni di Windows: senza questo trigger la tendina entrerebbe in dissolvenza
+                 anche con le animazioni spente. -->
+            <DataTrigger Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="False">
+              <Setter TargetName="PART_Popup" Property="PopupAnimation" Value="None"/>
+            </DataTrigger>
+          </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
   </Style>
 
-  <!-- GroupBox come card -->
+  <!-- GroupBox come card (le Impostazioni usano CardBorder; resta per qualunque GroupBox futuro) -->
   <Style TargetType="GroupBox">
     <Setter Property="Margin" Value="0,0,0,12"/>
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="GroupBox">
-          <Border Background="{StaticResource Card}" BorderBrush="{StaticResource NotchBorder}" BorderThickness="1" CornerRadius="12" Padding="14,10,14,12">
+          <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Hairline}" BorderThickness="1" CornerRadius="18" Padding="18">
             <DockPanel>
-              <ContentPresenter DockPanel.Dock="Top" ContentSource="Header" Margin="0,0,0,8" TextElement.Foreground="{StaticResource TextMuted}"
-                                TextElement.FontSize="11" TextElement.FontWeight="SemiBold"/>
+              <ContentPresenter DockPanel.Dock="Top" ContentSource="Header" Margin="0,0,0,10"
+                                TextElement.FontSize="15" TextElement.FontWeight="SemiBold"/>
               <ContentPresenter/>
             </DockPanel>
           </Border>
@@ -222,20 +289,22 @@
 
   <Style TargetType="Label">
     <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
     <Setter Property="Padding" Value="0,6"/>
     <Setter Property="VerticalAlignment" Value="Center"/>
   </Style>
 
   <Style TargetType="Separator">
-    <Setter Property="Background" Value="{StaticResource NotchBorder}"/>
-    <Setter Property="Margin" Value="0,6"/>
+    <Setter Property="Background" Value="{StaticResource Hairline}"/>
+    <Setter Property="Margin" Value="0,8"/>
   </Style>
 
-  <!-- ScrollBar scura e minimale -->
+  <!-- ScrollBar sottile: pollice da 6 px che si scurisce sotto il mouse. MinWidth (e MinHeight in orizzontale) a zero:
+       lo stile di sistema li imposta alla larghezza standard di Windows (circa 17 px) e vincerebbero sulla Width. -->
   <Style TargetType="ScrollBar">
     <Setter Property="Width" Value="8"/>
+    <Setter Property="MinWidth" Value="0"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Template">
       <Setter.Value>
@@ -264,7 +333,10 @@
                 <Thumb>
                   <Thumb.Template>
                     <ControlTemplate TargetType="Thumb">
-                      <Border Background="{StaticResource Grey}" CornerRadius="4" Opacity="0.6" Margin="1"/>
+                      <Border x:Name="Bd" Background="{StaticResource SurfacePressed}" CornerRadius="3" Margin="1"/>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource Idle}"/></Trigger>
+                      </ControlTemplate.Triggers>
                     </ControlTemplate>
                   </Thumb.Template>
                 </Thumb>
@@ -286,58 +358,98 @@
       </Setter.Value>
     </Setter>
     <Style.Triggers>
-      <Trigger Property="Orientation" Value="Horizontal"><Setter Property="Height" Value="8"/><Setter Property="Width" Value="Auto"/></Trigger>
+      <Trigger Property="Orientation" Value="Horizontal">
+        <Setter Property="Height" Value="8"/><Setter Property="MinHeight" Value="0"/><Setter Property="Width" Value="Auto"/>
+      </Trigger>
     </Style.Triggers>
   </Style>
 
-  <!-- ProgressBar sottile (download degli aggiornamenti). ProgressBar dimensiona da solo PART_Indicator rispetto a
-       PART_Track, quindi i due nomi sono obbligatori; in modo indeterminato lo porta a tutta larghezza e qui pulsa. -->
+  <!-- ProgressBar da 8 px con il gradiente del tono normale e il riflesso (download degli aggiornamenti). ProgressBar
+       dimensiona da solo PART_Indicator rispetto a PART_Track, quindi i due nomi sono obbligatori. Il riflesso gira
+       solo con le animazioni di Windows attive e solo mentre la barra e' visibile; in modo indeterminato l'indicatore
+       pulsa, alle stesse condizioni. -->
   <Style TargetType="ProgressBar">
-    <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+    <Setter Property="Foreground" Value="{StaticResource ToneNormalBrush}"/>
     <Setter Property="Background" Value="{StaticResource BarTrack}"/>
-    <Setter Property="Height" Value="6"/>
+    <Setter Property="Height" Value="8"/>
     <Setter Property="SnapsToDevicePixels" Value="True"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ProgressBar">
           <Grid x:Name="PART_Track">
-            <Border Background="{TemplateBinding Background}" CornerRadius="3"/>
-            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="3" HorizontalAlignment="Left"/>
+            <Border Background="{TemplateBinding Background}" CornerRadius="4"/>
+            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left">
+              <!-- Il riflesso copre tutta la parte piena, con gli stessi angoli arrotondati. La banda sta nel pennello
+                   (il 40 % della larghezza, come in UsageBar) e scorre spostandone la RelativeTransform, in frazioni
+                   della parte piena: da -0,4 (appena fuori a sinistra) a 1 (appena fuori a destra), qualunque sia la
+                   larghezza della barra. -->
+              <Border x:Name="Sheen" CornerRadius="4" Opacity="0">
+                <Border.Background>
+                  <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                    <LinearGradientBrush.RelativeTransform><TranslateTransform X="-0.4"/></LinearGradientBrush.RelativeTransform>
+                    <GradientStop Offset="0" Color="{StaticResource SheenClearColor}"/>
+                    <GradientStop Offset="0.2" Color="{StaticResource SheenPeakColor}"/>
+                    <GradientStop Offset="0.4" Color="{StaticResource SheenClearColor}"/>
+                  </LinearGradientBrush>
+                </Border.Background>
+              </Border>
+            </Border>
           </Grid>
           <ControlTemplate.Triggers>
-            <Trigger Property="IsIndeterminate" Value="True">
-              <Trigger.EnterActions>
+            <!-- Passaggio in 1,7 s, poi pausa fino a 2,8 s (spec, sezione 5). -->
+            <MultiDataTrigger>
+              <MultiDataTrigger.Conditions>
+                <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+                <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+              </MultiDataTrigger.Conditions>
+              <Setter TargetName="Sheen" Property="Opacity" Value="1"/>
+              <MultiDataTrigger.EnterActions>
+                <BeginStoryboard x:Name="SheenLoop">
+                  <Storyboard Duration="0:0:2.8" RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+                    <DoubleAnimation Storyboard.TargetName="Sheen" From="-0.4" To="1" Duration="0:0:1.7"
+                                     Storyboard.TargetProperty="(Border.Background).(Brush.RelativeTransform).(TranslateTransform.X)"/>
+                  </Storyboard>
+                </BeginStoryboard>
+              </MultiDataTrigger.EnterActions>
+              <MultiDataTrigger.ExitActions><StopStoryboard BeginStoryboardName="SheenLoop"/></MultiDataTrigger.ExitActions>
+            </MultiDataTrigger>
+            <!-- Anche la pulsazione e' un ciclo: solo con le animazioni di Windows attive, a barra visibile e a 30 fps,
+                 come il riflesso; senza animazioni l'indicatore indeterminato resta pieno e fermo. -->
+            <MultiDataTrigger>
+              <MultiDataTrigger.Conditions>
+                <Condition Binding="{Binding IsIndeterminate, RelativeSource={RelativeSource Self}}" Value="True"/>
+                <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
+                <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+              </MultiDataTrigger.Conditions>
+              <MultiDataTrigger.EnterActions>
                 <BeginStoryboard x:Name="Pulse">
-                  <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                  <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="30">
                     <DoubleAnimation Storyboard.TargetName="PART_Indicator" Storyboard.TargetProperty="Opacity" From="1" To="0.35" Duration="0:0:0.8"/>
                   </Storyboard>
                 </BeginStoryboard>
-              </Trigger.EnterActions>
-              <Trigger.ExitActions>
-                <StopStoryboard BeginStoryboardName="Pulse"/>
-              </Trigger.ExitActions>
-            </Trigger>
+              </MultiDataTrigger.EnterActions>
+              <MultiDataTrigger.ExitActions><StopStoryboard BeginStoryboardName="Pulse"/></MultiDataTrigger.ExitActions>
+            </MultiDataTrigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
   </Style>
 
-  <!-- Expander (note della release): intestazione piatta con chevron che ruota, nessuna cromatura chiara. Il
-       ToggleButton ha un template esplicito, quindi lo stile implicito dei Button non lo tocca. -->
+  <!-- Expander (note della release): intestazione piatta con chevron che ruota. -->
   <ControlTemplate x:Key="ExpanderHeaderToggle" TargetType="ToggleButton">
-    <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="4,5">
+    <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="6,6">
       <StackPanel Orientation="Horizontal">
         <Path x:Name="Chevron" Data="M0,0 L4,4 L0,8" Stroke="{StaticResource TextMuted}" StrokeThickness="1.5"
               StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" VerticalAlignment="Center"
-              Margin="2,0,8,0" RenderTransformOrigin="0.5,0.5">
+              Margin="2,0,10,0" RenderTransformOrigin="0.5,0.5">
           <Path.RenderTransform><RotateTransform Angle="0"/></Path.RenderTransform>
         </Path>
         <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/>
       </StackPanel>
     </Border>
     <ControlTemplate.Triggers>
-      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHover}"/></Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{StaticResource Tile}"/></Trigger>
       <Trigger Property="IsChecked" Value="True">
         <Setter TargetName="Chevron" Property="RenderTransform">
           <Setter.Value><RotateTransform Angle="90"/></Setter.Value>
@@ -348,8 +460,8 @@
 
   <Style TargetType="Expander">
     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-    <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
-    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Expander">
@@ -358,11 +470,75 @@
                           FocusVisualStyle="{StaticResource FocusVisual}" Foreground="{TemplateBinding Foreground}"
                           Content="{TemplateBinding Header}" ContentTemplate="{TemplateBinding HeaderTemplate}"
                           IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"/>
-            <ContentPresenter x:Name="ExpandSite" Visibility="Collapsed" Margin="0,2,0,0"/>
+            <ContentPresenter x:Name="ExpandSite" Visibility="Collapsed" Margin="0,4,0,0"/>
           </DockPanel>
           <ControlTemplate.Triggers>
             <Trigger Property="IsExpanded" Value="True"><Setter TargetName="ExpandSite" Property="Visibility" Value="Visible"/></Trigger>
             <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{StaticResource TextDisabled}"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Schede segmentate: capsula Tile con le schede in una riga; la scheda attiva e' una capsula Surface. SegmentPanel
+       da' a ogni scheda la larghezza della sua intestazione piu' una parte uguale dello spazio che avanza: a colonne
+       uguali "Aggiornamenti" si tagliava, anche alla larghezza di partenza delle Impostazioni (760). Il contenuto sta in
+       PART_SelectedContentHost, che la finestra Impostazioni fa entrare in dissolvenza. -->
+  <Style TargetType="TabControl">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="TabControl">
+          <!-- Tastiera come nel template di sistema, perche' un pannello qualunque non porta le impostazioni di TabPanel.
+               Tab entra una volta sola nella riga delle schede (Once) e poi passa al contenuto: senza, si fermava su
+               ogni scheda e la selezionava, e il contenuto raggiungibile restava solo quello dell'ultima. Le frecce
+               scorrono le schede e dall'ultima tornano alla prima (Cycle); dal contenuto non escono verso le schede
+               (Contained). -->
+          <DockPanel KeyboardNavigation.TabNavigation="Local">
+            <Border DockPanel.Dock="Top" Background="{StaticResource Tile}" CornerRadius="14" Padding="4" Margin="0,0,0,16">
+              <c:SegmentPanel IsItemsHost="True" KeyboardNavigation.TabIndex="1"
+                              KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+            </Border>
+            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" KeyboardNavigation.TabIndex="2"
+                              KeyboardNavigation.TabNavigation="Local" KeyboardNavigation.DirectionalNavigation="Contained"/>
+          </DockPanel>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style TargetType="TabItem">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
+    <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+    <Setter Property="FontFamily" Value="{StaticResource TextFont}"/>
+    <Setter Property="FontSize" Value="13"/>
+    <Setter Property="Height" Value="32"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="TabItem">
+          <Border x:Name="Bd" Background="Transparent" CornerRadius="10" Padding="10,0">
+            <Grid>
+              <!-- Copia invisibile dell'intestazione in semibold (intestazioni di testo, come nelle Impostazioni): la
+                   scheda e' gia' larga quanto la versione in grassetto, quindi quando diventa attiva non si allarga e
+                   SegmentPanel non sposta le altre. -->
+              <TextBlock Text="{Binding Header, RelativeSource={RelativeSource TemplatedParent}}" FontWeight="SemiBold"
+                         Visibility="Hidden" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <ContentPresenter x:Name="HeaderHost" ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+            </Grid>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{StaticResource TextPrimary}"/></Trigger>
+            <!-- Il grassetto va solo sull'intestazione: il contenuto della scheda eredita dal TabItem (albero logico),
+                 quindi un FontWeight sul TabItem renderebbe semibold tutto il testo della scheda. -->
+            <Trigger Property="IsSelected" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface}"/>
+              <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+              <Setter TargetName="HeaderHost" Property="TextElement.FontWeight" Value="SemiBold"/>
+            </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
