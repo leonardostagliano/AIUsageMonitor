@@ -2,12 +2,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.App.Updates;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Presentation;
 using AIUsageMonitor.Core.Settings;
 
 namespace AIUsageMonitor.App.Settings;
@@ -22,6 +24,9 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     private string _pricingStatus = "";
     private string _usdPerEurText;
     private string? _usdPerEurError;
+    private int _selectedTabIndex;
+    private Brush _claudeHookBrush = Brushes.Transparent;
+    private Brush _codexHookBrush = Brushes.Transparent;
     private readonly RelayCommand _save;
     private readonly Action _pricingChanged;
 
@@ -120,6 +125,22 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     public string CodexHookStatus { get => _codexHookStatus; private set => Set(ref _codexHookStatus, value); }
     public string EventsFile => _services.Paths.EventsFile;
 
+    /// <summary>Scheda aperta (non salvata): --updates e la notifica di aggiornamento aprono Aggiornamenti.</summary>
+    public int SelectedTabIndex { get => _selectedTabIndex; set => Set(ref _selectedTabIndex, value); }
+
+    /// <summary>Piano dall'ultimo snapshot di quota, sotto il nome dell'agente; null se non ce n'e' ancora uno.</summary>
+    public string? ClaudePlan => Plan(AgentKind.Claude);
+    public string? CodexPlan => Plan(AgentKind.Codex);
+    public Visibility ClaudePlanVisibility => ClaudePlan is null ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility CodexPlanVisibility => CodexPlan is null ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>Pallino dello stato degli hook: installati verde, parziali ambra, non validi rosso, assenti grigio.</summary>
+    public Brush ClaudeHookBrush { get => _claudeHookBrush; private set => Set(ref _claudeHookBrush, value); }
+    public Brush CodexHookBrush { get => _codexHookBrush; private set => Set(ref _codexHookBrush, value); }
+
+    private string? Plan(AgentKind agent) =>
+        _services.Usage.Current.TryGetValue(agent, out var snapshot) && !string.IsNullOrWhiteSpace(snapshot.PlanLabel) ? snapshot.PlanLabel : null;
+
     private void Save()
     {
         if (UsdPerEurError is not null) return;
@@ -150,9 +171,21 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
 
     private void RefreshHookStatus()
     {
-        ClaudeHookStatus = Describe(_services.HookStatus(AgentKind.Claude));
-        CodexHookStatus = Describe(_services.HookStatus(AgentKind.Codex));
+        var claude = _services.HookStatus(AgentKind.Claude);
+        var codex = _services.HookStatus(AgentKind.Codex);
+        ClaudeHookStatus = Describe(claude);
+        CodexHookStatus = Describe(codex);
+        ClaudeHookBrush = HookBrush(claude);
+        CodexHookBrush = HookBrush(codex);
     }
+
+    private static Brush HookBrush(HookStatusReport report) => PhaseVisuals.ToneBrush(report.Status switch
+    {
+        HookStatus.Installed => PhaseTone.Working,
+        HookStatus.Partial => PhaseTone.NeedsInput,
+        HookStatus.ConfigInvalid => PhaseTone.Error,
+        _ => PhaseTone.Idle
+    });
 
     private static string Describe(HookStatusReport report) => report.Status switch
     {
