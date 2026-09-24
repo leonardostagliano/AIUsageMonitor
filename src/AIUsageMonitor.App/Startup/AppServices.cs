@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using AIUsageMonitor.App.Common;
@@ -7,6 +9,7 @@ using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
 using AIUsageMonitor.Core.Pricing;
+using AIUsageMonitor.Core.Sessions;
 using AIUsageMonitor.Core.Settings;
 using AIUsageMonitor.Core.Terminal;
 using AIUsageMonitor.Core.Updates;
@@ -32,6 +35,9 @@ public sealed class AppServices : IDisposable
     public HookInstaller Hooks { get; }
     public HookEventPump Pump { get; }
     public TerminalRegistry Terminals { get; }
+
+    /// <summary>Quale processo esegue ogni sessione: chiude quelle il cui terminale e' stato chiuso senza SessionEnd.</summary>
+    public SessionProcessRegistry Processes { get; }
 
     /// <summary>Updater delle release GitHub: controllo, collegamento dell'account, download e installazione.</summary>
     public UpdateService Updates { get; }
@@ -60,6 +66,7 @@ public sealed class AppServices : IDisposable
     private FileSystemWatcher? _codexWatcher;
     private Timer? _codexDebounce;
     private readonly GitHubReleaseTransport _updateTransport;
+    private readonly CloudSessionPoller _cloudPoller;
 
     private AppServices(AppPaths paths)
     {
@@ -83,9 +90,9 @@ public sealed class AppServices : IDisposable
             };
         }) { OnError = ex => Log.Error("UsageScheduler", ex) };
 
+        var userAgent = $"AIUsageMonitor/{BuildInfo.CurrentVersion}";
         // Client dedicato: listino e tasso sono GET anonime verso GitHub e BCE, mai con le intestazioni della quota.
         var pricingHttp = new HttpClient();
-        var userAgent = $"AIUsageMonitor/{BuildInfo.CurrentVersion}";
         Pricing = new PricingService(
             new PriceListService(new PriceListServiceOptions
             {
@@ -114,10 +121,26 @@ public sealed class AppServices : IDisposable
         var resolver = new CodexSessionResolver(paths.CodexSessionsDir, Clock);
         Sessions = new SessionTracker(Clock, (agent, id) => agent == AgentKind.Codex ? resolver.ResolveCwd(id) : null) { OnError = ex => Log.Error("SessionTracker", ex) };
         Hooks = new HookInstaller(paths, Clock);
-        var tokens = new AppTokenSource(paths, Clock);
+        // Sessioni nel cloud (claude.ai/code, app desktop e mobile, routine): il feed ne tiene anche l'uso dichiarato,
+        // che il token source passa al tracker come fosse il totale di un transcript.
+        var cloud = new CloudSessionFeed();
+        var tokens = new AppTokenSource(paths, Clock, cloud);
+        // Chiudere il terminale (o un crash, o il riavvio di Windows) uccide l'agente prima che mandi SessionEnd: il
+        // registro lega ogni sessione al suo processo e la pump chiude quelle il cui processo non c'e' piu'.
+        var probe = new WindowsProcessProbe();
+        Processes = new SessionProcessRegistry(paths.SessionProcessesFile, probe, Clock)
+        {
+            OnError = ex => Log.Error("SessionProcesses", ex)
+        };
         Pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), Sessions, paths, Clock)
         {
             OnError = ex => Log.Error("HookEventPump", ex),
+            OnInfo = Log.Info,
+            Processes = Processes,
+            // Le sessioni che nessun hook riporta (app desktop, SDK, hook non installati) dal registro che Claude Code
+            // tiene in ~/.claude/sessions; lo stesso registro dice alla pump quale processo esegue ogni sessione Claude.
+            ClaudeRegistry = new ClaudeRegistrySessionFeed(new ClaudeSessionRegistryReader(paths.ClaudeSessionsDir), probe, Clock,
+                new ClaudeTranscriptFinder(paths.ClaudeProjectsDir, Clock)),
             // Fallback per i thread figli di Codex finche' i suoi hook SubagentStart/SubagentStop non sono attivi
             // (i gruppi vanno approvati in Codex con /hooks): lo scanner legge i rollout e la pump li trasforma
             // negli stessi eventi del bridge. La pump lo spegne da sola per le sessioni Codex i cui hook riportano
@@ -129,10 +152,19 @@ public sealed class AppServices : IDisposable
             TokenSource = tokens
         };
 
+        // Legge le sessioni cloud alla cadenza della quota di Claude, su un suo ciclo in background; gli eventi passano
+        // dalla pump come quelli degli hook. La prima lettura e' silenziosa (nessun toast per cio' che era gia' in corso).
+        _cloudPoller = new CloudSessionPoller(new ClaudeCloudSessionsClient(paths, http, Clock, userAgent).FetchAsync, cloud, Pump, Clock, CloudInterval)
+        {
+            OnInfo = Log.Info,
+            OnError = ex => Log.Error("Sessioni cloud", ex)
+        };
+        _cloudPoller.Applied += () => StateChanged?.Invoke();
+
         // "Vai al terminale": il pane di Herdr e la catena dei processi vanno risolti quando l'evento arriva, perche'
         // il processo che ha eseguito l'hook vive pochi secondi mentre la finestra del terminale resta.
         var herdr = new HerdrClient { OnLog = Log.Info };
-        Terminals = new TerminalRegistry(Clock) { OnLog = Log.Info };
+        Terminals = new TerminalRegistry(Clock) { OnLog = Log.Info, OnAgentProcess = BindAgentProcess };
         var wmux = new WmuxClient(WmuxPipeTransport.ForCurrentUser(Log.Info).SendAsync, Log.Info);
         _focuser = new TerminalFocuser(herdr, wmux, Terminals, Log.Info);
 
@@ -149,7 +181,7 @@ public sealed class AppServices : IDisposable
             else Terminals.Observe(change.Session);
             StateChanged?.Invoke();
         };
-        Settings.Changed += _ => { RefreshAll(); StateChanged?.Invoke(); };
+        Settings.Changed += _ => { RefreshAll(); _cloudPoller.PollNow(); StateChanged?.Invoke(); };
 
         // Updater: la sessione GitHub e' dell'app (cifrata con DPAPI), il login passa da Git Credential Manager e
         // l'installazione sostituisce l'exe a file singolo. Qui si costruisce soltanto: la IO parte con Start().
@@ -185,6 +217,27 @@ public sealed class AppServices : IDisposable
 
     public static AppServices Create() => new(AppPaths.Default);
 
+    /// <summary>Intervallo delle letture delle sessioni cloud: quello della quota di Claude, null con l'opzione o Claude spenti.</summary>
+    private TimeSpan? CloudInterval()
+    {
+        var s = Settings.Current;
+        return s is { ClaudeEnabled: true, ShowCloudSessions: true } ? TimeSpan.FromSeconds(Math.Max(30, s.ClaudeRefreshSeconds)) : null;
+    }
+
+    /// <summary>Lega la sessione al processo dell'agente trovato risalendo dal ppid dell'hook (thread del pool, mai solleva).</summary>
+    private void BindAgentProcess(AgentKind agent, string sessionId, int pid)
+    {
+        try
+        {
+            if (Processes.Bind(agent, sessionId, pid, BindingSource.Terminal))
+                Log.Info($"Sessione {agent} {sessionId} legata al processo {pid}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Legame della sessione {agent} {sessionId} al processo {pid}", ex);
+        }
+    }
+
     public void Start()
     {
         // "Vai al terminale" ha bisogno del campo host che l'hook scrive in SessionStart/UserPromptSubmit: se gli hook
@@ -207,6 +260,7 @@ public sealed class AppServices : IDisposable
         }
 
         Pump.Start(); // silent replay first, so listeners attached later never see history
+        _cloudPoller.Start();
         // Il replay ricostruisce le sessioni con ApplySilently, che per definizione non alza Changed: senza questo
         // giro il registro resterebbe vuoto a ogni avvio (autostart compreso) per tutte le sessioni gia' esistenti,
         // e il click su quelle righe perderebbe pane, WT_SESSION e VSCODE_PID finche' la sessione non emette un nuovo
@@ -267,6 +321,7 @@ public sealed class AppServices : IDisposable
     public async Task RefreshAgentAsync(AgentKind agent)
     {
         _ = Pricing.RefreshIfStaleAsync();
+        if (agent == AgentKind.Claude) _cloudPoller.PollNow();
         try
         {
             await Task.WhenAll(Scheduler.RefreshNowAsync(agent), Pump.RefreshTokensNowAsync(agent)).ConfigureAwait(false);
@@ -341,7 +396,31 @@ public sealed class AppServices : IDisposable
     /// scansione dei processi) e non solleva mai: torna false quando nessuna strategia ha funzionato, e in quel caso
     /// il chiamante mostra il toast "Terminale non trovato".
     /// </summary>
-    public Task<bool> FocusTerminalAsync(SessionState session) => _focuser.FocusAsync(session);
+    /// <remarks>Una sessione nel cloud non ha terminale: il click apre la sua pagina su claude.ai nel browser.</remarks>
+    public Task<bool> FocusTerminalAsync(SessionState session) =>
+        session.Origin is SessionOrigin.Cloud or SessionOrigin.Routine
+            ? Task.Run(() => OpenCloudSession(session))
+            : _focuser.FocusAsync(session);
+
+    /// <summary>
+    /// Apre la pagina della sessione su claude.ai. L'indirizzo lo costruisce CloudSession.WebUrl (sempre
+    /// https://claude.ai/code/ con l'id codificato), quindi UseShellExecute apre solo il browser.
+    /// </summary>
+    private bool OpenCloudSession(SessionState session)
+    {
+        var url = CloudSession.WebUrl(session.SessionId);
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+            Log.Info($"Sessione cloud {session.SessionId}: aperta {url}");
+            return true;
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or PlatformNotSupportedException)
+        {
+            Log.Error($"Sessione cloud {session.SessionId}: {url} non aperta", ex);
+            return false;
+        }
+    }
 
     /// <summary>
     /// Alza un <see cref="Notice"/> per conto di chi non possiede l'icona della tray (i ViewModel del notch): il
@@ -400,6 +479,7 @@ public sealed class AppServices : IDisposable
         DisposeQuietly(Updates, "UpdateService");
         DisposeQuietly(_updateTransport, "GitHubReleaseTransport");
         DisposeQuietly(Pricing, "PricingService");
+        DisposeQuietly(_cloudPoller, "CloudSessionPoller");
         _codexWatcher?.Dispose();
         _codexDebounce?.Dispose();
         Scheduler.Dispose();

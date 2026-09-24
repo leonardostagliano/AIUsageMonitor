@@ -89,9 +89,24 @@ public static class NotchPresentation
         return first.Length == 1 && char.IsLetterOrDigit(first[0]) ? first.ToUpper(CultureInfo.GetCultureInfo("it-IT")) : "•";
     }
 
-    /// <summary>"al lavoro · 2 agenti · 1m": the phase label of the session and the time since its last event.</summary>
-    public static string SessionSubtitle(SessionState session, DateTimeOffset now) =>
-        $"{session.PhaseLabel} · {CountdownFormatter.Since(session.LastEventAt, now)}";
+    /// <summary>
+    /// "al lavoro · 2 agenti · 1m": the phase label of the session and the time since its last event, after where the
+    /// session runs when it is not a terminal ("cloud · finito · 2h", "app · attende input · 1m").
+    /// </summary>
+    public static string SessionSubtitle(SessionState session, DateTimeOffset now)
+    {
+        var subtitle = $"{session.PhaseLabel} · {CountdownFormatter.Since(session.LastEventAt, now)}";
+        return OriginLabel(session.Origin) is { } origin ? $"{origin} · {subtitle}" : subtitle;
+    }
+
+    /// <summary>The short tag of a session that does not run in a terminal; null for a terminal session.</summary>
+    public static string? OriginLabel(SessionOrigin origin) => origin switch
+    {
+        SessionOrigin.App => "app",
+        SessionOrigin.Cloud => "cloud",
+        SessionOrigin.Routine => "routine",
+        _ => null
+    };
 
     /// <summary>Waiting for input beats errors, errors beat work; nothing when no session is busy or in trouble.</summary>
     public static SummaryPill? Summary(IEnumerable<SessionState> sessions)

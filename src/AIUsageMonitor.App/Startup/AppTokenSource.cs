@@ -1,6 +1,8 @@
+using System.IO;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Sessions;
 
 namespace AIUsageMonitor.App.Startup;
 
@@ -43,10 +45,20 @@ public sealed class AppTokenSource : ITokenSource
     /// </summary>
     private readonly Dictionary<string, HashSet<string>> _codexChildren = new(StringComparer.OrdinalIgnoreCase);
 
-    public AppTokenSource(AppPaths paths, IClock clock) => _codex = new CodexTokenCounter(paths.CodexSessionsDir, clock);
+    /// <summary>The usage the cloud sessions report about themselves (their transcript is not on this machine).</summary>
+    private readonly CloudSessionFeed? _cloud;
+
+    public AppTokenSource(AppPaths paths, IClock clock, CloudSessionFeed? cloud = null)
+    {
+        _codex = new CodexTokenCounter(paths.CodexSessionsDir, clock);
+        _cloud = cloud;
+    }
+
+    private static bool IsCloud(SessionState session) => session.Origin is SessionOrigin.Cloud or SessionOrigin.Routine;
 
     public TokenUsage? SessionTokens(SessionState session)
     {
+        if (IsCloud(session)) return _cloud?.UsageOf(session.SessionId) is { } usage ? NullIfEmpty(usage.ToTokenUsage()) : null;
         if (session.Agent == AgentKind.Codex)
             return ReadCodexLedger(session.SessionId) is { } ledger ? NullIfEmpty(ledger.ToTokenUsage()) : null;
 
@@ -112,6 +124,8 @@ public sealed class AppTokenSource : ITokenSource
 
     public UsageLedger? SessionLedger(SessionState session)
     {
+        if (IsCloud(session))
+            return _cloud?.UsageOf(session.SessionId) is { } usage ? NullIfEmpty(usage.ToLedger(_cloud.ModelOf(session.SessionId))) : null;
         // Same rollout SessionTokens has just read.
         if (session.Agent == AgentKind.Codex) return KnownCodexLedger(session.SessionId);
         if (string.IsNullOrWhiteSpace(session.TranscriptPath)) return null;
@@ -139,6 +153,25 @@ public sealed class AppTokenSource : ITokenSource
             if (ledger is not null) ledgers[subagent.AgentId] = ledger;
         }
         return ledgers.Count == 0 ? null : ledgers;
+    }
+
+    /// <summary>
+    /// Last write to a Claude subagent's transcript (the path SubagentStop delivered, or the one found under the
+    /// session's directory while it runs). Codex children are the rollout scanner's business: null.
+    /// </summary>
+    public DateTimeOffset? SubagentLastActivity(SessionState session, SubagentState subagent)
+    {
+        if (session.Agent != AgentKind.Claude) return null;
+        var path = subagent.TranscriptPath ?? _claudeAgents.Locate(session.TranscriptPath, session.SessionId, subagent.AgentId);
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try
+        {
+            return File.Exists(path) ? new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

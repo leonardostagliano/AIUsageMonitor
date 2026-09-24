@@ -8,6 +8,11 @@ const os = require('node:os');
 const path = require('node:path');
 
 const MAX_MESSAGE = 200;
+// Claude Code lists the background work still in flight on Stop/SubagentStop; only agents and workflows matter to
+// the monitor. Past this many entries the list is dropped (null, "unknown") rather than cut: a cut list would make the
+// app mark the agents left out as finished.
+const MAX_BACKGROUND_TASKS = 100;
+const TRACKED_TASK_TYPES = new Set(['subagent', 'workflow']);
 
 function str(value) {
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -21,6 +26,21 @@ function truncate(value) {
   // surrogate makes the JSON unreadable for strict UTF-16 consumers (.NET).
   const last = out.charCodeAt(out.length - 1);
   if (last >= 0xD800 && last <= 0xDBFF) out = out.slice(0, -1);
+  return out;
+}
+
+// null when the payload has no list at all (older Claude Code, Codex): the app must not read that as "nothing runs".
+function backgroundTasks(value) {
+  if (!Array.isArray(value)) return null;
+  const out = [];
+  for (const task of value) {
+    if (!task || typeof task !== 'object') continue;
+    const id = task.id == null ? null : String(task.id);
+    const type = str(task.type);
+    if (!id || type === null || !TRACKED_TASK_TYPES.has(type)) continue;
+    if (out.length >= MAX_BACKGROUND_TASKS) return null;
+    out.push({ id, type, agent_type: str(task.agent_type), name: truncate(task.name) });
+  }
   return out;
 }
 
@@ -40,6 +60,8 @@ function buildLine(agent, payload) {
     term_program: str(process.env.TERM_PROGRAM),
     vscode_pid: process.env.VSCODE_PID && /^\d+$/.test(process.env.VSCODE_PID) ? Number(process.env.VSCODE_PID) : null,
     wmux_pty: str(process.env.WMUX_PTY_ID),
+    // Where the session was started: "cli", "claude-desktop", "claude-vscode", "sdk-ts"... (Claude Code only).
+    entrypoint: str(process.env.CLAUDE_CODE_ENTRYPOINT),
   } : null;
   return JSON.stringify({
     ts: new Date().toISOString(),
@@ -54,6 +76,7 @@ function buildLine(agent, payload) {
     agent_type: isSubagentEvent ? str(payload.agent_type) : null,
     transcript_path: str(payload.transcript_path),
     agent_transcript_path: event === 'SubagentStop' ? str(payload.agent_transcript_path) : null,
+    background_tasks: (event === 'Stop' || event === 'SubagentStop') ? backgroundTasks(payload.background_tasks) : null,
     host,
   });
 }

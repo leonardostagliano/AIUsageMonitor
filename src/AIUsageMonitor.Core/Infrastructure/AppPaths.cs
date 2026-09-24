@@ -19,6 +19,11 @@ public sealed class AppPaths
     // Agents (read-only for us, except the hook config files)
     public string ClaudeCredentialsFile => Path.Combine(HomeDir, ".claude", ".credentials.json");
     public string ClaudeSettingsFile => Path.Combine(HomeDir, ".claude", "settings.json");
+    /// <summary>Claude Code's registry of running sessions, one <c>&lt;pid&gt;.json</c> per process.</summary>
+    public string ClaudeSessionsDir => Path.Combine(HomeDir, ".claude", "sessions");
+    public string ClaudeProjectsDir => Path.Combine(HomeDir, ".claude", "projects");
+    /// <summary>Claude Code's global config: the organization of the logged-in account, for the cloud sessions API.</summary>
+    public string ClaudeGlobalConfigFile => Path.Combine(HomeDir, ".claude.json");
     public string CodexSessionsDir => Path.Combine(HomeDir, ".codex", "sessions");
     public string CodexHooksFile => Path.Combine(HomeDir, ".codex", "hooks.json");
     public string CodexConfigFile => Path.Combine(HomeDir, ".codex", "config.toml");
@@ -34,6 +39,9 @@ public sealed class AppPaths
     public string SettingsFile => Path.Combine(LocalAppDataDir, "settings.json");
     public string UsageCacheFile => Path.Combine(LocalAppDataDir, "usage-cache.json");
     public string LogsDir => Path.Combine(LocalAppDataDir, "logs");
+
+    /// <summary>Which process runs each session, to end the sessions whose terminal was closed (SessionProcessRegistry).</summary>
+    public string SessionProcessesFile => Path.Combine(LocalAppDataDir, "session-processes.json");
 
     // Costi: listino prezzi scaricato, override manuale, tasso BCE
     public string PricesCacheFile => Path.Combine(LocalAppDataDir, "prices-cache.json");

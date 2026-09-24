@@ -92,6 +92,12 @@ public class NotchPresentationTests
             Subagents = [new("x", "workflow", SubagentPhase.Running, Now, null, null, TokenUsage.Zero), new("y", "workflow", SubagentPhase.Running, Now, null, null, TokenUsage.Zero)]
         };
         Assert.Equal("al lavoro · 2 agenti · 1m", NotchPresentation.SessionSubtitle(withAgents, Now));
+        Assert.Equal("cloud · al lavoro · 1m", NotchPresentation.SessionSubtitle(
+            Session("g", SessionPhase.Working, last: Now.AddMinutes(-1)) with { Origin = SessionOrigin.Cloud }, Now));
+        Assert.Equal("routine · finito · 12m", NotchPresentation.SessionSubtitle(
+            Session("h", SessionPhase.Idle, last: Now.AddMinutes(-12)) with { Origin = SessionOrigin.Routine }, Now));
+        Assert.Equal("app · attende input · 4m", NotchPresentation.SessionSubtitle(
+            Session("i", SessionPhase.NeedsInput, last: Now.AddMinutes(-4)) with { Origin = SessionOrigin.App }, Now));
     }
 
     [Fact]

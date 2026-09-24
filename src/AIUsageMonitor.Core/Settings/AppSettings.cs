@@ -15,6 +15,12 @@ public sealed class AppSettings
     /// </summary>
     public bool CodexSubagentFallback { get; set; } = true;
 
+    /// <summary>
+    /// Mostra anche le sessioni Claude Code nel cloud (claude.ai/code, app desktop e mobile) e le esecuzioni delle
+    /// routine, lette con il token OAuth di Claude Code dalle stesse API che usa la CLI. Spento, nessuna chiamata.
+    /// </summary>
+    public bool ShowCloudSessions { get; set; } = true;
+
     public int MonitorIndex { get; set; }
     public int VerticalOffset { get; set; }
     public int CollapseDelayMs { get; set; } = 400;
