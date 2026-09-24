@@ -5,10 +5,11 @@ namespace AIUsageMonitor.App.Notch;
 
 public static class PhaseVisuals
 {
-    public static readonly Color Green = Color.FromRgb(0x3F, 0xB9, 0x50);
-    public static readonly Color Amber = Color.FromRgb(0xD2, 0x99, 0x22);
-    public static readonly Color Red = Color.FromRgb(0xF8, 0x51, 0x49);
-    public static readonly Color Grey = Color.FromRgb(0x8B, 0x8B, 0x93);
+    // Uguali a Success, Warning, Danger e Idle di Theme.xaml: pallini della tray e pennelli di fase costruiti in codice.
+    public static readonly Color Green = Color.FromRgb(0x4A, 0xDE, 0x80);
+    public static readonly Color Amber = Color.FromRgb(0xFB, 0xBF, 0x24);
+    public static readonly Color Red = Color.FromRgb(0xF8, 0x71, 0x71);
+    public static readonly Color Grey = Color.FromRgb(0x71, 0x71, 0x7A);
 
     public static string Label(SessionPhase? phase) => phase switch
     {
