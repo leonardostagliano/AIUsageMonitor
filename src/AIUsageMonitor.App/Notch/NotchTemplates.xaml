@@ -3,8 +3,9 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:c="clr-namespace:AIUsageMonitor.App.Controls">
 
-  <!-- Pulsazione "al lavoro": un alone che si allarga e sfuma, 2 s, 30 fps. Si avvia solo con pannello aperto (o nella
-       linguetta) e animazioni di Windows attive; ogni template che lo usa ha un elemento chiamato Halo. -->
+  <!-- Pulsazione "al lavoro": un alone che si allarga e sfuma, 2 s, 30 fps. Si avvia solo con le animazioni di Windows
+       attive e dove si vede: nel pannello solo a pannello aperto, nella linguetta solo a finestra visibile e pannello
+       chiuso (aperto, la linguetta e' a opacita' 0). Ogni template che lo usa ha un elemento chiamato Halo. -->
   <Storyboard x:Key="HaloStoryboard" RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
     <DoubleAnimation Storyboard.TargetName="Halo" Storyboard.TargetProperty="Opacity" From="0.7" To="0" Duration="0:0:2"/>
     <DoubleAnimation Storyboard.TargetName="Halo" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" From="1" To="1.7" Duration="0:0:2"/>
@@ -51,9 +52,13 @@
       </Grid>
     </Grid>
     <DataTemplate.Triggers>
+      <!-- Un clock di animazione continua a girare anche su un elemento invisibile: con il notch nascosto dalla tray o
+           con il pannello aperto sopra la linguetta il ciclo va fermato qui. -->
       <MultiDataTrigger>
         <MultiDataTrigger.Conditions>
           <Condition Binding="{Binding IsWorking}" Value="True"/>
+          <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+          <Condition Binding="{Binding DataContext.IsPanelOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="False"/>
           <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
         </MultiDataTrigger.Conditions>
         <MultiDataTrigger.EnterActions><BeginStoryboard x:Name="TabHalo" Storyboard="{StaticResource HaloStoryboard}"/></MultiDataTrigger.EnterActions>
@@ -191,7 +196,8 @@
             </Grid>
             <!-- Refresh a comando: IconButton marca il click Handled (non fissa/sblocca il notch) ed e' sempre abilitato
                  (un Button disabilitato lascerebbe passare il click al pannello); cooldown e timeout li gestisce il VM.
-                 La rotazione e' un ciclo: 30 fps e solo con le animazioni di Windows attive. -->
+                 La rotazione e' un ciclo: 30 fps, solo con le animazioni di Windows attive e solo a pannello aperto (un
+                 refresh puo' durare fino a 15 s dopo che il pannello si e' chiuso o il notch e' stato nascosto). -->
             <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Command="{Binding RefreshCommand}"
                     ToolTip="{Binding RefreshTooltip}" Opacity="{Binding RefreshOpacity}" VerticalAlignment="Center"
                     AutomationProperties.Name="Aggiorna">
@@ -205,6 +211,7 @@
                       <MultiDataTrigger>
                         <MultiDataTrigger.Conditions>
                           <Condition Binding="{Binding IsRefreshing}" Value="True"/>
+                          <Condition Binding="{Binding DataContext.IsPanelOpen, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
                           <Condition Binding="{Binding Enabled, Source={x:Static c:MotionSettings.Instance}}" Value="True"/>
                         </MultiDataTrigger.Conditions>
                         <MultiDataTrigger.EnterActions>
