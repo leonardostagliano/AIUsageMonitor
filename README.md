@@ -53,8 +53,8 @@ Windows.
   had no chance to say goodbye.
 - **Sessions outside the terminal.** Claude Code sessions started from the Claude desktop app are picked up even
   when they fire no hooks, and sessions running in the cloud (claude.ai/code, the desktop and mobile apps) and the
-  runs of your routines appear next to them, tagged `app`, `cloud` or `routine`. Clicking a cloud session opens it
-  on claude.ai.
+  runs of your routines appear next to them, tagged `app`, `cloud` or `routine`. Clicking a cloud session hands it
+  to the Claude desktop app when the app is running, and opens it on claude.ai otherwise.
 - **Tokens and API-equivalent cost.** Input (with cache) and output per session and per workflow agent, priced
   with the public [LiteLLM](https://github.com/BerriAI/litellm) price list and converted to euro at the ECB
   reference rate. It is labelled as an estimate: with a subscription it is not what you pay.
@@ -346,8 +346,13 @@ reads, at the same pace as the Claude quota, the Claude Code sessions of your ac
 (`GET /v1/code/sessions`, the list `claude --teleport` shows) and the latest run of each routine
 (`GET /v1/code/triggers`), with the OAuth token Claude Code already keeps on your machine. A cloud session is shown
 while it works or waits for you, and for 10 minutes after it finishes; it shows the tokens and API-equivalent
-cost the session reports about itself. Clicking its name opens it on claude.ai. Remote Control sessions are skipped:
-they are local sessions the hooks already report. The first read after start-up raises no notifications.
+cost the session reports about itself. Clicking its name hands it to the Claude desktop app when the app is already
+running, even with its window hidden, through a `claude://claude.ai/code/session_<id>` link. That link follows the
+app's documented `/chat` and `/project` links but is not documented for Code sessions, so the app may show its home
+screen instead. The click counts as opened in the app only when the app visibly reacts within 3 seconds (one of its
+windows comes to the front, shows up or changes title); otherwise, and whenever the app is not running, the session
+opens on claude.ai in your browser. The app is never started just to open a session. Remote Control sessions are
+skipped: they are local sessions the hooks already report. The first read after start-up raises no notifications.
 
 ## Privacy
 

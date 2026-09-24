@@ -21,11 +21,14 @@ public sealed class SessionRowViewModel : ObservableObject
     private static readonly HashSet<string> ExpandedSessionIds = new(StringComparer.Ordinal);
 
     /// <summary>Prima riga del tooltip quando il nome e' cliccabile; il resto e' il testo cwd/messaggio di sempre.</summary>
-    private string FocusHint => IsCloud ? "Apri la sessione su claude.ai"
+    private string FocusHint => IsCloud ? "Apri la sessione nell'app Claude o su claude.ai"
         : _session.Origin == SessionOrigin.App ? "Porta in primo piano l'app"
         : "Porta in primo piano il terminale";
 
-    /// <summary>Sessione nel cloud (claude.ai/code, app, routine): il click apre la sua pagina invece di un terminale.</summary>
+    /// <summary>
+    /// Sessione nel cloud (claude.ai/code, app, routine): il click la apre nell'app Claude, se e' in esecuzione, o su
+    /// claude.ai invece di cercare un terminale.
+    /// </summary>
     private bool IsCloud => _session.Origin is SessionOrigin.Cloud or SessionOrigin.Routine;
 
     private readonly AppServices _services;
@@ -75,7 +78,7 @@ public sealed class SessionRowViewModel : ObservableObject
     /// <summary>
     /// Porta in primo piano il terminale della sessione (click sul nome). Vero quando l'evento della sessione ha
     /// portato un host (senza non c'e' nulla da risolvere e la riga resta una semplice etichetta) e per le sessioni nel
-    /// cloud, il cui click apre la pagina su claude.ai.
+    /// cloud, il cui click le apre nell'app Claude o su claude.ai.
     /// </summary>
     public bool CanFocus => _session.Host is not null || IsCloud;
 

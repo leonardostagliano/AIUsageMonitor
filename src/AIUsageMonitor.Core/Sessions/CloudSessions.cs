@@ -44,6 +44,23 @@ public sealed record CloudSession(
 
     /// <summary>The page of the session on claude.ai.</summary>
     public static string WebUrl(string id) => "https://claude.ai/code/session_" + Uri.EscapeDataString(KeyOf(id));
+
+    private const int MaxDesktopKey = 128;
+
+    /// <summary>
+    /// The same page as <see cref="WebUrl"/> in the Claude desktop app: its <c>claude://claude.ai</c> links mirror the
+    /// paths of claude.ai (documented for <c>/chat/&lt;id&gt;</c> and <c>/project/&lt;id&gt;</c>, not yet for a Code
+    /// session). Null unless the key is a plain session id (ASCII letters, digits, '_' and '-', at most 128 of them;
+    /// real keys are about 26): the shell hands this link to another app, so it is never built from anything else,
+    /// and any other id opens in the browser only.
+    /// </summary>
+    public static string? DesktopUrl(string id)
+    {
+        var key = KeyOf(id);
+        return key.Length is > 0 and <= MaxDesktopKey && key.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-')
+            ? "claude://claude.ai/code/session_" + key
+            : null;
+    }
 }
 
 /// <summary>

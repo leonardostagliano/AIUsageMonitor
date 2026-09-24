@@ -75,6 +75,13 @@ Estende: [2026-09-13-aiusagemonitor-design.md](2026-09-13-aiusagemonitor-design.
   sparite dalla lista o troppo vecchie → fine. Le sessioni Remote Control (`bridge`) sono locali e si saltano.
 - Gli eventi passano dalla pump (`Inject`), la prima lettura in silenzio. Token e costo dall'`usage` dichiarato
   dalla sessione. Click → `https://claude.ai/code/session_<id>`.
+- Click con l'app desktop di Claude gia' in esecuzione (un `claude.exe` in `%LOCALAPPDATA%\AnthropicClaude\[app-*\]`
+  o in `<unita'>:\[Program Files\]WindowsApps\Claude_*\app\`, non la CLI, con finestre Electron anche nascoste in
+  questa sessione) → `claude://claude.ai/code/session_<id>` (solo con id `[A-Za-z0-9_-]{1,128}`). Conta come aperta
+  nell'app solo se entro 3 s una finestra dell'app viene in primo piano, compare o cambia titolo (se non viene in primo
+  piano da se' la si attiva); altrimenti, o con il link rifiutato, si apre il browser come prima. Il percorso del link
+  non e' documentato per le sessioni di Code: l'app potrebbe mostrare la home, e da fuori non si vede. L'app non viene
+  mai avviata per un link.
 
 ### 3.5 Revisione dopo v0.4.0
 

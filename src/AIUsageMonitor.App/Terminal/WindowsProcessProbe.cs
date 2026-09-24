@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using AIUsageMonitor.Core.Sessions;
 
 namespace AIUsageMonitor.App.Terminal;
@@ -13,6 +14,7 @@ public sealed class WindowsProcessProbe : IProcessProbe
     private const uint ProcessQueryLimitedInformation = 0x1000;
     private const int ErrorInvalidParameter = 87;
     private const uint StillActive = 259;
+    private const int MaxImagePath = 1024;
 
     public ProcessSnapshot Query(int pid)
     {
@@ -35,6 +37,27 @@ public sealed class WindowsProcessProbe : IProcessProbe
         }
     }
 
+    /// <summary>
+    /// Percorso completo dell'eseguibile del processo, null se il processo non c'e' piu' o l'accesso e' negato. Serve
+    /// quando il nome non basta: l'app desktop di Claude e la CLI di Claude Code sono entrambe <c>claude.exe</c>.
+    /// </summary>
+    public static string? ImagePath(int pid)
+    {
+        if (pid <= 4) return null;
+        var handle = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            var buffer = new StringBuilder(MaxImagePath);
+            var size = buffer.Capacity;
+            return QueryFullProcessImageNameW(handle, 0, buffer, ref size) && size > 0 ? buffer.ToString(0, size) : null;
+        }
+        finally
+        {
+            CloseHandle(handle);
+        }
+    }
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, int processId);
 
@@ -45,6 +68,10 @@ public sealed class WindowsProcessProbe : IProcessProbe
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "QueryFullProcessImageNameW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder buffer, ref int size);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

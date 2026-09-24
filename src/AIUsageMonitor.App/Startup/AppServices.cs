@@ -1,5 +1,3 @@
-using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using AIUsageMonitor.App.Common;
@@ -63,6 +61,7 @@ public sealed class AppServices : IDisposable
     private readonly Dictionary<AgentKind, (HookStatusReport Report, DateTimeOffset At)> _hookStatus = new();
     private readonly object _gate = new();
     private readonly TerminalFocuser _focuser;
+    private readonly CloudSessionOpener _cloudOpener;
     private FileSystemWatcher? _codexWatcher;
     private Timer? _codexDebounce;
     private readonly GitHubReleaseTransport _updateTransport;
@@ -167,6 +166,7 @@ public sealed class AppServices : IDisposable
         Terminals = new TerminalRegistry(Clock) { OnLog = Log.Info, OnAgentProcess = BindAgentProcess };
         var wmux = new WmuxClient(WmuxPipeTransport.ForCurrentUser(Log.Info).SendAsync, Log.Info);
         _focuser = new TerminalFocuser(herdr, wmux, Terminals, Log.Info);
+        _cloudOpener = new CloudSessionOpener(Log.Info, (message, ex) => Log.Error(message, ex));
 
         Usage.UsageUpdated += _ => StateChanged?.Invoke();
         // Removed arriva dallo sweep della pump, cioe' dallo stesso thread che chiama il token source: e' il punto
@@ -396,31 +396,14 @@ public sealed class AppServices : IDisposable
     /// scansione dei processi) e non solleva mai: torna false quando nessuna strategia ha funzionato, e in quel caso
     /// il chiamante mostra il toast "Terminale non trovato".
     /// </summary>
-    /// <remarks>Una sessione nel cloud non ha terminale: il click apre la sua pagina su claude.ai nel browser.</remarks>
+    /// <remarks>
+    /// Una sessione nel cloud non ha terminale: il click la apre nell'app desktop di Claude se e' in esecuzione,
+    /// altrimenti su claude.ai nel browser (<see cref="CloudSessionOpener"/>).
+    /// </remarks>
     public Task<bool> FocusTerminalAsync(SessionState session) =>
         session.Origin is SessionOrigin.Cloud or SessionOrigin.Routine
-            ? Task.Run(() => OpenCloudSession(session))
+            ? Task.Run(() => _cloudOpener.OpenAsync(session))
             : _focuser.FocusAsync(session);
-
-    /// <summary>
-    /// Apre la pagina della sessione su claude.ai. L'indirizzo lo costruisce CloudSession.WebUrl (sempre
-    /// https://claude.ai/code/ con l'id codificato), quindi UseShellExecute apre solo il browser.
-    /// </summary>
-    private bool OpenCloudSession(SessionState session)
-    {
-        var url = CloudSession.WebUrl(session.SessionId);
-        try
-        {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
-            Log.Info($"Sessione cloud {session.SessionId}: aperta {url}");
-            return true;
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or PlatformNotSupportedException)
-        {
-            Log.Error($"Sessione cloud {session.SessionId}: {url} non aperta", ex);
-            return false;
-        }
-    }
 
     /// <summary>
     /// Alza un <see cref="Notice"/> per conto di chi non possiede l'icona della tray (i ViewModel del notch): il
