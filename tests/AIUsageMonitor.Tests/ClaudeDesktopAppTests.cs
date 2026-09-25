@@ -52,6 +52,8 @@ public class ClaudeDesktopAppTests
     [InlineData(@"\\?\C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__pzs8sxrjxfjjc\app\Claude.exe")]
     [InlineData(@"\\?\C:\Users\me\AppData\Local\AnthropicClaude\app-1.2.3\claude.exe")]
     [InlineData("C:/Users/me/AppData/Local/AnthropicClaude/app-1.2.3/claude.exe")]
+    // The Store build as a user's Get-Process reported it (lower-case image name).
+    [InlineData(@"C:\Program Files\WindowsApps\Claude_2.9939.2.0_x64__pzs8sxrjxfjjc\app\claude.exe")]
     public void The_desktop_app_is_recognized_in_both_installs(string path)
     {
         Assert.True(ClaudeDesktopApp.IsAppImage(path, LocalAppData));
