@@ -347,10 +347,10 @@ reads, at the same pace as the Claude quota, the Claude Code sessions of your ac
 (`GET /v1/code/triggers`), with the OAuth token Claude Code already keeps on your machine. A cloud session is shown
 while it works or waits for you, and for 10 minutes after it finishes; it shows the tokens and API-equivalent
 cost the session reports about itself. Clicking its name hands it to the Claude desktop app when the app is already
-running, even with its window hidden, through a `claude://claude.ai/code/session_<id>` link. That link follows the
-app's documented `/chat` and `/project` links but is not documented for Code sessions, so the app may show its home
-screen instead. The click counts as opened in the app only when the app visibly reacts within 3 seconds (one of its
-windows comes to the front, shows up or changes title); otherwise, and whenever the app is not running, the session
+running, even with its window hidden, through a `claude://claude.ai/epitaxy/session_<id>` link, the path the app uses
+for Code sessions. That path is not documented, so another version of the app may ignore it or show its home screen.
+The click counts as opened in the app only when the app visibly reacts within 3 seconds (one of its windows comes
+to the front, shows up or changes title); otherwise, and whenever the app is not running, the session
 opens on claude.ai in your browser. The app is never started just to open a session. Remote Control sessions are
 skipped: they are local sessions the hooks already report. The first read after start-up raises no notifications.
 

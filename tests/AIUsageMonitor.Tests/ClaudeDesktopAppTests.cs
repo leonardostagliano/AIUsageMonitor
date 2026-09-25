@@ -5,12 +5,12 @@ namespace AIUsageMonitor.Tests;
 public class ClaudeDesktopAppTests
 {
     [Fact]
-    public void The_desktop_link_uses_the_session_spelling_and_keeps_the_case_of_the_id()
+    public void The_desktop_link_uses_the_epitaxy_path_with_the_session_spelling_and_keeps_the_case_of_the_id()
     {
-        Assert.Equal("claude://claude.ai/code/session_01E9zxspkDG9YVtXECLeyPJh", CloudSession.DesktopUrl("session_01E9zxspkDG9YVtXECLeyPJh"));
-        Assert.Equal("claude://claude.ai/code/session_01E9zxspkDG9YVtXECLeyPJh", CloudSession.DesktopUrl("cse_01E9zxspkDG9YVtXECLeyPJh"));
-        Assert.Equal("claude://claude.ai/code/session_01news", CloudSession.DesktopUrl("01news"));
-        Assert.Equal("claude://claude.ai/code/session_a-b_c", CloudSession.DesktopUrl("cse_a-b_c"));
+        Assert.Equal("claude://claude.ai/epitaxy/session_01E9zxspkDG9YVtXECLeyPJh", CloudSession.DesktopUrl("session_01E9zxspkDG9YVtXECLeyPJh"));
+        Assert.Equal("claude://claude.ai/epitaxy/session_01E9zxspkDG9YVtXECLeyPJh", CloudSession.DesktopUrl("cse_01E9zxspkDG9YVtXECLeyPJh"));
+        Assert.Equal("claude://claude.ai/epitaxy/session_01news", CloudSession.DesktopUrl("01news"));
+        Assert.Equal("claude://claude.ai/epitaxy/session_a-b_c", CloudSession.DesktopUrl("cse_a-b_c"));
     }
 
     [Theory]
@@ -35,7 +35,7 @@ public class ClaudeDesktopAppTests
     [Fact]
     public void An_overlong_id_gets_no_desktop_link()
     {
-        Assert.Equal("claude://claude.ai/code/session_" + new string('A', 128), CloudSession.DesktopUrl("session_" + new string('A', 128)));
+        Assert.Equal("claude://claude.ai/epitaxy/session_" + new string('A', 128), CloudSession.DesktopUrl("session_" + new string('A', 128)));
         Assert.Null(CloudSession.DesktopUrl("session_" + new string('A', 129)));
         Assert.Null(CloudSession.DesktopUrl("cse_" + new string('A', 100_000)));
     }
@@ -122,7 +122,7 @@ public class ClaudeDesktopAppTests
     public void A_running_app_gets_the_desktop_link_first_and_the_page_as_the_fallback()
     {
         var links = ClaudeDesktopApp.LinksFor("cse_01E9zxspkDG9YVtXECLeyPJh", appRunning: true);
-        Assert.Equal("claude://claude.ai/code/session_01E9zxspkDG9YVtXECLeyPJh", links.App);
+        Assert.Equal("claude://claude.ai/epitaxy/session_01E9zxspkDG9YVtXECLeyPJh", links.App);
         Assert.Equal("https://claude.ai/code/session_01E9zxspkDG9YVtXECLeyPJh", links.Web);
     }
 

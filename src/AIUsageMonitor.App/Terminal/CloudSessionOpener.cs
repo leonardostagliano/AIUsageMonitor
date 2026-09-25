@@ -8,10 +8,10 @@ namespace AIUsageMonitor.App.Terminal;
 /// <summary>
 /// Apre una sessione cloud o l'esecuzione di una routine (click sul nome). Se l'app desktop di Claude e' gia' in
 /// esecuzione (anche con la finestra nascosta) la sessione le viene passata con il link
-/// <c>claude://claude.ai/code/session_&lt;id&gt;</c>; altrimenti, o se l'app non da' segno di averlo ricevuto, si apre
-/// la pagina su claude.ai nel browser. Il percorso del link ricalca quelli documentati dell'app (<c>/chat</c>,
-/// <c>/project</c>) ma per le sessioni di Code non e' documentato: l'app potrebbe reagire mostrando la sua home, e da
-/// fuori non si puo' distinguere. L'app non viene mai avviata per un link: prima si guarda se c'e', poi si apre il link.
+/// <c>claude://claude.ai/epitaxy/session_&lt;id&gt;</c>; altrimenti, o se l'app non da' segno di averlo ricevuto, si
+/// apre la pagina su claude.ai nel browser. Il percorso non e' documentato (provato a mano sull'app dello Store): se una
+/// versione dell'app lo ignora o mostra la sua home, da fuori non si puo' distinguere. L'app non viene mai avviata per
+/// un link: prima si guarda se c'e', poi si apre il link.
 /// Gli indirizzi li costruisce Core da prefissi fissi, con l'id validato per l'app e codificato per il browser. Non
 /// solleva mai: false solo quando non si e' aperto nulla, e allora il chiamante mostra il toast.
 /// </summary>
