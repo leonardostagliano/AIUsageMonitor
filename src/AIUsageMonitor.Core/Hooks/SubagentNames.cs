@@ -22,7 +22,7 @@ public static class SubagentNames
     /// Reads the name of a Claude Code agent from the <c>agent-&lt;id&gt;.meta.json</c> next to its transcript. False
     /// when that file cannot tell yet: no transcript path, no meta.json, a file locked, being written (not valid JSON
     /// yet) or oversized; the caller asks again later. True once the file was read: <paramref name="name"/> is then its
-    /// <c>description</c>, shortened, or null when it has none. Never throws.
+    /// <c>description</c>, shortened, or null when it has none or it cannot be decoded. Never throws.
     /// </summary>
     public static bool TryReadClaude(string? agentTranscriptPath, out string? name)
     {
@@ -38,6 +38,13 @@ public static class SubagentNames
             if (document.RootElement.ValueKind != JsonValueKind.Object) return true;
             if (document.RootElement.TryGetProperty("description", out var description) && description.ValueKind == JsonValueKind.String)
                 name = Shorten(description.GetString());
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            // An escaped lone surrogate ("\ud83d") is valid JSON, but System.Text.Json throws when it has to decode it.
+            // The file was read and will not change: the agent is settled without a name, not asked again forever.
+            name = null;
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException

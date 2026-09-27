@@ -65,12 +65,20 @@ public static class SubagentTranscriptEnd
             {
                 var root = document.RootElement;
                 if (root.ValueKind != JsonValueKind.Object) continue;
-                switch (Text(root, "type"))
+                try
                 {
-                    case "assistant":
-                        return root.TryGetProperty("isApiErrorMessage", out var error) && error.ValueKind == JsonValueKind.True;
-                    case "user":
-                        return IsInterruption(root);
+                    switch (Text(root, "type"))
+                    {
+                        case "assistant":
+                            return root.TryGetProperty("isApiErrorMessage", out var error) && error.ValueKind == JsonValueKind.True;
+                        case "user":
+                            return IsInterruption(root);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // An escaped lone surrogate ("\ud83d") is valid JSON, but System.Text.Json throws when it has to
+                    // decode it, in a string value or in a property name a lookup compares: the line is skipped.
                 }
             }
         }

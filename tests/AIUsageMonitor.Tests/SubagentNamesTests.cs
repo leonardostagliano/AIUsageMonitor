@@ -59,6 +59,23 @@ public class SubagentNamesTests
         Assert.Null(numberName);
     }
 
+    /// <summary>
+    /// An escaped lone surrogate ("\ud83d") in the description, or in a property name the lookup compares, cannot be
+    /// decoded: the file was read and will not change, so the agent is settled without a name instead of the exception
+    /// aborting the pump's periodic pass at every run.
+    /// </summary>
+    [Fact]
+    public void A_meta_json_with_an_escaped_lone_surrogate_settles_the_agent_as_nameless()
+    {
+        using var dir = new TempDir();
+        var description = AgentTranscript(dir, "a1", """{"agentType":"general-purpose","description":"Rivedi \ud83d il login"}""");
+        var property = AgentTranscript(dir, "a2", """{"agentType":"general-purpose","\ud83d":1,"description":"write:A"}""");
+
+        Assert.True(SubagentNames.TryReadClaude(description, out var name));
+        Assert.Null(name);
+        Assert.Null(Record.Exception(() => SubagentNames.TryReadClaude(property, out _)));
+    }
+
     [Fact]
     public void A_missing_corrupt_or_locked_meta_json_says_nothing_yet()
     {

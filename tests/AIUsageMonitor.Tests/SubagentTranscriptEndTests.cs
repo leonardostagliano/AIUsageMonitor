@@ -120,6 +120,30 @@ public class SubagentTranscriptEndTests
         Assert.False(SubagentTranscriptEnd.IsTerminated(agent.Transcript([.. Work, """{"type":"user","message":{"role":"user","content":7}}"""])));
     }
 
+    /// <summary>
+    /// An escaped lone surrogate ("\ud83d", half an emoji) is valid JSON, but System.Text.Json throws when it has to
+    /// decode it: the line is skipped like a corrupt one, instead of the exception aborting the pump's periodic pass for
+    /// every later session. A meta.json holding one (the stop flag is never decoded as text) breaks nothing either.
+    /// </summary>
+    [Fact]
+    public void A_line_or_a_meta_with_an_escaped_lone_surrogate_is_skipped()
+    {
+        using var agent = new Agent();
+        const string content = """{"type":"user","message":{"role":"user","content":"\ud83d a meta"}}""";
+        const string block = """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"\ud83d"}]}}""";
+        const string name = """{"type":"assistant","\ud83d":1,"message":{"role":"assistant","content":[]}}""";
+
+        Assert.False(SubagentTranscriptEnd.IsTerminated(agent.Transcript([.. Work, content])));
+        Assert.False(SubagentTranscriptEnd.IsTerminated(agent.Transcript([.. Work, block])));
+        Assert.False(SubagentTranscriptEnd.IsTerminated(agent.Transcript([.. Work, name])));
+        Assert.True(SubagentTranscriptEnd.IsTerminated(agent.Transcript([.. Work, ApiError(3), content])));
+
+        agent.Meta("""{"agentType":"general-purpose","\ud83d":"x","description":"\ud83d","stoppedByUser":true}""");
+        var path = agent.Transcript([.. Work, Text("m2", "Fatto.", 3)]);
+        var error = Record.Exception(() => SubagentTranscriptEnd.IsTerminated(path));
+        Assert.Null(error);
+    }
+
     [Fact]
     public void Only_the_last_64_KB_are_read()
     {
