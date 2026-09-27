@@ -21,9 +21,10 @@ public sealed record ClaudeRegistrySync(IReadOnlyList<HookEvent> Events, IReadOn
 /// </summary>
 /// <remarks>
 /// A session any hook event has spoken for is left to the hooks: they carry more (messages, subagents, the host), and
-/// two producers would toast twice. A new record is adopted only after <see cref="AdoptAfter"/>, so a CLI session gets
-/// the time to send its own SessionStart first. A record whose pid is dead, or was recycled (the live process with that
-/// pid was created after the record was written), is stale and ignored.
+/// two producers would toast twice; its record only fills in the two changes no hook reports, a permission granted and
+/// a turn that starts without a prompt. A new record is adopted only after <see cref="AdoptAfter"/>, so a CLI session
+/// gets the time to send its own SessionStart first. A record whose pid is dead, or was recycled (the live process with
+/// that pid was created after the record was written), is stale and ignored.
 /// <para>Not thread-safe: the pump calls it on its own thread.</para>
 /// </remarks>
 public sealed class ClaudeRegistrySessionFeed
@@ -49,7 +50,10 @@ public sealed class ClaudeRegistrySessionFeed
         _transcripts = transcripts;
     }
 
-    /// <summary>How old a record must be before a session no hook reported is adopted.</summary>
+    /// <summary>
+    /// How old a record must be before a session no hook reported is adopted; also how long the hooks of a session get
+    /// to report a turn themselves before its busy record does.
+    /// </summary>
     public TimeSpan AdoptAfter { get; init; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
@@ -95,12 +99,24 @@ public sealed class ClaudeRegistrySessionFeed
             if (hookOwned(sessionId))
             {
                 _owned.Remove(sessionId);
-                // Granting a permission fires no hook: the session would read "attende input" until the end of the
-                // turn, even with an agent at work. Its record goes back to busy the moment the prompt is answered.
-                if (tracked.TryGetValue(sessionId, out var state) && state.Phase == SessionPhase.NeedsInput
-                    && status is "busy" or "shell" && record.StatusUpdatedAt is { } busySince
-                    && state.WaitingSince is { } waiting && busySince > waiting.ToUnixTimeMilliseconds())
-                    events.Add(new HookEvent(now, AgentKind.Claude, "PostToolUse", sessionId, null, null, null, "registry"));
+                if (tracked.TryGetValue(sessionId, out var state) && status is "busy" or "shell" && record.StatusUpdatedAt is { } busySince)
+                {
+                    // Granting a permission fires no hook: the session would read "attende input" until the end of the
+                    // turn, even with an agent at work. Its record goes back to busy the moment the prompt is answered.
+                    if (state.Phase == SessionPhase.NeedsInput && state.WaitingSince is { } waiting
+                        && busySince > waiting.ToUnixTimeMilliseconds())
+                        events.Add(new HookEvent(now, AgentKind.Claude, "PostToolUse", sessionId, null, null, null, "registry"));
+                    // Neither does a turn that starts on its own (a background task that finishes wakes the main agent):
+                    // the session would read "finito" while it works. Only a record that went busy after the last event
+                    // of the session counts, since the busy still showing while the Stop hooks run is the turn the Stop
+                    // ended, and only after AdoptAfter, since a prompt's own UserPromptSubmit lands a moment after the
+                    // record goes busy. The turn is stamped with the moment the record went busy: once it is applied,
+                    // that busy is no longer newer than the session, so each busy period is reported once.
+                    else if (state.Phase == SessionPhase.Idle && busySince > state.LastEventAt.ToUnixTimeMilliseconds()
+                             && now - DateTimeOffset.FromUnixTimeMilliseconds(busySince) >= AdoptAfter)
+                        events.Add(new HookEvent(DateTimeOffset.FromUnixTimeMilliseconds(busySince), AgentKind.Claude,
+                            "UserPromptSubmit", sessionId, null, null, null, "registry"));
+                }
                 continue;
             }
             if (_owned.TryGetValue(sessionId, out var last) && tracked.ContainsKey(sessionId))
