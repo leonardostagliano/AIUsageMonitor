@@ -5,7 +5,13 @@ namespace AIUsageMonitor.Core.Hooks;
 
 public enum SessionChangeKind { Added, Updated, Removed }
 
-public sealed record SessionChange(SessionChangeKind Kind, SessionState Session, SessionPhase? PreviousPhase);
+/// <summary>
+/// One change of a session. <paramref name="Silent"/> marks a change the UI must not announce (no card, no sound): a
+/// turn closed by <c>idle_prompt</c> because its Stop never arrived, what a <see cref="HookEvent.Quiet"/> event reports,
+/// and the changes that are no change of state (token totals, agent names, agents released by the sweep while the
+/// phase stays).
+/// </summary>
+public sealed record SessionChange(SessionChangeKind Kind, SessionState Session, SessionPhase? PreviousPhase, bool Silent = false);
 
 /// <summary>State machine per (agent, session id). Thread-safe; Changed fires outside the lock on the caller's thread.</summary>
 public sealed class SessionTracker
@@ -17,8 +23,7 @@ public sealed class SessionTracker
 
     private static readonly HashSet<string> NeedsInputNotifications = new(StringComparer.OrdinalIgnoreCase)
     {
-        "permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog",
-        "worker_permission_prompt"
+        "permission_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog", "worker_permission_prompt"
     };
 
     private readonly IClock _clock;
@@ -54,7 +59,14 @@ public sealed class SessionTracker
         return change;
     }
 
+    /// <summary>Applies one event; a <see cref="HookEvent.Quiet"/> one changes the session all the same, but its change is Silent.</summary>
     private SessionChange? ApplyCore(HookEvent e)
+    {
+        var change = ApplyEvent(e);
+        return change is not null && e.Quiet && !change.Silent ? change with { Silent = true } : change;
+    }
+
+    private SessionChange? ApplyEvent(HookEvent e)
     {
         var key = (e.Agent, e.SessionId);
         _sessions.TryGetValue(key, out var existing);
@@ -69,11 +81,8 @@ public sealed class SessionTracker
         if (e.Event is "SubagentStart" or "SubagentStop")
             return ApplySubagentEvent(e, key, existing);
 
-        // idle_prompt ("Claude is waiting for your input") fires once the main session has been quiet for a while,
-        // whether or not its background agents are still at work: while they work, so is the session.
-        var idlePrompt = e.Event == "Notification" && string.Equals(e.NotificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase);
-        if (idlePrompt && existing is { } busy && (busy.ActiveSubagents > 0 || busy.AwaitingSubagents && busy.PendingWorkflows > 0))
-            return null;
+        if (e.Event == "Notification" && string.Equals(e.NotificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase))
+            return ApplyIdlePrompt(e, key, existing);
 
         SessionPhase? phase = e.Event switch
         {
@@ -101,7 +110,8 @@ public sealed class SessionTracker
         // Claude Code 2.1+ lists on Stop the backgrounded agents and workflows still in flight. No foreground agent can
         // outlive the turn, so at that point the list is the whole truth: an agent it leaves out has finished even if
         // its SubagentStop never reached us (killed, interrupted, hook timed out), and one it names that we never saw
-        // start is running. Without a list (Codex, older versions) the subagents stay as the events left them.
+        // start is running. The one exception is the agents of a workflow: the list names the workflow, never them.
+        // Without a list (Codex, older versions) the subagents stay as the events left them.
         var subagents = existing?.Subagents;
         var pendingWorkflows = existing?.PendingWorkflows ?? 0;
         var lastSubagentEventAt = existing?.LastSubagentEventAt;
@@ -132,9 +142,21 @@ public sealed class SessionTracker
             }
         }
 
-        // SessionStart keeps the phase, and with it the reason of a wait; a notification (re)starts the wait.
-        var awaitsPrompt = phase == SessionPhase.NeedsInput && (e.Event == "SessionStart" ? existing?.AwaitsPrompt ?? false : idlePrompt);
+        // SessionStart keeps the phase, and with it the detail of a wait; a notification (re)starts the wait with its own.
+        var attention = phase != SessionPhase.NeedsInput ? null : e.Event == "Notification" ? e.Attention : existing?.Attention;
         DateTimeOffset? waitingSince = phase != SessionPhase.NeedsInput ? null : e.Event == "Notification" ? e.Ts : existing?.WaitingSince ?? e.Ts;
+        // A turn starts with a prompt submitted while the session was Idle, in Error or not yet known, or while it only
+        // waited for the agents of a turn already over (its Stop was seen). Back at work after a granted permission it
+        // is the same turn: the registry and the cloud report the grant as a prompt. A prompt the hooks report while a
+        // wait is pending follows a refused one instead (an interrupt, which sends no Stop): a turn of its own. A
+        // session first seen mid-turn (any other event, or the prompt a source reports for a session it found already
+        // at work) has no known start and keeps none.
+        var turnStartedAt = e.Event == "UserPromptSubmit" && !e.Adopted
+                            && (existing is null || existing.Phase is SessionPhase.Idle or SessionPhase.Error
+                                || existing.AwaitingSubagents
+                                || existing.Phase == SessionPhase.NeedsInput && e.Source is not ("registry" or "cloud"))
+            ? e.Ts
+            : existing?.TurnStartedAt;
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         // Every Claude hook payload carries the session transcript; an event without one (Codex, an older hook)
@@ -151,14 +173,15 @@ public sealed class SessionTracker
                 e.Agent, e.SessionId, NameFor(title, cwd, e.SessionId), cwd,
                 phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, Subagents: subagents, AwaitingSubagents: awaiting,
                 LastSubagentEventAt: lastSubagentEventAt, Host: host, Origin: origin, Title: title, PendingWorkflows: pendingWorkflows,
-                AwaitsPrompt: awaitsPrompt, WaitingSince: waitingSince)
+                WaitingSince: waitingSince, Attention: attention, TurnStartedAt: turnStartedAt)
             : existing with
             {
                 DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase.Value,
-                AwaitsPrompt = awaitsPrompt,
                 WaitingSince = waitingSince,
+                Attention = attention,
+                TurnStartedAt = turnStartedAt,
                 Message = message,
                 LastEventAt = e.Ts,
                 TranscriptPath = transcriptPath,
@@ -175,6 +198,29 @@ public sealed class SessionTracker
     }
 
     /// <summary>
+    /// <c>idle_prompt</c> ("Claude is waiting for your input") only says that the prompt has been waiting for a minute
+    /// after a turn: it is never a request. A session still Working with no agent or workflow in flight lost its Stop,
+    /// and goes Idle without being announced (<see cref="SessionChange.Silent"/>); in every other case (finished
+    /// already, a permission pending, agents at work, a session never seen) nothing changes.
+    /// </summary>
+    private SessionChange? ApplyIdlePrompt(HookEvent e, (AgentKind Agent, string SessionId) key, SessionState? existing)
+    {
+        if (existing is not { Phase: SessionPhase.Working } working) return null;
+        if (working.ActiveSubagents > 0 || working.AwaitingSubagents && working.PendingWorkflows > 0) return null;
+        var updated = working with
+        {
+            Phase = SessionPhase.Idle,
+            Message = working.Message ?? "Turno completato",
+            LastEventAt = e.Ts,
+            AwaitingSubagents = false,
+            WaitingSince = null,
+            Attention = null
+        };
+        _sessions[key] = updated;
+        return new SessionChange(SessionChangeKind.Updated, updated, working.Phase, Silent: true);
+    }
+
+    /// <summary>
     /// SubagentStart/SubagentStop carry the parent session id plus the agent identity: they keep the per-session
     /// subagent list up to date and defer the Idle transition of a Stop that arrived while agents were still running.
     /// Only <c>agent_transcript_path</c> is taken from them (onto the subagent): whether their <c>transcript_path</c>
@@ -183,6 +229,10 @@ public sealed class SessionTracker
     private SessionChange ApplySubagentEvent(HookEvent e, (AgentKind Agent, string SessionId) key, SessionState? existing)
     {
         var subagents = UpsertSubagent(existing?.Subagents, e);
+        // A list that names no workflow says that none is in flight, so no workflow agent can still be alive: one that
+        // died without its own SubagentStop (interrupted, out of quota) would otherwise pin the session until the sweep.
+        if (e.Event == "SubagentStop" && e.BackgroundTasks is { } listed && !listed.Any(t => t.IsWorkflow))
+            subagents = EndWorkflowAgents(subagents, e.Ts);
         var running = subagents.Count(s => s.Phase == SubagentPhase.Running);
         var phase = existing?.Phase ?? SessionPhase.Idle;
         var awaiting = existing?.AwaitingSubagents ?? false;
@@ -192,15 +242,18 @@ public sealed class SessionTracker
         var pendingWorkflows = existing?.PendingWorkflows ?? 0;
         if (e.Event == "SubagentStop" && e.BackgroundTasks is { } inFlight) pendingWorkflows = inFlight.Count(t => t.IsWorkflow);
 
-        // A session merely waiting for its next prompt (idle_prompt) is back at work when an agent starts, like an Idle
-        // one; a permission or a question still pending is not cleared by an agent a workflow happens to start.
-        if (e.Event == "SubagentStart" && (phase == SessionPhase.Idle || phase == SessionPhase.NeedsInput && existing!.AwaitsPrompt))
+        // An agent that starts wakes an Idle session and starts a turn; a permission or a question still pending is not
+        // cleared by an agent a workflow happens to start.
+        var turnStartedAt = existing?.TurnStartedAt;
+        if (e.Event == "SubagentStart" && phase == SessionPhase.Idle)
         {
             // The session is Idle because the turn's Stop was already seen: an agent that starts afterwards
             // (a workflow step, a background task) re-arms the deferred Idle, so its SubagentStop takes the
             // session back to Idle instead of pinning it to "al lavoro" until the 12 h stale removal.
             phase = SessionPhase.Working;
             awaiting = true;
+            // A session first seen through one of its agents is already mid-turn: its start is unknown.
+            if (existing is not null) turnStartedAt = e.Ts;
         }
         // A background workflow still in flight is between two phases: its next agents are about to start, and the
         // session wakes up (and sends its own Stop) when the workflow ends. Going Idle here would toast "finito" at
@@ -220,6 +273,11 @@ public sealed class SessionTracker
             }
         }
 
+        // A subagent event can be stamped earlier than what the session already heard (the pump closes an agent at the
+        // last line of its transcript): the session clocks only move forward, while the agent keeps its own EndedAt.
+        var lastEventAt = existing is null || e.Ts > existing.LastEventAt ? e.Ts : existing.LastEventAt;
+        var lastSubagentEventAt = existing?.LastSubagentEventAt is { } heard && heard > e.Ts ? heard : e.Ts;
+
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         var host = e.Host ?? existing?.Host;
         var title = e.Title ?? existing?.Title;
@@ -229,34 +287,40 @@ public sealed class SessionTracker
                 e.Agent, e.SessionId, NameFor(title, cwd, e.SessionId), cwd,
                 phase, message, e.Ts, e.Ts,
                 Subagents: subagents, AwaitingSubagents: awaiting, LastSubagentEventAt: e.Ts, Host: host,
-                Origin: origin, Title: title, PendingWorkflows: pendingWorkflows)
+                Origin: origin, Title: title, PendingWorkflows: pendingWorkflows, TurnStartedAt: turnStartedAt)
             : existing with
             {
                 DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase,
-                AwaitsPrompt = phase == SessionPhase.NeedsInput && existing.AwaitsPrompt,
                 WaitingSince = phase == SessionPhase.NeedsInput ? existing.WaitingSince : null,
+                Attention = phase == SessionPhase.NeedsInput ? existing.Attention : null,
+                TurnStartedAt = turnStartedAt,
                 Message = message,
-                LastEventAt = e.Ts,
+                LastEventAt = lastEventAt,
                 Subagents = subagents,
                 AwaitingSubagents = awaiting,
-                LastSubagentEventAt = e.Ts,
+                LastSubagentEventAt = lastSubagentEventAt,
                 Host = host,
                 Origin = origin,
                 Title = title,
                 PendingWorkflows = pendingWorkflows
             };
         _sessions[key] = updated;
-        return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
+        // An agent that starts or ends while the session waits for the user or is in error changes no state the user
+        // is told about: that wait or that error was announced when it began, or began before the app was running.
+        var keepsWaitOrError = existing is { Phase: SessionPhase.NeedsInput or SessionPhase.Error } && existing.Phase == phase;
+        return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase,
+            Silent: keepsWaitOrError);
     }
 
     /// <summary>
     /// Applies the in-flight list of a Stop: a running agent it leaves out is Done, an agent it names that the session
     /// never saw start is added as Running. A finished agent it still names is left finished: SubagentStop may well
     /// have been written a moment before Claude Code updated the task, and bringing it back would pin the session.
-    /// The children synthesised from Codex rollouts are not Claude's to judge. Returns <paramref name="current"/>
-    /// itself when nothing changed.
+    /// The agents of a workflow are never named, only their workflow: while the list holds at least one workflow they
+    /// keep running, and with none in flight they are over like any other. The children synthesised from Codex
+    /// rollouts are not Claude's to judge. Returns <paramref name="current"/> itself when nothing changed.
     /// </summary>
     private static IReadOnlyList<SubagentState>? ReconcileSubagents(IReadOnlyList<SubagentState>? current,
         IReadOnlyList<BackgroundTask> inFlight, DateTimeOffset ts)
@@ -265,6 +329,7 @@ public sealed class SessionTracker
         foreach (var task in inFlight.Where(t => t.IsAgent)) agents.TryAdd(task.Id, task);
         if ((current is null || current.Count == 0) && agents.Count == 0) return current;
 
+        var workflowInFlight = inFlight.Any(t => t.IsWorkflow);
         var list = current is null ? new List<SubagentState>() : new List<SubagentState>(current);
         var changed = false;
         for (var i = 0; i < list.Count; i++)
@@ -272,6 +337,7 @@ public sealed class SessionTracker
             var known = list[i];
             var live = agents.Remove(known.AgentId);
             if (known.Phase != SubagentPhase.Running || live || known.AgentType == CodexSubagentScanner.SyntheticAgentType) continue;
+            if (workflowInFlight && IsWorkflowAgent(known)) continue;
             list[i] = known with { Phase = SubagentPhase.Done, EndedAt = ts };
             changed = true;
         }
@@ -282,6 +348,31 @@ public sealed class SessionTracker
             changed = true;
         }
         return changed ? TrimDone(list) : current;
+    }
+
+    /// <summary>The <c>agent_type</c> Claude Code gives the agents a workflow runs.</summary>
+    private const string WorkflowAgentType = "workflow-subagent";
+
+    /// <summary>
+    /// True for an agent run by a Claude Code workflow: its type says so, or its transcript sits under
+    /// <c>subagents/workflows/</c> of its session (with either separator).
+    /// </summary>
+    private static bool IsWorkflowAgent(SubagentState agent) =>
+        agent.AgentType == WorkflowAgentType
+        || agent.TranscriptPath is { } path
+           && path.Replace('\\', '/').Contains("/subagents/workflows/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Marks every running workflow agent Done at <paramref name="ts"/>; returns <paramref name="current"/> when there is none.</summary>
+    private static IReadOnlyList<SubagentState> EndWorkflowAgents(IReadOnlyList<SubagentState> current, DateTimeOffset ts)
+    {
+        List<SubagentState>? list = null;
+        for (var i = 0; i < current.Count; i++)
+        {
+            if (current[i].Phase != SubagentPhase.Running || !IsWorkflowAgent(current[i])) continue;
+            list ??= [.. current];
+            list[i] = current[i] with { Phase = SubagentPhase.Done, EndedAt = ts };
+        }
+        return list is null ? current : TrimDone(list);
     }
 
     /// <summary>Prefix of the synthetic id given to a subagent event that carries no agent_id.</summary>
@@ -369,11 +460,39 @@ public sealed class SessionTracker
     }
 
     /// <summary>
+    /// Gives the running subagents of a session the transcript path the pump found on disk, by agent id: SubagentStart
+    /// carries none, and whether an agent belongs to a workflow shows in its path. Only a path still unknown is filled
+    /// (the one a SubagentStop carries is never replaced), agents the session does not know are ignored, and Changed is
+    /// not raised: nothing the UI shows depends on it.
+    /// </summary>
+    public void UpdateSubagentPaths(AgentKind agent, string sessionId, IReadOnlyDictionary<string, string> paths)
+    {
+        lock (_gate)
+        {
+            var key = (agent, sessionId);
+            if (paths.Count == 0 || !_sessions.TryGetValue(key, out var session) || session.Subagents is not { Count: > 0 } known) return;
+            List<SubagentState>? list = null;
+            for (var i = 0; i < known.Count; i++)
+            {
+                var subagent = known[i];
+                if (subagent.Phase != SubagentPhase.Running || subagent.TranscriptPath is not null) continue;
+                if (!paths.TryGetValue(subagent.AgentId, out var path) || string.IsNullOrWhiteSpace(path)) continue;
+                list ??= [.. known];
+                list[i] = subagent with { TranscriptPath = path };
+            }
+            // LastEventAt is left alone: a path found on disk is not session activity.
+            if (list is not null) _sessions[key] = session with { Subagents = list };
+        }
+    }
+
+    /// <summary>
     /// Stores the token totals read from the transcripts (or the Codex rollouts) for a session and, by agent id, for
     /// its subagents. A null total means "unknown right now" and keeps the value already stored: a transcript that
-    /// could not be read must never blank a row. Changed fires once, as <see cref="SessionChangeKind.Updated"/> with
-    /// the current phase as the previous one, only when at least one total really moved — the counters run every few
-    /// seconds and an unconditional event would repaint the notch (and re-evaluate the toasts) for nothing.
+    /// could not be read must never blank a row. Changed fires once, as a <see cref="SessionChange.Silent"/>
+    /// <see cref="SessionChangeKind.Updated"/> with the current phase as the previous one, only when at least one total
+    /// really moved — the counters run every few seconds and an unconditional event would repaint the notch for
+    /// nothing. Silent, because new totals are no change of state: a wait or an error the session was already in (one
+    /// the startup replay restored, say) must not be announced by them.
     /// The ledgers follow the same rules: null keeps the stored one, an equal one is not a change.
     /// Returns null when nothing changed or the session is unknown.
     /// </summary>
@@ -478,17 +597,58 @@ public sealed class SessionTracker
         // would keep a dead session out of the 12 h stale sweep forever.
         var updated = session with { Tokens = tokens, Subagents = subagents, Ledger = ledger };
         _sessions[key] = updated;
-        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase);
+        // Silent: the rows move, the state does not, and a wait or an error the session was already in is no news.
+        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase, Silent: true);
     }
 
     /// <summary>
-    /// Marks the subagents of every session that has heard nothing from them for <paramref name="timeout"/> as Done,
-    /// so a subagent that died without a SubagentStop cannot pin its session to "al lavoro" forever.
+    /// Gives the subagents of a session, by agent id, the name the pump read for them. A name is set once: an agent
+    /// that already has one keeps it, and every later event keeps it too (the subagent records are only ever copied
+    /// with <c>with</c>). Blank names and ids the session does not know are ignored. Changed fires once, as a
+    /// <see cref="SessionChange.Silent"/> <see cref="SessionChangeKind.Updated"/> with the current phase as the previous
+    /// one, only when a name was set; null when nothing changed or the session is unknown. Like a token refresh, it is
+    /// neither a change of state nor session activity: LastEventAt stays.
+    /// </summary>
+    public SessionChange? UpdateSubagentNames(AgentKind agent, string sessionId, IReadOnlyDictionary<string, string> names)
+    {
+        SessionChange? change;
+        lock (_gate) change = UpdateSubagentNamesCore(agent, sessionId, names);
+        if (change is not null) Raise(change);
+        return change;
+    }
+
+    private SessionChange? UpdateSubagentNamesCore(AgentKind agent, string sessionId, IReadOnlyDictionary<string, string> names)
+    {
+        var key = (agent, sessionId);
+        if (names.Count == 0 || !_sessions.TryGetValue(key, out var session) || session.Subagents is not { Count: > 0 } known) return null;
+        List<SubagentState>? updatedList = null;
+        for (var i = 0; i < known.Count; i++)
+        {
+            if (known[i].Name is not null || !names.TryGetValue(known[i].AgentId, out var name) || string.IsNullOrWhiteSpace(name)) continue;
+            updatedList ??= [.. known];
+            updatedList[i] = known[i] with { Name = name };
+        }
+        if (updatedList is null) return null;
+        var updated = session with { Subagents = updatedList };
+        _sessions[key] = updated;
+        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase, Silent: true);
+    }
+
+    /// <summary>
+    /// Marks Done the running subagents that showed no sign of life for <paramref name="timeout"/>, so a subagent that
+    /// died without a SubagentStop cannot pin its session to "al lavoro" forever.
     /// </summary>
     /// <remarks>
-    /// <paramref name="lastActivity"/> tells, per running subagent, when it last showed signs of life (for Claude, the
-    /// last write to its transcript): an agent busy on a single long task sends no event for a long while, and one
-    /// active within <paramref name="timeout"/> keeps running. Null, or a null answer, means "no evidence".
+    /// Every session with running agents is visited, and each agent is judged on its own. <paramref name="lastActivity"/>
+    /// tells when a running subagent last showed signs of life (for Claude, the last write to its transcript): an agent
+    /// whose activity is known is over once it is older than <paramref name="timeout"/>, whatever its siblings do (a
+    /// workflow that keeps starting agents must not shield a dead one), and one active within the timeout keeps
+    /// running even if it sent no event for a long while. Null, or a null answer, means "no evidence": that agent is
+    /// released only when its whole session heard from no subagent for the timeout. The children synthesised from Codex
+    /// rollouts keep that session rule, which the pump's re-announcements feed. Nothing is released while the session
+    /// is in NeedsInput: the agent may be the very one waiting for the answer. Only the release of a turn (Working to
+    /// Idle) is announced; a change that keeps the phase (agents released from a session still at work or in error) is
+    /// <see cref="SessionChange.Silent"/>.
     /// </remarks>
     public IReadOnlyList<SessionChange> SweepSubagentTimeouts(TimeSpan timeout,
         Func<SessionState, SubagentState, DateTimeOffset?>? lastActivity = null)
@@ -515,37 +675,54 @@ public sealed class SessionTracker
             // waking its session would otherwise keep it "al lavoro" until the 12 h removal.
             var waitsOnWorkflow = session.AwaitingSubagents && session.PendingWorkflows > 0;
             if (session.ActiveSubagents == 0 && !waitsOnWorkflow) continue;
-            var last = session.LastSubagentEventAt ?? session.LastEventAt;
-            if (now - last <= timeout) continue;
+            // A permission or a question can stay open for hours, and the agent that asked writes nothing meanwhile.
+            if (session.Phase == SessionPhase.NeedsInput) continue;
 
+            var quiet = now - (session.LastSubagentEventAt ?? session.LastEventAt) > timeout;
             var subagents = session.Subagents?
-                .Select(s => s.Phase == SubagentPhase.Running && !IsActive(session, s) ? s with { Phase = SubagentPhase.Done, EndedAt = now } : s)
+                .Select(s => s.Phase == SubagentPhase.Running && TimedOut(session, s, quiet) ? s with { Phase = SubagentPhase.Done, EndedAt = now } : s)
                 .ToList();
             var stillRunning = subagents?.Count(s => s.Phase == SubagentPhase.Running) ?? 0;
-            // Every agent is still visibly at work: nothing to change, the next sweep looks again.
-            if (stillRunning > 0 && stillRunning == session.ActiveSubagents) continue;
+            // Nothing left running in a session silent for the whole timeout: what it waited on (its agents, a
+            // background workflow) is gone.
+            var abandoned = stillRunning == 0 && quiet;
+            // Every agent is still at work, or the workflow alone may still be: nothing to change, the next sweep looks again.
+            if (stillRunning == session.ActiveSubagents && !abandoned) continue;
 
-            // Same rule as the last SubagentStop: only a Working session goes Idle, so an error or a pending
-            // input that arrived while the agents were running survives the timeout.
-            var release = stillRunning == 0 && session.AwaitingSubagents && session.Phase == SessionPhase.Working;
+            // Same rules as the last SubagentStop: the deferred Stop is spent once neither an agent nor a workflow is
+            // left, and only a Working session goes Idle, so an error that arrived while the agents ran survives the
+            // timeout. A workflow in flight until a moment ago keeps the session at work between two of its phases.
+            var pendingWorkflows = abandoned ? 0 : session.PendingWorkflows;
+            var spent = stillRunning == 0 && pendingWorkflows == 0;
+            var release = spent && session.AwaitingSubagents && session.Phase == SessionPhase.Working;
             var updated = session with
             {
                 Phase = release ? SessionPhase.Idle : session.Phase,
                 Message = release ? session.Message ?? "Turno completato" : session.Message,
                 Subagents = subagents is null ? null : TrimDone(subagents),
-                AwaitingSubagents = stillRunning > 0 && session.AwaitingSubagents,
-                PendingWorkflows = stillRunning > 0 ? session.PendingWorkflows : 0
+                AwaitingSubagents = session.AwaitingSubagents && !spent,
+                PendingWorkflows = pendingWorkflows
             };
             _sessions[key] = updated;
-            changes.Add(new SessionChange(SessionChangeKind.Updated, updated, session.Phase));
+            // Only the end of the turn is news; agents released from a session that stays at work or in error are not.
+            changes.Add(new SessionChange(SessionChangeKind.Updated, updated, session.Phase, Silent: !release));
         }
         return changes;
 
-        bool IsActive(SessionState session, SubagentState subagent)
+        bool TimedOut(SessionState session, SubagentState subagent, bool quiet)
         {
-            if (lastActivity is null) return false;
-            try { return lastActivity(session, subagent) is { } at && now - at <= timeout; }
-            catch (Exception ex) { Report(ex); return false; }
+            // A Codex child synthesised from its rollout lives by the pump's re-announcements: the session rule decides
+            // for it, and a recent activity can only keep it, as before.
+            if (subagent.AgentType == CodexSubagentScanner.SyntheticAgentType)
+                return quiet && !(Activity(session, subagent) is { } seen && now - seen <= timeout);
+            return Activity(session, subagent) is { } last ? now - last > timeout : quiet;
+        }
+
+        DateTimeOffset? Activity(SessionState session, SubagentState subagent)
+        {
+            if (lastActivity is null) return null;
+            try { return lastActivity(session, subagent); }
+            catch (Exception ex) { Report(ex); return null; }
         }
     }
 
@@ -586,9 +763,8 @@ public sealed class SessionTracker
     }
 
     /// <summary>
-    /// Most urgent phase among the agent's sessions: Error > NeedsInput (a permission or a question) > Working >
-    /// NeedsInput (only waiting for the next prompt) > Idle; null when there are none. A session that finished its turn
-    /// and waits for the next prompt must not paint the icon amber while another one is at work.
+    /// Most urgent phase among the agent's sessions: Error > NeedsInput (a permission, a question, a plan) > Working >
+    /// Idle; null when there are none.
     /// </summary>
     public SessionPhase? AggregatePhase(AgentKind agent)
     {
@@ -601,13 +777,12 @@ public sealed class SessionTracker
         }
     }
 
-    /// <summary>Ranks a session for <see cref="AggregatePhase"/> and the notch summary.</summary>
+    /// <summary>Ranks a session for <see cref="AggregatePhase"/>.</summary>
     public static int Urgency(SessionState session) => session.Phase switch
     {
-        SessionPhase.Error => 4,
-        SessionPhase.NeedsInput when !session.AwaitsPrompt => 3,
-        SessionPhase.Working => 2,
-        SessionPhase.NeedsInput => 1,
+        SessionPhase.Error => 3,
+        SessionPhase.NeedsInput => 2,
+        SessionPhase.Working => 1,
         _ => 0
     };
 

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Tests.Helpers;
 
@@ -299,5 +300,187 @@ public class CodexSubagentScannerTests
         File.SetLastWriteTimeUtc(full, Now.AddSeconds(-30).UtcDateTime);
 
         Assert.Equal(new[] { Child }, scanner.ActiveChildren(Parent));
+    }
+
+    private const string Guardian = "01a09a02-5d17-7c3e-8b40-6f2e1d9c0a53";
+
+    /// <summary>
+    /// The session_meta of a child as Codex 0.15x writes it: <c>source.subagent.thread_spawn</c> names the parent and
+    /// the name Codex gave the thread, repeated at the top level (<paramref name="topLevelName"/> false leaves the
+    /// copy at the top level out). A null nickname or path is left out of both places.
+    /// </summary>
+    private static string SpawnMeta(string threadId, string parentThreadId, DateTimeOffset ts, string? nickname, string? agentPath,
+        bool topLevelName = true)
+    {
+        var spawn = new Dictionary<string, object?> { ["parent_thread_id"] = parentThreadId, ["depth"] = 1, ["agent_role"] = null };
+        if (nickname is not null) spawn["agent_nickname"] = nickname;
+        if (agentPath is not null) spawn["agent_path"] = agentPath;
+        var payload = new Dictionary<string, object?>
+        {
+            ["session_id"] = parentThreadId, ["id"] = threadId, ["parent_thread_id"] = parentThreadId, ["cwd"] = @"C:\demo\proj",
+            ["originator"] = "codex-tui", ["cli_version"] = "0.155.0",
+            ["source"] = new Dictionary<string, object?> { ["subagent"] = new Dictionary<string, object?> { ["thread_spawn"] = spawn } },
+            ["thread_source"] = "subagent"
+        };
+        if (topLevelName && nickname is not null) payload["agent_nickname"] = nickname;
+        if (topLevelName && agentPath is not null) payload["agent_path"] = agentPath;
+        return JsonSerializer.Serialize(new Dictionary<string, object?> { ["timestamp"] = Stamp(ts), ["type"] = "session_meta", ["payload"] = payload });
+    }
+
+    /// <summary>
+    /// The session_meta of a guardian thread: Codex runs one to review the session's actions, with the session as its
+    /// parent, <c>source.subagent.other</c> and no name.
+    /// </summary>
+    private static string GuardianMeta(string threadId, string parentThreadId, DateTimeOffset ts) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["timestamp"] = Stamp(ts), ["type"] = "session_meta",
+            ["payload"] = new Dictionary<string, object?>
+            {
+                ["session_id"] = parentThreadId, ["id"] = threadId, ["parent_thread_id"] = parentThreadId, ["cwd"] = @"C:\demo\proj",
+                ["source"] = new Dictionary<string, object?> { ["subagent"] = new Dictionary<string, object?> { ["other"] = "guardian" } },
+                ["thread_source"] = "guardian_review"
+            }
+        });
+
+    /// <summary>A session_meta written before Codex recorded a source: only <c>thread_source</c> (when not null) tells what the thread is.</summary>
+    private static string OldMeta(string threadId, string parentThreadId, DateTimeOffset ts, string? threadSource) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["timestamp"] = Stamp(ts), ["type"] = "session_meta",
+            ["payload"] = threadSource is null
+                ? new Dictionary<string, object?> { ["session_id"] = parentThreadId, ["id"] = threadId, ["parent_thread_id"] = parentThreadId }
+                : new Dictionary<string, object?>
+                {
+                    ["session_id"] = parentThreadId, ["id"] = threadId, ["parent_thread_id"] = parentThreadId, ["thread_source"] = threadSource
+                }
+        });
+
+    /// <summary>
+    /// Writes a rollout named after <paramref name="threadId"/>: the given session_meta line, then one turn event per
+    /// entry at its own instant. The directory entry is stamped with the newest instant.
+    /// </summary>
+    private static string Turns(TempDir dir, string threadId, string metaLine, params (string Kind, DateTimeOffset At)[] turns)
+    {
+        var lines = new List<string> { metaLine };
+        lines.AddRange(turns.Select(t => Event(t.Kind, t.At)));
+        var full = dir.File(Path.Combine("sessions", "2026", "09", "13", $"rollout-2026-09-13T11-30-00-{threadId}.jsonl"), string.Join("\n", lines) + "\n");
+        File.SetLastWriteTimeUtc(full, (turns.Length == 0 ? Now.AddMinutes(-30) : turns.Max(t => t.At)).UtcDateTime);
+        return full;
+    }
+
+    [Fact]
+    public void ChildInfo_reads_the_name_and_the_newest_turn_of_a_spawned_child()
+    {
+        using var dir = new TempDir();
+        var meta = SpawnMeta(Child, Parent, Now.AddMinutes(-30), "Noether", "/root/login_audit");
+        Turns(dir, Child, meta, (TaskStarted, Now.AddMinutes(-29)), (TaskComplete, Now.AddMinutes(-20)), (TaskStarted, Now.AddMinutes(-5)), (Decoy, Now.AddMinutes(-4)));
+        var scanner = Build(dir);
+
+        Assert.Equal(new CodexChildInfo(Child, "Noether", "/root/login_audit", CodexTurnState.Running, Now.AddMinutes(-5)), scanner.ChildInfo(Child));
+
+        // The same thread, a turn later: the rollout is re-read, only the tail.
+        Turns(dir, Child, meta, (TaskStarted, Now.AddMinutes(-29)), (TaskComplete, Now.AddMinutes(-20)), (TaskStarted, Now.AddMinutes(-5)),
+            (TaskComplete, Now.AddMinutes(-1)));
+        Assert.Equal(new CodexChildInfo(Child, "Noether", "/root/login_audit", CodexTurnState.Finished, Now.AddMinutes(-1)), scanner.ChildInfo(Child));
+
+        Turns(dir, Child, meta, (TaskStarted, Now.AddMinutes(-29)), (TurnAborted, Now.AddSeconds(-30)));
+        Assert.Equal(new CodexChildInfo(Child, "Noether", "/root/login_audit", CodexTurnState.Finished, Now.AddSeconds(-30)), scanner.ChildInfo(Child));
+    }
+
+    [Fact]
+    public void ChildInfo_takes_the_name_from_the_thread_spawn_source_and_leaves_out_what_is_missing()
+    {
+        using var dir = new TempDir();
+        Turns(dir, Child, SpawnMeta(Child, Parent, Now.AddMinutes(-30), "Noether", "/root/login_audit", topLevelName: false), (TaskStarted, Now.AddMinutes(-2)));
+        Turns(dir, Sibling, SpawnMeta(Sibling, Parent, Now.AddMinutes(-30), null, null), (TaskStarted, Now.AddMinutes(-2)));
+        var scanner = Build(dir);
+
+        var child = scanner.ChildInfo(Child);
+        Assert.Equal(("Noether", "/root/login_audit"), (child?.Nickname, child?.AgentPath));
+        var nameless = scanner.ChildInfo(Sibling);
+        Assert.NotNull(nameless);
+        Assert.Null(nameless.Nickname);
+        Assert.Null(nameless.AgentPath);
+        Assert.Equal(CodexTurnState.Running, nameless.State);
+    }
+
+    [Fact]
+    public void ChildInfo_is_unknown_for_a_child_whose_rollout_has_no_turn_event_yet()
+    {
+        using var dir = new TempDir();
+        Turns(dir, Child, SpawnMeta(Child, Parent, Now.AddMinutes(-1), "Noether", "/root/login_audit"));
+
+        Assert.Equal(new CodexChildInfo(Child, "Noether", "/root/login_audit", CodexTurnState.Unknown, null), Build(dir).ChildInfo(Child));
+    }
+
+    [Fact]
+    public void ChildInfo_is_null_for_a_guardian_a_root_thread_and_a_thread_without_a_rollout()
+    {
+        using var dir = new TempDir();
+        Turns(dir, Guardian, GuardianMeta(Guardian, Parent, Now.AddMinutes(-2)), (TaskStarted, Now.AddMinutes(-1)));
+        Rollout(dir, $"rollout-2026-09-13T11-58-00-{Parent}.jsonl", Parent, null, [TaskStarted], Now.AddSeconds(-10));
+        var scanner = Build(dir);
+
+        Assert.Null(scanner.ChildInfo(Guardian));
+        Assert.Null(scanner.ChildInfo(Parent));
+        Assert.Null(scanner.ChildInfo(Sibling));
+        // Ids the tracker makes up for agents without one are never looked up.
+        Assert.Null(scanner.ChildInfo("anon:638940960000000000"));
+        Assert.Null(scanner.ChildInfo(""));
+    }
+
+    [Fact]
+    public void ChildInfo_of_a_rollout_without_source_follows_the_parent_rule_unless_its_thread_source_says_otherwise()
+    {
+        using var dir = new TempDir();
+        Turns(dir, Child, OldMeta(Child, Parent, Now.AddMinutes(-3), "subagent"), (TaskStarted, Now.AddMinutes(-2)));
+        Turns(dir, Sibling, OldMeta(Sibling, Parent, Now.AddMinutes(-3), null), (TaskComplete, Now.AddMinutes(-2)));
+        Turns(dir, Guardian, OldMeta(Guardian, Parent, Now.AddMinutes(-3), "guardian_review"), (TaskStarted, Now.AddMinutes(-2)));
+        var scanner = Build(dir);
+
+        Assert.Equal(new CodexChildInfo(Child, null, null, CodexTurnState.Running, Now.AddMinutes(-2)), scanner.ChildInfo(Child));
+        Assert.Equal(new CodexChildInfo(Sibling, null, null, CodexTurnState.Finished, Now.AddMinutes(-2)), scanner.ChildInfo(Sibling));
+        Assert.Null(scanner.ChildInfo(Guardian));
+    }
+
+    /// <summary>
+    /// A thread whose rollout is not there yet (Codex fires SubagentStart a few seconds after creating it, but a
+    /// hook id may also name no Codex thread at all) is looked up again only once the miss has aged.
+    /// </summary>
+    [Fact]
+    public void ChildInfo_looks_up_a_missing_rollout_again_only_after_a_while()
+    {
+        using var dir = new TempDir();
+        var clock = new FakeClock(Now);
+        var scanner = new CodexSubagentScanner(Path.Combine(dir.Path, "sessions"), clock);
+        Directory.CreateDirectory(Path.Combine(dir.Path, "sessions"));
+
+        Assert.Null(scanner.ChildInfo(Child));
+        Turns(dir, Child, SpawnMeta(Child, Parent, Now.AddSeconds(-3), "Noether", "/root/login_audit"), (TaskStarted, Now.AddSeconds(-2)));
+        Assert.Null(scanner.ChildInfo(Child));
+
+        clock.Advance(CodexSubagentScanner.RolloutMissTtl);
+        Assert.Equal(CodexTurnState.Running, scanner.ChildInfo(Child)?.State);
+    }
+
+    [Fact]
+    public void ActiveChildren_ignores_the_guardian_threads_of_a_session()
+    {
+        using var dir = new TempDir();
+        Turns(dir, Child, SpawnMeta(Child, Parent, Now.AddMinutes(-3), "Noether", "/root/login_audit"), (TaskStarted, Now.AddSeconds(-30)));
+        Turns(dir, Guardian, GuardianMeta(Guardian, Parent, Now.AddSeconds(-20)), (TaskStarted, Now.AddSeconds(-10)));
+
+        Assert.Equal(new[] { Child }, Build(dir).ActiveChildren(Parent));
+    }
+
+    [Fact]
+    public void ActiveChildren_ignores_an_old_rollout_whose_thread_source_is_not_subagent()
+    {
+        using var dir = new TempDir();
+        Turns(dir, Child, OldMeta(Child, Parent, Now.AddMinutes(-3), null), (TaskStarted, Now.AddSeconds(-30)));
+        Turns(dir, Guardian, OldMeta(Guardian, Parent, Now.AddSeconds(-20), "guardian_review"), (TaskStarted, Now.AddSeconds(-10)));
+
+        Assert.Equal(new[] { Child }, Build(dir).ActiveChildren(Parent));
     }
 }

@@ -18,9 +18,50 @@ public class SettingsStoreTests
         Assert.Equal(400, s.CollapseDelayMs);
         Assert.True(s.NotchVisible);
         Assert.True(s.NotifyNeedsInput && s.NotifyTurnCompleted && s.NotifyError && s.NotifyClaude && s.NotifyCodex);
+        // I suoni delle card ("Finito" e permessi, piani, domande, errori) sono attivi di default (spec 2026-09-27 §8).
+        Assert.True(s.NotifySound);
         // Il fallback sui rollout di Codex resta attivo di default: serve finche' i gruppi hook di Codex non sono
         // approvati con /hooks, ed e' comunque disattivato per le sessioni i cui hook riportano i subagenti.
         Assert.True(s.CodexSubagentFallback);
+    }
+
+    [Fact]
+    public void Notification_sound_can_be_switched_off_and_survives_a_reload()
+    {
+        using var dir = new TempDir();
+        var path = Path.Combine(dir.Path, "settings.json");
+        var store = new SettingsStore(path);
+        var edited = store.Current.Clone();
+        edited.NotifySound = false;
+        store.Save(edited);
+
+        Assert.False(store.Current.NotifySound);
+        Assert.False(new SettingsStore(path).Current.NotifySound);
+        // Il nome della chiave in settings.json e' pubblico: resta quello della proprieta'.
+        Assert.Contains("\"NotifySound\": false", File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void Settings_written_before_the_sound_option_keep_the_sound_on()
+    {
+        using var dir = new TempDir();
+        // settings.json di una versione precedente: le chiavi delle notifiche di allora, senza NotifySound.
+        var path = dir.File("settings.json", """
+            {
+              "NotifyNeedsInput": false,
+              "NotifyTurnCompleted": true,
+              "NotifyError": true,
+              "NotifyClaude": true,
+              "NotifyCodex": false
+            }
+            """);
+
+        var loaded = new SettingsStore(path).Current;
+
+        Assert.True(loaded.NotifySound);
+        // Il file e' stato letto davvero: le chiavi presenti tengono il loro valore.
+        Assert.False(loaded.NotifyNeedsInput);
+        Assert.False(loaded.NotifyCodex);
     }
 
     [Fact]

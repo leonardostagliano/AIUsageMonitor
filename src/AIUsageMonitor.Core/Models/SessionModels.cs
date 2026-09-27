@@ -88,7 +88,10 @@ public sealed record SubagentState(
     string? TranscriptPath,
     TokenUsage Tokens,
     string? Model = null,
-    UsageLedger? Ledger = null);
+    UsageLedger? Ledger = null,
+    // The name the agent was started with (the description of a Claude agent, the nickname and path of a Codex child),
+    // at most SubagentNames.MaxLength characters; set once by the pump and kept by every later event. Never logged.
+    string? Name = null);
 
 public sealed record SessionState(
     AgentKind Agent,
@@ -117,19 +120,31 @@ public sealed record SessionState(
     // Background workflows still in flight according to the latest Stop/SubagentStop: while the session waits on
     // them, the gap between two phases of a workflow (no agent running) is not the end of the turn.
     int PendingWorkflows = 0,
-    // NeedsInput only because Claude Code's idle_prompt says the finished turn waits for the next prompt: less urgent
-    // than a permission, so it never hides a session at work in the aggregate state (tray icon, notch tab).
-    bool AwaitsPrompt = false,
     // When the notification that put the session in NeedsInput arrived; null in any other phase.
-    DateTimeOffset? WaitingSince = null)
+    DateTimeOffset? WaitingSince = null,
+    // What the session waits for while in NeedsInput, as the pump resolved it for the live notification; null in any
+    // other phase and for a wait restored by the replay.
+    AttentionDetail? Attention = null,
+    // Start of the latest turn: set when the session goes to work from Idle, Error or from nothing, kept when it goes
+    // back to work after a permission and through Idle/Error, so the end of the turn can say how long it took.
+    DateTimeOffset? TurnStartedAt = null)
 {
-    /// <summary>Italian label shown in the UI. Idle is "pronto" before the first completed turn, "finito" after.</summary>
+    /// <summary>
+    /// Italian label shown in the UI. Idle is "pronto" before the first completed turn, "finito" after; NeedsInput says
+    /// what the session waits for when the pump could tell ("permesso", "domanda", "piano da approvare").
+    /// </summary>
     public string PhaseLabel => Phase switch
     {
         SessionPhase.Working when ActiveSubagents == 1 => "al lavoro · 1 agente",
         SessionPhase.Working when ActiveSubagents > 1 => $"al lavoro · {ActiveSubagents} agenti",
         SessionPhase.Working => "al lavoro",
-        SessionPhase.NeedsInput => "attende input",
+        SessionPhase.NeedsInput => Attention?.Kind switch
+        {
+            AttentionKind.Permission => "permesso",
+            AttentionKind.Question => "domanda",
+            AttentionKind.Plan => "piano da approvare",
+            _ => "attende input"
+        },
         SessionPhase.Idle => Message is null ? "pronto" : "finito",
         SessionPhase.Error => "errore",
         _ => Phase.ToString()
@@ -179,4 +194,14 @@ public sealed record HookEvent(
     IReadOnlyList<BackgroundTask>? BackgroundTasks = null,
     // Set by the app's own sources (session registry, cloud API); null for the lines written by hook.cjs.
     SessionOrigin? Origin = null,
-    string? Title = null);
+    string? Title = null,
+    // What a live attention Notification waits for, resolved by the pump before the tracker applies it; null for every
+    // other event and for the replay.
+    AttentionDetail? Attention = null,
+    // Set by the app's own sources on the phase they find a session in when they first see it (the registry adopting a
+    // session, the first read of a cloud session), as opposed to a change they saw happen: a turn already under way
+    // began at a time nobody saw, so it starts no turn (no TurnStartedAt).
+    bool Adopted = false,
+    // Set by the pump on the events it synthesises from its own reading (an agent found dead in its transcript, a Codex
+    // child that ended): the session changes as usual, but the change is raised Silent (no card, no sound).
+    bool Quiet = false);

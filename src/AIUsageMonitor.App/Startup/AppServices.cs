@@ -6,6 +6,7 @@ using AIUsageMonitor.App.Updates;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
 using AIUsageMonitor.Core.Pricing;
 using AIUsageMonitor.Core.Sessions;
 using AIUsageMonitor.Core.Settings;
@@ -15,7 +16,7 @@ using AIUsageMonitor.Core.Usage;
 
 namespace AIUsageMonitor.App.Startup;
 
-/// <summary>Severity of a user-facing notice, displayed in the notification title.</summary>
+/// <summary>Severity of a user-facing notice: the tone of its card, which closes by itself only for Info.</summary>
 public enum NoticeKind { Info, Warning, Error }
 
 /// <summary>Composition root: owns every Core service and republishes their events as one StateChanged.</summary>
@@ -55,7 +56,7 @@ public sealed class AppServices : IDisposable
     /// <summary>Raised on a background thread whenever usage or sessions change. Marshal with UiDispatcher.</summary>
     public event Action? StateChanged;
 
-    /// <summary>Raised on the calling thread with a message to surface to the user as a Windows notification.</summary>
+    /// <summary>Raised on the calling thread with a message to surface to the user as a card (NotificationService).</summary>
     public event Action<string, string, NoticeKind>? Notice;
 
     private readonly Dictionary<AgentKind, (HookStatusReport Report, DateTimeOffset At)> _hookStatus = new();
@@ -148,11 +149,15 @@ public sealed class AppServices : IDisposable
             CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, Clock),
             CodexSubagentsEnabled = () => Settings.Current.CodexSubagentFallback,
             // Totali dei token di sessione e subagenti: tutta la sua IO gira sul thread della pump.
-            TokenSource = tokens
+            TokenSource = tokens,
+            // Cosa aspetta una sessione (il tool_use in sospeso nel transcript suo o di un suo agente) per le notifiche
+            // live di permesso e domanda; mai durante il replay silenzioso. Un transcript illeggibile finisce nel log
+            // solo come tipo di errore: mai il percorso, il comando o la domanda.
+            Attention = new AttentionResolver { LogError = Log.Warn }
         };
 
         // Legge le sessioni cloud alla cadenza della quota di Claude, su un suo ciclo in background; gli eventi passano
-        // dalla pump come quelli degli hook. La prima lettura e' silenziosa (nessun toast per cio' che era gia' in corso).
+        // dalla pump come quelli degli hook. La prima lettura e' silenziosa (nessuna card per cio' che era gia' in corso).
         _cloudPoller = new CloudSessionPoller(new ClaudeCloudSessionsClient(paths, http, Clock, userAgent).FetchAsync, cloud, Pump, Clock, CloudInterval)
         {
             OnInfo = Log.Info,
@@ -394,7 +399,7 @@ public sealed class AppServices : IDisposable
     /// <summary>
     /// Porta in primo piano il terminale della sessione. Gira tutta su un thread di background (CLI di Herdr e
     /// scansione dei processi) e non solleva mai: torna false quando nessuna strategia ha funzionato, e in quel caso
-    /// il chiamante mostra il toast "Terminale non trovato".
+    /// il chiamante mostra l'avviso "Terminale non trovato".
     /// </summary>
     /// <remarks>
     /// Una sessione nel cloud non ha terminale: il click la apre nell'app desktop di Claude se e' in esecuzione,
@@ -406,8 +411,8 @@ public sealed class AppServices : IDisposable
             : _focuser.FocusAsync(session);
 
     /// <summary>
-    /// Alza un <see cref="Notice"/> per conto di chi non possiede l'icona della tray (i ViewModel del notch): il
-    /// renderer resta uno solo, <c>TrayIconController</c>, che lo inoltra al servizio notifiche con il logo dell'app.
+    /// Alza un <see cref="Notice"/> per conto di chi non possiede il servizio notifiche (i ViewModel del notch): il
+    /// renderer resta uno solo, <c>NotificationService</c>, che lo mostra come card.
     /// </summary>
     public void Notify(string title, string text, NoticeKind kind) => Notice?.Invoke(title, text, kind);
 

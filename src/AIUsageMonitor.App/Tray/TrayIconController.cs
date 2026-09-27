@@ -17,7 +17,6 @@ public sealed class TrayIconController : IDisposable
     private readonly AppServices _services;
     private readonly INotchHost _notch;
     private readonly WinForms.NotifyIcon _icon;
-    private readonly AppNotificationSender _notifications;
     private readonly TrayMenuHost _menuHost;
     private readonly ContextMenu _menu;
     private readonly MenuItem _toggleNotch;
@@ -26,9 +25,8 @@ public sealed class TrayIconController : IDisposable
     private readonly MenuItem _hooksCodex;
     private readonly MenuItem _update;
     private readonly Separator _updateSeparator;
-    private readonly Action<string, string, NoticeKind> _notice;
     private readonly Action<UpdatePromptState> _updatePromptChanged;
-    // Versioni gia' annunciate con una notifica in questo processo: una sola notifica per versione offerta.
+    // Versioni gia' annunciate con una card in questo processo: una sola card per versione offerta.
     private readonly HashSet<string> _announcedUpdates = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _singleClickTimer;
     private TrayIconRenderer.RenderedIcon? _rendered;
@@ -39,11 +37,16 @@ public sealed class TrayIconController : IDisposable
     /// <summary>Apre la conferma "scarica e riavvia"; impostata da App.xaml.cs. Null-safe.</summary>
     public Action? OpenUpdatePrompt { get; set; }
 
-    public TrayIconController(AppServices services, INotchHost notch, AppNotificationSender notifications)
+    /// <summary>
+    /// Card dell'app per l'annuncio degli aggiornamenti; impostata da App.xaml.cs dopo <c>AppServices.Start()</c>, quando
+    /// il servizio notifiche esiste. Finche' e' null nessuna versione viene segnata come annunciata.
+    /// </summary>
+    public NotificationService? Notifications { get; set; }
+
+    public TrayIconController(AppServices services, INotchHost notch)
     {
         _services = services;
         _notch = notch;
-        _notifications = notifications;
 
         // Il menu e' un ContextMenu WPF (Tray/TrayMenu.xaml) e non piu' una ContextMenuStrip: la striscia WinForms non
         // prende l'aspetto del notch (cromatura chiara, angoli vivi, font suoi). La NotifyIcon resta solo per icona,
@@ -109,27 +112,12 @@ public sealed class TrayIconController : IDisposable
             OpenSettings?.Invoke();
         };
         services.StateChanged += () => UiDispatcher.Post(UpdateIcon);
-        // Unico renderer dei messaggi utente: AppServices.InstallHooks alza il Notice da entrambi i punti di ingresso
-        // (menu tray e link "installa hook" nella card del notch), cosi' lo stesso click dice sempre la stessa cosa.
-        _notice = (title, text, kind) => UiDispatcher.Post(() => ShowNotification(title, text, BalloonIcon(kind)));
-        services.Notice += _notice;
+        // Gli avvisi dell'app (AppServices.Notice) li mostra NotificationService come card: la tray non li ascolta piu'.
         // La conferma alza Changed da thread qualsiasi: l'annuncio passa dal thread UI come ogni altra notifica.
         _updatePromptChanged = state => UiDispatcher.Post(() => AnnounceUpdate(state));
         services.UpdatePrompt.Changed += _updatePromptChanged;
         UpdateIcon();
         _icon.Visible = true;
-    }
-
-    public void ShowNotification(string title, string text, WinForms.ToolTipIcon kind)
-    {
-        // Severity remains explicit in the title; the toast always supplies the current app logo.
-        var displayTitle = kind switch
-        {
-            WinForms.ToolTipIcon.Warning => $"Attenzione · {title}",
-            WinForms.ToolTipIcon.Error => $"Errore · {title}",
-            _ => title
-        };
-        _notifications.Show(displayTitle, text);
     }
 
     /// <summary>Apre il menu del tray sul puntatore, con le etichette dinamiche appena rilette.</summary>
@@ -154,13 +142,6 @@ public sealed class TrayIconController : IDisposable
     }
 
     private static T Resource<T>(string key) => (T)System.Windows.Application.Current.FindResource(key);
-
-    private static WinForms.ToolTipIcon BalloonIcon(NoticeKind kind) => kind switch
-    {
-        NoticeKind.Error => WinForms.ToolTipIcon.Error,
-        NoticeKind.Warning => WinForms.ToolTipIcon.Warning,
-        _ => WinForms.ToolTipIcon.Info
-    };
 
     /// <summary>
     /// Ogni voce è protetta singolarmente: il menu deve aprirsi anche se leggere lo stato hook o il registro fallisce
@@ -197,15 +178,16 @@ public sealed class TrayIconController : IDisposable
     }, "stato non disponibile", $"HookStatus {agent}");
 
     /// <summary>
-    /// Notifica Windows la prima volta che la conferma offre una versione, in questo processo; il click (argomento
-    /// <see cref="NotificationPayload.ShowUpdateLaunch"/>) apre la conferma. Dopo "Più tardi" la versione non viene
-    /// piu' offerta fino al riavvio, quindi non torna nemmeno la notifica.
+    /// Card dell'app la prima volta che la conferma offre una versione, in questo processo; il clic
+    /// (<see cref="NotificationAction.OpenUpdate"/>) apre la conferma. La card resta finche' non la si apre o la si
+    /// chiude (anche dopo "Non disturbare"): e' l'unica volta che viene offerta. Dopo "Più tardi" la versione non viene
+    /// piu' offerta fino al riavvio, quindi non torna nemmeno la card.
     /// </summary>
     private void AnnounceUpdate(UpdatePromptState state)
     {
-        if (state.Version is not { } version || !_announcedUpdates.Add(version)) return;
-        _notifications.Show("AIUsageMonitor · aggiornamento", $"È disponibile la versione {version}. Clicca per aggiornare.",
-            NotificationPayload.ShowUpdateLaunch);
+        if (state.Version is not { } version || Notifications is not { } notifications || !_announcedUpdates.Add(version)) return;
+        notifications.ShowNotice("AIUsageMonitor · aggiornamento", $"È disponibile la versione {version}. Clicca per aggiornare.",
+            NoticeKind.Info, NotificationAction.OpenUpdate);
     }
 
     private void ToggleAutoStart()
@@ -237,7 +219,6 @@ public sealed class TrayIconController : IDisposable
 
     public void Dispose()
     {
-        _services.Notice -= _notice;
         _services.UpdatePrompt.Changed -= _updatePromptChanged;
         _singleClickTimer.Stop();
         _icon.Visible = false;

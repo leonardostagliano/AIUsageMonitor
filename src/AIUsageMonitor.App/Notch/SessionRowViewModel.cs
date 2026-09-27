@@ -6,6 +6,7 @@ using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Startup;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
 using AIUsageMonitor.Core.Presentation;
 using AIUsageMonitor.Core.Pricing;
 
@@ -167,7 +168,8 @@ public sealed class SessionRowViewModel : ObservableObject
     /// <summary>
     /// Click sul nome della riga. <c>FocusTerminalAsync</c> gira gia' tutto su un thread di background (CLI di Herdr e
     /// risalita dei processi, 3 s di timeout) e non solleva, quindi qui basta non aspettarlo: il thread della UI torna
-    /// subito e il notch resta reattivo. Il toast di fallimento torna sul thread della UI perche' lo mostra la tray.
+    /// subito e il notch resta reattivo. L'avviso di fallimento (lo stesso della card di sessione, FocusFailureNotice)
+    /// passa da AppServices.Notice e diventa una card di NotificationService.
     /// La sessione viene catturata adesso: la riga puo' essere aggiornata mentre la catena delle strategie e' in corso.
     /// </summary>
     private void FocusTerminal()
@@ -190,8 +192,7 @@ public sealed class SessionRowViewModel : ObservableObject
             focused = false;
         }
         if (focused) return;
-        var text = session.Origin is SessionOrigin.Cloud or SessionOrigin.Routine ? "Pagina della sessione non aperta" : "Terminale non trovato";
-        UiDispatcher.Post(() => _services.Notify($"{session.Agent.DisplayName()} · {session.DisplayName}", text, NoticeKind.Warning));
+        UiDispatcher.Post(() => _services.Notify(FocusFailureNotice.Title(session), FocusFailureNotice.Text(session), NoticeKind.Warning));
     }
 
     private void Toggle()

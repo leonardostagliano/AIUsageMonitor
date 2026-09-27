@@ -9,17 +9,20 @@ using AIUsageMonitor.Tests.Helpers;
 namespace AIUsageMonitor.Tests;
 
 /// <summary>
-/// "attende input" while agents work (idle_prompt, a permission granted without a hook) and the finished sessions of
-/// the apps and of the cloud that must not linger.
+/// idle_prompt is never a wait (it only closes, silently, a turn whose Stop was lost), a permission granted without a
+/// hook, and the finished sessions of the apps and of the cloud that must not linger.
 /// </summary>
 public class WaitingAndIdleTests
 {
     private static readonly DateTimeOffset T0 = new(2026, 9, 25, 9, 0, 0, TimeSpan.Zero);
 
+    private static readonly AttentionDetail BashPermission = new(AttentionKind.Permission, "Bash", "dotnet test");
+
     private static HookEvent Ev(string evt, int plusSeconds = 0, string sid = "s1", string? agentId = null,
-        string? notificationType = null, IReadOnlyList<BackgroundTask>? tasks = null, SessionOrigin? origin = null) =>
+        string? notificationType = null, IReadOnlyList<BackgroundTask>? tasks = null, SessionOrigin? origin = null,
+        AttentionDetail? attention = null) =>
         new(T0.AddSeconds(plusSeconds), AgentKind.Claude, evt, sid, @"C:\p\demo", notificationType, null, null, agentId,
-            BackgroundTasks: tasks, Origin: origin);
+            BackgroundTasks: tasks, Origin: origin, Attention: attention);
 
     [Fact]
     public void Idle_prompt_is_ignored_while_background_agents_work()
@@ -36,31 +39,98 @@ public class WaitingAndIdleTests
     }
 
     [Fact]
-    public void A_session_only_waiting_for_its_next_prompt_does_not_hide_one_at_work()
+    public void Idle_prompt_is_ignored_while_a_background_workflow_is_in_flight()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("Stop", 2, tasks: [new BackgroundTask("wf1", BackgroundTask.WorkflowType)]));
+
+        Assert.Null(tracker.Apply(Ev("Notification", 70, notificationType: "idle_prompt")));
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase);
+    }
+
+    [Fact]
+    public void Idle_prompt_after_a_finished_turn_changes_nothing()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit", sid: "done"));
+        tracker.Apply(Ev("Stop", 1, sid: "done"));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        Assert.Null(tracker.Apply(Ev("Notification", 61, sid: "done", notificationType: "idle_prompt")));
+
+        Assert.Empty(changes);
+        var done = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, done.Phase);
+        Assert.Equal("finito", done.PhaseLabel);
+        Assert.Equal("Turno completato", done.Message);
+        Assert.Equal(T0.AddSeconds(1), done.LastEventAt);
+        Assert.Null(done.WaitingSince);
+        Assert.Equal(SessionPhase.Idle, tracker.AggregatePhase(AgentKind.Claude));
+        Assert.Null(NotchPresentation.Summary(tracker.Sessions));
+    }
+
+    [Fact]
+    public void Idle_prompt_closes_silently_a_turn_whose_stop_was_lost()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        var change = tracker.Apply(Ev("Notification", 70, notificationType: "idle_prompt"));
+
+        Assert.NotNull(change);
+        Assert.True(change.Silent);
+        Assert.Equal(SessionChangeKind.Updated, change.Kind);
+        Assert.Equal(SessionPhase.Working, change.PreviousPhase);
+        Assert.Same(change, Assert.Single(changes));
+        var s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Equal("finito", s.PhaseLabel);
+        Assert.Equal("Turno completato", s.Message);
+        Assert.Equal(T0.AddSeconds(70), s.LastEventAt);
+        Assert.Equal(T0, s.TurnStartedAt);
+        Assert.False(s.AwaitingSubagents);
+    }
+
+    [Fact]
+    public void Idle_prompt_never_hides_a_pending_permission_and_never_creates_a_session()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("Notification", 5, notificationType: "permission_prompt", attention: BashPermission));
+
+        Assert.Null(tracker.Apply(Ev("Notification", 65, notificationType: "idle_prompt")));
+        var s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.NeedsInput, s.Phase);
+        Assert.Equal(BashPermission, s.Attention);
+        Assert.Equal(T0.AddSeconds(5), s.WaitingSince);
+
+        Assert.Null(tracker.Apply(Ev("Notification", 66, sid: "unknown", notificationType: "idle_prompt")));
+        Assert.Single(tracker.Sessions);
+    }
+
+    [Fact]
+    public void A_session_waiting_for_a_permission_is_the_most_urgent_thing_on_screen()
     {
         var tracker = new SessionTracker(new FakeClock(T0));
         tracker.Apply(Ev("UserPromptSubmit", sid: "done"));
         tracker.Apply(Ev("Stop", 1, sid: "done"));
         tracker.Apply(Ev("Notification", 61, sid: "done", notificationType: "idle_prompt"));
-        var done = tracker.Sessions.Single();
-        Assert.Equal(SessionPhase.NeedsInput, done.Phase);
-        Assert.True(done.AwaitsPrompt);
-        Assert.Equal(T0.AddSeconds(61), done.WaitingSince);
-        Assert.Equal(SessionPhase.NeedsInput, tracker.AggregatePhase(AgentKind.Claude));   // alone, it still shows
-
         tracker.Apply(Ev("UserPromptSubmit", 62, sid: "busy"));
         Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
         Assert.Equal(new SummaryPill(PhaseTone.Working, "1 al lavoro"), NotchPresentation.Summary(tracker.Sessions));
 
-        // A real permission prompt is still the most urgent thing on screen.
-        tracker.Apply(Ev("Notification", 63, sid: "asks", notificationType: "permission_prompt"));
-        Assert.False(tracker.Sessions.Single(x => x.SessionId == "asks").AwaitsPrompt);
+        tracker.Apply(Ev("Notification", 63, sid: "asks", notificationType: "permission_prompt", attention: BashPermission));
+        Assert.Equal("permesso", tracker.Sessions.Single(x => x.SessionId == "asks").PhaseLabel);
         Assert.Equal(SessionPhase.NeedsInput, tracker.AggregatePhase(AgentKind.Claude));
         Assert.Equal(new SummaryPill(PhaseTone.NeedsInput, "1 attende input"), NotchPresentation.Summary(tracker.Sessions));
     }
 
     [Fact]
-    public void An_agent_that_starts_ends_an_idle_prompt_wait_but_not_a_pending_permission()
+    public void An_agent_that_starts_wakes_an_idle_session_but_not_a_pending_permission()
     {
         var tracker = new SessionTracker(new FakeClock(T0));
         tracker.Apply(Ev("Stop", sid: "idle"));
@@ -68,15 +138,17 @@ public class WaitingAndIdleTests
         tracker.Apply(Ev("SubagentStart", 62, sid: "idle", agentId: "a1"));
         var idle = tracker.Sessions.Single();
         Assert.Equal(SessionPhase.Working, idle.Phase);
-        Assert.False(idle.AwaitsPrompt);
         Assert.Null(idle.WaitingSince);
+        Assert.Equal(T0.AddSeconds(62), idle.TurnStartedAt);
 
         tracker.Apply(Ev("UserPromptSubmit", sid: "perm"));
-        tracker.Apply(Ev("Notification", 5, sid: "perm", notificationType: "permission_prompt"));
+        tracker.Apply(Ev("Notification", 5, sid: "perm", notificationType: "permission_prompt", attention: BashPermission));
         tracker.Apply(Ev("SubagentStart", 6, sid: "perm", agentId: "w1"));
         var perm = tracker.Sessions.Single(x => x.SessionId == "perm");
         Assert.Equal(SessionPhase.NeedsInput, perm.Phase);
         Assert.Equal(T0.AddSeconds(5), perm.WaitingSince);
+        Assert.Equal(BashPermission, perm.Attention);
+        Assert.Equal(T0, perm.TurnStartedAt);
     }
 
     private static void Record(string dir, int pid, string sessionId, string status, DateTimeOffset startedAt, DateTimeOffset statusAt,
@@ -100,7 +172,7 @@ public class WaitingAndIdleTests
         var tracker = new SessionTracker(clock);
         var feed = new ClaudeRegistrySessionFeed(new ClaudeSessionRegistryReader(dir.Path), probe, clock);
         tracker.Apply(Ev("UserPromptSubmit"));
-        tracker.Apply(Ev("Notification", 10, notificationType: "permission_prompt"));
+        tracker.Apply(Ev("Notification", 10, notificationType: "permission_prompt", attention: BashPermission));
         tracker.Apply(Ev("SubagentStart", 20, agentId: "a1"));      // the agent the permission was for
         bool HookOwned(string _) => true;
 
@@ -117,11 +189,14 @@ public class WaitingAndIdleTests
         var s = tracker.Sessions.Single();
         Assert.Equal(SessionPhase.Working, s.Phase);
         Assert.Equal("al lavoro · 1 agente", s.PhaseLabel);
+        // Same turn after the permission: its start is kept, the detail of the wait is gone.
+        Assert.Null(s.Attention);
+        Assert.Equal(T0, s.TurnStartedAt);
         Assert.Empty(feed.Sync(tracker.Sessions, HookOwned).Events);
     }
 
     [Fact]
-    public void A_main_agent_that_resumes_on_its_own_after_idle_prompt_goes_back_to_work()
+    public void After_idle_prompt_a_turn_that_resumes_on_its_own_is_seen_through_the_session_registry()
     {
         using var dir = new TempDir();
         var clock = new FakeClock(T0.AddMinutes(5));
@@ -130,20 +205,27 @@ public class WaitingAndIdleTests
         var feed = new ClaudeRegistrySessionFeed(new ClaudeSessionRegistryReader(dir.Path), probe, clock);
         bool HookOwned(string _) => true;
 
-        // The turn ends, nobody answers, Claude Code says it is waiting: no agent anywhere.
+        // The turn ends, nobody answers, Claude Code says it is waiting: the session stays "finito".
         tracker.Apply(Ev("UserPromptSubmit"));
         tracker.Apply(Ev("Stop", 30));
         tracker.Apply(Ev("Notification", 90, notificationType: "idle_prompt"));
         Record(dir.Path, 10, "s1", "idle", T0, T0.AddSeconds(30));
         Assert.Empty(feed.Sync(tracker.Sessions, HookOwned).Events);
-        Assert.Equal(SessionPhase.NeedsInput, tracker.Sessions.Single().Phase);
+        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
 
-        // A background command finishes (or a scheduled check-in fires) and the main agent works again with no
-        // UserPromptSubmit: only its registry record says so.
+        // A background command finishes and the main agent works again with no UserPromptSubmit: the record went busy
+        // after the last event of the session, and the registry reports the turn the hooks did not.
         Record(dir.Path, 10, "s1", "busy", T0, T0.AddSeconds(120));
-        foreach (var e in feed.Sync(tracker.Sessions, HookOwned).Events) tracker.Apply(e);
+        var resumed = Assert.Single(feed.Sync(tracker.Sessions, HookOwned).Events);
+        Assert.Equal(("UserPromptSubmit", "registry"), (resumed.Event, resumed.Source));
+        tracker.Apply(resumed);
         Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase);
         Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
+        Assert.Empty(feed.Sync(tracker.Sessions, HookOwned).Events);
+
+        // The hooks of the resumed turn go on as usual.
+        tracker.Apply(Ev("SubagentStart", 125, agentId: "a1"));
+        Assert.Equal("al lavoro · 1 agente", tracker.Sessions.Single().PhaseLabel);
     }
 
     [Fact]

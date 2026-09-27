@@ -42,7 +42,7 @@ Dati reali di questa macchina, 13–27 settembre 2026 (`~/.aiusagemonitor/events
 | Card | Compatta: una riga di messaggio, clic per andare al terminale, ✕ per chiudere. Nessun bordo colorato. |
 | Toast di Windows | Eliminati del tutto, anche per l'aggiornamento disponibile. |
 | Non disturbare / schermo intero | Le card aspettano; all'uscita compaiono solo quelle ancora valide. |
-| Suono | Suono di sistema "Notifica" per permessi, domande ed errori; interruttore in Impostazioni, attivo di default. |
+| Suono | Due suoni propri dell'app: uno morbido per Finito, uno piu' marcato per permessi, piani, domande ed errori; avvisi dell'app muti; interruttore in Impostazioni, attivo di default. |
 
 ## 4. Precisione
 
@@ -54,7 +54,11 @@ Dati reali di questa macchina, 13–27 settembre 2026 (`~/.aiusagemonitor/events
 - `AwaitsPrompt` sparisce da `SessionState` insieme alla logica che lo leggeva (aggregato della tray e della
   linguetta, `SubagentStart` che risveglia una sessione in attesa del prompt). `NeedsInput` resta solo per permessi,
   domande, piani, richieste MCP e agenti che attendono input.
-- `SessionChange` guadagna `bool Silent` (default `false`).
+- `SessionChange` guadagna `bool Silent` (default `false`). Un cambiamento `Silent` non mostra mai una card ne' suona,
+  qualunque sia la sua fase: puo' solo ritirare la card di uno stato finito. Sono `Silent` anche i cambiamenti che non
+  cambiano stato (token, nomi degli agenti, agenti chiusi dallo sweep senza cambio di fase, agenti che partono o
+  finiscono mentre la sessione attende l'utente o e' in errore): un'attesa o un errore ripristinati dal replay non
+  tornano come card.
 
 ### 4.2 Dettaglio dell'attesa (`AttentionDetail`)
 
@@ -86,7 +90,9 @@ live (non durante il replay silenzioso delle ultime 24 h), prima di `tracker.App
    o `worker_permission_prompt`, e gli eventi `Notification` sintetizzati dal registro (`waiting`): legge il transcript
    dell'evento o, se manca, quello gia' noto della sessione.
 2. Se non c'e' un `tool_use` in sospeso nel transcript principale, prova i transcript degli agenti in esecuzione della
-   sessione (`ClaudeAgentTranscriptLocator`) e prende il `tool_use` in sospeso piu' recente: `Background = true`.
+   sessione (`ClaudeAgentTranscriptLocator`) e prende il `tool_use` in sospeso piu' recente: `Background = true`. Una
+   chiamata `Agent`/`Task` in sospeso nel transcript principale conta come "niente in sospeso" finche' la sessione ha
+   agenti in esecuzione: resta aperta per tutta la vita dell'agente, e il permesso vero e' quello che aspetta lui.
 3. Senza risultati: `permission_prompt` e `worker_permission_prompt` → `Permission` senza Tool (con `Background =
    true` se la sessione ha agenti o workflow in corso); `elicitation_*` → `Question` con Summary = messaggio
    dell'evento; `agent_needs_input` → `Input` con `Background = true`.
@@ -101,8 +107,10 @@ del cloud in `requires_action` usano `Input` con il messaggio di `pending_action
 
 `SessionState` guadagna `DateTimeOffset? TurnStartedAt`, l'inizio dell'ultimo turno: impostato all'ora dell'evento
 quando la sessione entra in `Working` da `Idle`, `Error` o da nuova (`UserPromptSubmit`, `SubagentStart` su una
-sessione `Idle`); **non** cambia quando torna `Working` da `NeedsInput` (stesso turno, dopo un permesso) ne' in
-`Idle`/`Error`, cosi' la card lo legge sullo stato del `SessionChange`. La durata e' `LastEventAt - TurnStartedAt`
+sessione `Idle`), e con un prompt scritto mentre la sessione aspetta solo gli agenti di un turno gia' chiuso (`Stop`
+gia' visto) o, riportato dagli hook, mentre attende un permesso (negato: e' un'interruzione, senza `Stop`); **non**
+cambia quando torna `Working` da `NeedsInput` per un permesso concesso (stesso turno: registro e cloud lo riportano
+come prompt) ne' in `Idle`/`Error`, cosi' la card lo legge sullo stato del `SessionChange`. La durata e' `LastEventAt - TurnStartedAt`
 nel formato `42s`, `4m 12s`, `1h 03m`; la card "Finito" mostra `Finito · 4m 12s`, oppure solo "Finito" senza
 `TurnStartedAt` (sessioni nate dal replay o dal registro gia' al lavoro).
 
@@ -117,7 +125,7 @@ nel formato `42s`, `4m 12s`, `1h 03m`; la card "Finito" mostra `Finito · 4m 12s
 | Piano | `NeedsInput`, Kind `Plan` | `Piano da approvare` | `WarningText` | Summary | no |
 | Domanda | `NeedsInput`, Kind `Question`/`Input` | `Domanda`, `Un agente attende input` | `Focus` | Summary o messaggio | no |
 | Errore | `Error` | `Errore` | `DangerText` | messaggio dell'errore o "Errore API" | no |
-| Avviso dell'app | `AppServices.Notice`, aggiornamenti | titolo dell'avviso | `TextMuted` (Info), `WarningText`, `DangerText` | testo dell'avviso | 6 s (Info), no (Warning/Error) |
+| Avviso dell'app | `AppServices.Notice`, aggiornamenti | titolo dell'avviso | `TextMuted` (Info), `WarningText`, `DangerText` | testo dell'avviso | 6 s (Info), no (Warning/Error e l'offerta di aggiornamento, fatta una volta sola) |
 
 Le impostazioni esistenti restano: `NotifyNeedsInput` (etichetta "Permessi e domande") copre Permesso, Piano e Domanda;
 `NotifyTurnCompleted` → Finito; `NotifyError` → Errore; `NotifyClaude`/`NotifyCodex` filtrano per agente. Gli avvisi
@@ -130,10 +138,11 @@ dell'app si mostrano sempre. Codex non ha hook `Notification`: per Codex arrivan
   colorati.**
 - Avatar da 30 DIP: il cerchio dell'agente come nella card del notch; per gli avvisi dell'app il logo dell'app.
 - Riga 1: nome della sessione (`DisplayName`, con il prefisso `cloud ·`/`app ·`/`routine ·` se non e' un terminale)
-  in `TextPrimary` 13 SemiBold con ellissi; a destra l'eta' ("ora", "2 min", "1 h") in `TextDisabled` 11, aggiornata
+  in `TextPrimary` 13 SemiBold con ellissi; a destra l'eta' ("ora", "2 min", "1 h") in `TextMuted` 11 (AA su `Card`), aggiornata
   ogni 30 s; ✕ visibile solo al passaggio del mouse.
 - Riga 2: puntino da 7 DIP ed etichetta 11 SemiBold nel colore del tipo.
-- Riga 3: messaggio in `TextMuted` 12, una riga con ellissi; tooltip con il testo completo.
+- Riga 3: messaggio in `TextMuted` 12, una riga con ellissi (a capo e spazi ripetuti diventano uno spazio: una
+  TextBlock disegna gli a capo anche senza wrapping); tooltip con il testo completo.
 - Card con chiusura automatica: barra da 2 DIP sul bordo inferiore (gradiente del tono `ToneNormalBrush` per Finito,
   `TextDisabled` per gli avvisi) che si svuota; il passaggio del mouse sopra la pila ferma tutti i timer.
 - Tutti i colori vengono da `Theme.xaml`; i rapporti di contrasto dei nuovi abbinamenti testo/superficie entrano in
@@ -152,13 +161,17 @@ dell'app si mostrano sempre. Codex non ha hook `Notification`: per Codex arrivan
 
 ### 5.4 Ciclo di vita (`NotificationBoard`, Core, puro)
 
-- **Una card per sessione.** Un nuovo stato della stessa sessione sostituisce il contenuto della card esistente sul
-  posto (senza animazione d'ingresso).
+- **Una card per sessione.** Un nuovo stato della stessa sessione sostituisce il contenuto della card esistente (senza
+  animazione d'ingresso) e la porta in cima alla pila, perche' e' la notizia piu' recente.
 - **Ritiro.** Una card Permesso/Piano/Domanda si ritira quando la sessione esce da `NeedsInput`; una card Errore
   quando torna `Working`/`NeedsInput`; una card Finito quando parte un nuovo turno o scade. `SessionEnd` ritira
   qualsiasi card della sessione. Quando il nuovo stato e' a sua volta notificabile (es. un secondo permesso, o
   `Working` → `Idle` a fine turno) la card della sessione viene sostituita sul posto invece di ritirarla. "Finito"
   nasce solo da `Working` → `Idle`: `NeedsInput` → `Idle` (permesso negato, turno chiuso) ritira la card e basta.
+  Negare un permesso (o chiudere una domanda o un piano) e' un'interruzione: nessun hook lo riporta, nemmeno `Stop`.
+  Per una sessione degli hook lo dice il registro: il record torna `idle` dopo l'inizio dell'attesa e ci resta per
+  `AdoptAfter`; allora un evento `Quiet` chiude l'attesa (`Stop`, o il ritorno al lavoro se agenti o workflow sono
+  ancora in corso) e la card si ritira.
 - **Avvisi dell'app.** Ogni avviso e' una card a se'; un avviso identico (titolo e testo) gia' visibile viene solo
   rinnovato (eta' e timer ripartono).
 - **Pila.** Massimo 3 card visibili, la piu' recente in cima; le altre attendono e salgono quando si libera un posto;
@@ -203,11 +216,26 @@ l'intento per il board (`Show` con il modello della card, `Retire`, oppure nient
 
 ## 8. Suono
 
-- `NotificationSound.Play()` usa `PlaySound("Notification.Default", SND_ALIAS | SND_ASYNC | SND_NODEFAULT)`: rispetta
-  lo schema audio di Windows (nessun suono se l'utente l'ha tolto).
-- Suona per Permesso, Piano, Domanda ed Errore; mai per Finito e avvisi Info; mai in silenzio; una sola volta quando
-  l'uscita dal silenzio mostra piu' card.
-- Nuova impostazione `NotifySound` (default `true`), interruttore "Suono" nella scheda Notifiche.
+- **Due suoni dell'app**, file WAV PCM 16 bit mono 44,1 kHz in `src/AIUsageMonitor.App/Assets/Sounds/`, generati in modo
+  deterministico da `tools/sounds/generate-sounds.js` (Node, nessuna dipendenza; lo script e i WAV sono nel repo, nessun
+  suono di terzi):
+  - `done.wav` (Finito): due note sinusoidali ascendenti, Mi5 659,26 Hz poi Si5 987,77 Hz, la seconda che parte 110 ms
+    dopo la prima; ciascuna con attacco lineare di 8 ms e decadimento esponenziale (costante 90 ms), 2ª armonica al 15 %;
+    durata totale 520 ms con coda a zero; picco −14 dBFS. Morbido, non chiede attenzione.
+  - `attention.wav` (Permesso, Piano, Domanda, Errore): due tocchi brillanti Si5 987,77 Hz e Mi6 1318,51 Hz, 85 ms
+    ciascuno con 55 ms di pausa, attacco 4 ms e decadimento esponenziale (costante 45 ms), 2ª armonica al 25 %; durata
+    totale 420 ms; picco −10 dBFS. Piu' marcato, si riconosce senza guardare.
+- `NotificationSound.Play(NotificationSoundKind kind)` li riproduce da risorsa incorporata con `PlaySound` di winmm
+  (`SND_MEMORY | SND_ASYNC`), da un buffer caricato una volta per suono e fissato in memoria per tutta la vita del
+  processo (con `SND_ASYNC` winmm lo legge dopo il ritorno della chiamata: un array gestito non fissato potrebbe essere
+  spostato dal GC): passano dalla sessione audio dell'app, quindi seguono volume di sistema e mixer per app. Qualsiasi errore e' ignorato (una volta nel log, solo il tipo).
+- `NotificationSoundKind { None, Done, Attention }`: il composer assegna `Done` a Finito, `Attention` a Permesso, Piano,
+  Domanda ed Errore, `None` agli avvisi dell'app; con `NotifySound` spento tutto e' `None`.
+- Il board restituisce il suono da riprodurre per ogni operazione (`Attention` prevale su `Done` se nella stessa
+  operazione ne servirebbero due): mai in silenzio; all'uscita dal silenzio un solo `Attention` se era in coda almeno
+  una card con suono `Attention` (le card `Done` in coda si scartano). Una card sostituita sul posto suona solo se il
+  suo `StateKey` e' cambiato; un avviso rinnovato non suona.
+- Impostazione `NotifySound` (default `true`), interruttore "Suono" nella scheda Notifiche.
 
 ## 9. Rimozione dei toast di Windows
 
@@ -234,7 +262,8 @@ l'intento per il board (`Show` con il modello della card, `Retire`, oppure nient
 | `SessionTracker`, `HookEvent`, `SessionState`, `HookEventPump` | Core | `idle_prompt`, `Silent`, `Attention`, `TurnStartedAt`, risoluzione live |
 | `NotificationService` | App/Notifications | Collega sessioni, avvisi, board, finestra, suono e probe sul thread UI |
 | `NotificationHostWindow`, `NotificationCardViewModel` | App/Notifications | Pila, card, animazioni, clic |
-| `QuietModeProbe`, `NotificationSound` | App/Notifications | P/Invoke: silenzio e suono |
+| `QuietModeProbe` | App/Notifications | P/Invoke: silenzio |
+| `NotificationSound`, `Assets/Sounds/*.wav`, `tools/sounds/generate-sounds.js` | App, tools | I due suoni e la loro riproduzione |
 | Impostazioni | Core/App | `NotifySound`, etichetta "Permessi e domande" |
 
 ## 11. Errori
@@ -260,6 +289,9 @@ l'intento per il board (`Show` con il modello della card, `Retire`, oppure nient
   monitor secondario con origine negativa, pila piu' alta dell'area di lavoro.
 - `HookEventPumpTests`: risoluzione solo per gli eventi live, mai nel replay.
 - `ColorContrastTests`/`ThemePaletteTests`: nuovi abbinamenti.
+- Suoni: il composer assegna `Done`/`Attention`/`None` per tipo e impostazione; il board restituisce il suono piu' forte,
+  nessuno in silenzio, uno solo all'uscita; i due WAV esistono come risorse, hanno intestazione RIFF/PCM 16 bit mono
+  44,1 kHz, durata 520 e 420 ms (±5 ms) e picco entro ±0,5 dB dal valore di spec; lo script rigenera file identici.
 - Verifica manuale: `--test-notification`, un turno reale che finisce (una sola card, nessuna dopo 60 s), un permesso
   Bash reale (comando nella card, ritiro alla concessione), una domanda, schermo intero e "Non disturbare".
 

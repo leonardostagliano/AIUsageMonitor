@@ -48,8 +48,9 @@ public sealed class CloudSessionFeed
             if (!_shown.TryGetValue(key, out var shown))
             {
                 events.Add(Event("SessionStart", session.Id, session, at));
-                // A cloud session always ran a turn: idle means that turn is over ("finito"), not a fresh prompt.
-                if (Phase(session.Id, session, at) is { } first) events.Add(first);
+                // A cloud session always ran a turn: idle means that turn is over ("finito"), not a fresh prompt. Whatever
+                // phase it is found in, it got there before this read: a turn under way has no known start.
+                if (Phase(session.Id, session, at) is { } first) events.Add(first with { Adopted = true });
                 _shown[key] = (session.Id, session.Status, session.Origin, session.Title);
                 continue;
             }

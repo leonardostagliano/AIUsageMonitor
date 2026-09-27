@@ -44,6 +44,21 @@ public static class NotchPresentation
 
     public static PhaseTone ToneOf(SubagentPhase phase) => phase == SubagentPhase.Running ? PhaseTone.Working : PhaseTone.Idle;
 
+    /// <summary>
+    /// What a subagent row says: the name the agent was started with, else its type ("workflow-subagent",
+    /// "codex-thread"…), else the first 8 characters of its id.
+    /// </summary>
+    public static string SubagentTitle(SubagentState agent) =>
+        !string.IsNullOrWhiteSpace(agent.Name) ? agent.Name
+        : !string.IsNullOrWhiteSpace(agent.AgentType) ? agent.AgentType
+        : agent.AgentId.Length <= 8 ? agent.AgentId : agent.AgentId[..8];
+
+    /// <summary>The tooltip of a subagent row: its title, and on a second line its type when the title is its name.</summary>
+    public static string SubagentTooltip(SubagentState agent) =>
+        !string.IsNullOrWhiteSpace(agent.Name) && !string.IsNullOrWhiteSpace(agent.AgentType)
+            ? $"{agent.Name}\n{agent.AgentType}"
+            : SubagentTitle(agent);
+
     /// <summary>The first window of the snapshot is shown large; the others become bars, in their order.</summary>
     public static (UsageWindow? Hero, IReadOnlyList<UsageWindow> Others) SplitWindows(IReadOnlyList<UsageWindow> windows) =>
         windows.Count == 0 ? (null, []) : (windows[0], windows.Skip(1).ToList());
@@ -109,23 +124,18 @@ public static class NotchPresentation
     };
 
     /// <summary>
-    /// A pending permission or question beats errors, errors beat work, and work beats a session that only waits for its
-    /// next prompt (idle_prompt); nothing when no session is busy or in trouble.
+    /// A pending permission, question or plan beats errors, and errors beat work; nothing when no session is busy or in
+    /// trouble.
     /// </summary>
     public static SummaryPill? Summary(IEnumerable<SessionState> sessions)
     {
         var list = sessions.ToList();
-        var blocked = list.Count(s => s.Phase == SessionPhase.NeedsInput && !s.AwaitsPrompt);
-        if (blocked > 0) return WaitingPill(blocked);
+        var waiting = list.Count(s => s.Phase == SessionPhase.NeedsInput);
+        if (waiting > 0) return new SummaryPill(PhaseTone.NeedsInput, waiting == 1 ? "1 attende input" : $"{waiting} attendono input");
         var errors = list.Count(s => s.Phase == SessionPhase.Error);
         if (errors > 0) return new SummaryPill(PhaseTone.Error, $"{errors} in errore");
         var working = list.Count(s => s.Phase == SessionPhase.Working);
-        if (working > 0) return new SummaryPill(PhaseTone.Working, $"{working} al lavoro");
-        var waiting = list.Count(s => s.Phase == SessionPhase.NeedsInput);
-        return waiting > 0 ? WaitingPill(waiting) : null;
-
-        static SummaryPill WaitingPill(int count) =>
-            new(PhaseTone.NeedsInput, count == 1 ? "1 attende input" : $"{count} attendono input");
+        return working > 0 ? new SummaryPill(PhaseTone.Working, $"{working} al lavoro") : null;
     }
 
     /// <summary>The same rules as <see cref="CostFormatter.Short"/>, split so the amount can roll on its own.</summary>

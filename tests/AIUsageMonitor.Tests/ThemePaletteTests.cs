@@ -1,5 +1,8 @@
 using System.Xml.Linq;
 using AIUsageMonitor.Core.Infrastructure;
+using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
+using AIUsageMonitor.Core.Presentation;
 
 namespace AIUsageMonitor.Tests;
 
@@ -54,6 +57,12 @@ public class ThemePaletteTests
         ["ToneStaleBrush"] = ["#FF68686F", "#FF71717A"],
     };
 
+    /// <summary>Plain Color resources (the notification shadow) and the value they must keep.</summary>
+    private static readonly Dictionary<string, string> PinnedColors = new(StringComparer.Ordinal)
+    {
+        ["ShadowColor"] = "#FF000000",
+    };
+
     [Fact]
     public void Theme_brushes_match_the_pinned_palette()
     {
@@ -77,6 +86,39 @@ public class ThemePaletteTests
             Assert.True(gradients.TryGetValue(key, out var actual), $"Theme.xaml has no gradient '{key}'");
             Assert.Equal(expected.Select(c => c.ToUpperInvariant()), actual.Select(c => c.ToUpperInvariant()));
         }
+    }
+
+    [Fact]
+    public void Theme_colours_match_the_pinned_ones()
+    {
+        var colours = ThemeColors();
+        foreach (var (key, expected) in PinnedColors)
+        {
+            Assert.True(colours.TryGetValue(key, out var actual), $"Theme.xaml has no Color '{key}'");
+            Assert.Equal(expected, actual, ignoreCase: true);
+        }
+    }
+
+    // Le card delle notifiche cercano queste chiavi a runtime (TryFindResource): un refuso le lascerebbe grigie senza
+    // errori, quindi ognuna deve esistere in Theme.xaml (le icone in Icons.xaml).
+    [Fact]
+    public void Every_key_the_notification_cards_look_up_exists()
+    {
+        var theme = Keys("Theme.xaml");
+        var icons = Keys("Icons.xaml");
+        var timed = TimeSpan.FromSeconds(8);
+        var lookedUp = Enum.GetValues<NotificationTone>().Select(NotificationPresentation.ToneKey)
+            .Append(NotificationPresentation.TimerBrushKey(NotificationCard(NotificationKind.Finished, timed))!)
+            .Append(NotificationPresentation.TimerBrushKey(NotificationCard(NotificationKind.Notice, timed))!)
+            .Concat(Enum.GetValues<AgentKind>().Select(a => NotificationPresentation.GlowKey(a)!))
+            .Concat(Enum.GetValues<AgentKind>().Select(a => NotificationPresentation.BrandKey(a)!))
+            .Append("ShadowColor");
+        foreach (var key in lookedUp) Assert.True(theme.Contains(key), $"Theme.xaml has no resource '{key}'");
+        foreach (var agent in Enum.GetValues<AgentKind>())
+            Assert.True(icons.Contains(NotificationPresentation.IconKey(agent)!), $"Icons.xaml has no icon for {agent}");
+
+        static NotificationCard NotificationCard(NotificationKind kind, TimeSpan autoClose) =>
+            new("k", kind, NotificationTone.Neutral, null, "t", "l", "m", "s", autoClose, NotificationSoundKind.None, NotificationAction.PinNotch);
     }
 
     // Spec 10: i toni delle barre su Card >= 3:1 (WCAG 1.4.11). Ogni stop, perche' una barra corta mostra quasi solo
@@ -115,6 +157,8 @@ public class ThemePaletteTests
     [InlineData("Amber", "WindowBackground", 4.5)]
     [InlineData("WarningText", "WindowBackground", 4.5)]
     [InlineData("TextDisabled", "Surface", 3.0)]
+    // Card delle notifiche (spec 2026-09-27, sezione 5.2): etichetta "Domanda" in Focus (l'eta' e' in TextMuted, gia' fissato).
+    [InlineData("Focus", "Card", 4.5)]
     // WCAG 1.4.11: colori che identificano uno stato o un controllo (anelli, pallini, barre, interruttore acceso).
     [InlineData("Success", "Card", 3.0)]
     [InlineData("Warning", "Card", 3.0)]
@@ -176,10 +220,25 @@ public class ThemePaletteTests
         return gradients;
     }
 
-    private static XDocument LoadTheme()
+    /// <summary>Every keyed <c>Color</c> element of Theme.xaml with its literal value.</summary>
+    private static Dictionary<string, string> ThemeColors()
     {
-        var path = Path.Combine(FindRepoRoot(), "src", "AIUsageMonitor.App", "Assets", "Theme.xaml");
-        Assert.True(File.Exists(path), $"Theme.xaml not found at {path}");
+        var colours = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var colour in LoadTheme().Descendants().Where(e => e.Name.LocalName == "Color"))
+            if ((string?)colour.Attribute(Xaml + "Key") is { } key) colours[key] = colour.Value.Trim();
+        return colours;
+    }
+
+    /// <summary>Every x:Key declared in one of the dictionaries under <c>src/AIUsageMonitor.App/Assets</c>.</summary>
+    private static HashSet<string> Keys(string assetFile) =>
+        LoadAsset(assetFile).Descendants().Select(e => (string?)e.Attribute(Xaml + "Key")).OfType<string>().ToHashSet(StringComparer.Ordinal);
+
+    private static XDocument LoadTheme() => LoadAsset("Theme.xaml");
+
+    private static XDocument LoadAsset(string assetFile)
+    {
+        var path = Path.Combine(FindRepoRoot(), "src", "AIUsageMonitor.App", "Assets", assetFile);
+        Assert.True(File.Exists(path), $"{assetFile} not found at {path}");
         return XDocument.Load(path);
     }
 

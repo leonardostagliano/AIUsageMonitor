@@ -88,6 +88,7 @@ public sealed class SettingsViewModel : ObservableObject, IDisposable
     public bool NotifyError { get => _draft.NotifyError; set { _draft.NotifyError = value; Raise(); } }
     public bool NotifyClaude { get => _draft.NotifyClaude; set { _draft.NotifyClaude = value; Raise(); } }
     public bool NotifyCodex { get => _draft.NotifyCodex; set { _draft.NotifyCodex = value; Raise(); } }
+    public bool NotifySound { get => _draft.NotifySound; set { _draft.NotifySound = value; Raise(); } }
     public bool UpdatesAutoCheck { get => _draft.UpdatesAutoCheck; set { _draft.UpdatesAutoCheck = value; Raise(); } }
     public bool ShowCosts { get => _draft.ShowCosts; set { _draft.ShowCosts = value; Raise(); } }
 
