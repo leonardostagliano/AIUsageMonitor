@@ -22,9 +22,10 @@ public sealed record ClaudeRegistrySync(IReadOnlyList<HookEvent> Events, IReadOn
 /// <remarks>
 /// A session any hook event has spoken for is left to the hooks: they carry more (messages, subagents, the host), and
 /// two producers would toast twice; its record only fills in the two changes no hook reports, a permission granted and
-/// a turn that starts without a prompt. A new record is adopted only after <see cref="AdoptAfter"/>, so a CLI session
-/// gets the time to send its own SessionStart first. A record whose pid is dead, or was recycled (the live process with
-/// that pid was created after the record was written), is stale and ignored.
+/// a turn that starts without a prompt (and the end of that turn when no hook ever spoke for it). A new record is
+/// adopted only after <see cref="AdoptAfter"/>, so a CLI session gets the time to send its own SessionStart first. A
+/// record whose pid is dead, or was recycled (the live process with that pid was created after the record was written),
+/// is stale and ignored.
 /// <para>Not thread-safe: the pump calls it on its own thread.</para>
 /// </remarks>
 public sealed class ClaudeRegistrySessionFeed
@@ -41,6 +42,8 @@ public sealed class ClaudeRegistrySessionFeed
     private readonly ClaudeTranscriptFinder? _transcripts;
     // Sessions this feed drives, with the status last turned into an event.
     private readonly Dictionary<string, string> _owned = new(StringComparer.Ordinal);
+    // Hook sessions this feed took back to work without a prompt, with the StatusUpdatedAt (Unix ms) of that busy record.
+    private readonly Dictionary<string, long> _resumedAt = new(StringComparer.Ordinal);
 
     public ClaudeRegistrySessionFeed(ClaudeSessionRegistryReader reader, IProcessProbe probe, IClock clock, ClaudeTranscriptFinder? transcripts = null)
     {
@@ -99,24 +102,7 @@ public sealed class ClaudeRegistrySessionFeed
             if (hookOwned(sessionId))
             {
                 _owned.Remove(sessionId);
-                if (tracked.TryGetValue(sessionId, out var state) && status is "busy" or "shell" && record.StatusUpdatedAt is { } busySince)
-                {
-                    // Granting a permission fires no hook: the session would read "attende input" until the end of the
-                    // turn, even with an agent at work. Its record goes back to busy the moment the prompt is answered.
-                    if (state.Phase == SessionPhase.NeedsInput && state.WaitingSince is { } waiting
-                        && busySince > waiting.ToUnixTimeMilliseconds())
-                        events.Add(new HookEvent(now, AgentKind.Claude, "PostToolUse", sessionId, null, null, null, "registry"));
-                    // Neither does a turn that starts on its own (a background task that finishes wakes the main agent):
-                    // the session would read "finito" while it works. Only a record that went busy after the last event
-                    // of the session counts, since the busy still showing while the Stop hooks run is the turn the Stop
-                    // ended, and only after AdoptAfter, since a prompt's own UserPromptSubmit lands a moment after the
-                    // record goes busy. The turn is stamped with the moment the record went busy: once it is applied,
-                    // that busy is no longer newer than the session, so each busy period is reported once.
-                    else if (state.Phase == SessionPhase.Idle && busySince > state.LastEventAt.ToUnixTimeMilliseconds()
-                             && now - DateTimeOffset.FromUnixTimeMilliseconds(busySince) >= AdoptAfter)
-                        events.Add(new HookEvent(DateTimeOffset.FromUnixTimeMilliseconds(busySince), AgentKind.Claude,
-                            "UserPromptSubmit", sessionId, null, null, null, "registry"));
-                }
+                if (FillIn(sessionId, record, status, tracked.GetValueOrDefault(sessionId), now) is { } fill) events.Add(fill);
                 continue;
             }
             if (_owned.TryGetValue(sessionId, out var last) && tracked.ContainsKey(sessionId))
@@ -142,9 +128,58 @@ public sealed class ClaudeRegistrySessionFeed
             if (tracked.ContainsKey(sessionId))
                 events.Add(new HookEvent(now, AgentKind.Claude, "SessionEnd", sessionId, null, null, null, "registry"));
         }
+        foreach (var sessionId in _resumedAt.Keys.Where(id => !live.ContainsKey(id)).ToList()) _resumedAt.Remove(sessionId);
 
         stale.ExceptWith(live.Keys);
         return new ClaudeRegistrySync(events, live.Values.ToList(), stale.ToList());
+    }
+
+    /// <summary>
+    /// What the record of a session the hooks report adds to them, or null: the two changes no hook reports (a
+    /// permission granted, a turn that starts without a prompt) and the end of such a turn when no hook spoke for it.
+    /// </summary>
+    private HookEvent? FillIn(string sessionId, ClaudeSessionRecord record, string status, SessionState? state, DateTimeOffset now)
+    {
+        if (state is null)
+        {
+            _resumedAt.Remove(sessionId);
+            return null;
+        }
+        if (_resumedAt.TryGetValue(sessionId, out var resumedAt))
+        {
+            // A turn this feed opened and no hook has spoken for since (its resume is still the session's last event)
+            // gets no Stop either: the record going idle ends it, as an idle_prompt, which closes a turn silently.
+            if (state.Phase == SessionPhase.Working && state.LastEventAt.ToUnixTimeMilliseconds() == resumedAt)
+            {
+                if (status != "idle" || record.StatusUpdatedAt is not { } idleSince || idleSince <= resumedAt) return null;
+                _resumedAt.Remove(sessionId);
+                return new HookEvent(DateTimeOffset.FromUnixTimeMilliseconds(idleSince), AgentKind.Claude, "Notification", sessionId,
+                    null, "idle_prompt", null, "registry");
+            }
+            // A hook spoke since, or the turn is over: it is the hooks' to report again.
+            _resumedAt.Remove(sessionId);
+        }
+        if (status is not ("busy" or "shell") || record.StatusUpdatedAt is not { } busySince) return null;
+
+        // Granting a permission fires no hook: the session would read "attende input" until the end of the turn, even
+        // with an agent at work. Its record goes back to busy the moment the prompt is answered.
+        if (state.Phase == SessionPhase.NeedsInput && state.WaitingSince is { } waiting && busySince > waiting.ToUnixTimeMilliseconds())
+            return new HookEvent(now, AgentKind.Claude, "PostToolUse", sessionId, null, null, null, "registry");
+
+        // Neither does a turn that starts on its own (a background task that finishes wakes the main agent): the session
+        // would read "finito" while it works. Only a busy record counts (a "shell" one is not known to be a turn of the
+        // main agent), only one that went busy after the last event of the session, since the busy still showing while
+        // the Stop hooks run is the turn the Stop ended, and only after AdoptAfter, since a prompt's own
+        // UserPromptSubmit lands a moment after the record goes busy. The turn is stamped with the moment the record went
+        // busy: once it is applied, that busy is no longer newer than the session, so each busy period is reported once.
+        if (status == "busy" && state.Phase == SessionPhase.Idle && busySince > state.LastEventAt.ToUnixTimeMilliseconds()
+            && now - DateTimeOffset.FromUnixTimeMilliseconds(busySince) >= AdoptAfter)
+        {
+            _resumedAt[sessionId] = busySince;
+            return new HookEvent(DateTimeOffset.FromUnixTimeMilliseconds(busySince), AgentKind.Claude, "UserPromptSubmit", sessionId,
+                null, null, null, "registry");
+        }
+        return null;
     }
 
     private HookEvent Start(ClaudeSessionRecord record, DateTimeOffset now) =>

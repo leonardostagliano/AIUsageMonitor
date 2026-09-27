@@ -203,15 +203,56 @@ public class ClaudeRegistrySessionFeedTests
         Assert.Equal(T0.AddSeconds(200), s.TurnStartedAt);
         Assert.Empty(SyncAt(215).Events);                          // once per busy period
 
-        // The resumed turn ends with its own Stop while the record still reads busy: nothing to report.
-        rig.Tracker.Apply(Hook("Stop", 260));
-        Assert.Empty(SyncAt(261).Events);
+        // No hook ever spoke for that turn, and none closes it: the record going idle does, silently (nobody asked for
+        // that turn, there is nothing to announce), and only once.
+        var changes = new List<SessionChange>();
+        rig.Tracker.Changed += changes.Add;
+        Status("idle", 230);
+        var closed = Assert.Single(SyncAt(231).Events);
+        Assert.Equal(("Notification", "idle_prompt", "registry"), (closed.Event, closed.NotificationType, closed.Source));
+        Assert.Equal(SessionPhase.Idle, rig.Tracker.Sessions.Single().Phase);
+        Assert.True(Assert.Single(changes).Silent);
+        Assert.Empty(SyncAt(235).Events);
+        // The next prompt is a turn of its own.
+        Status("busy", 240);
+        rig.Tracker.Apply(Hook("UserPromptSubmit", 240.5));
+        Assert.Empty(SyncAt(250).Events);
+        Assert.Equal(T0.AddSeconds(240.5), rig.Tracker.Sessions.Single().TurnStartedAt);
+        rig.Tracker.Apply(Hook("Stop", 255));
+        Status("idle", 255.2);
+        Assert.Empty(SyncAt(256).Events);
+
+        // A shell command typed at the prompt runs no turn: its record reads "shell", and nothing is reported.
+        Status("shell", 258);
+        Assert.Empty(SyncAt(268).Events);
+        Status("idle", 269);
+        Assert.Empty(SyncAt(270).Events);
         Assert.Equal(SessionPhase.Idle, rig.Tracker.Sessions.Single().Phase);
 
+        // Woken again, and this time the resumed turn ends with its own Stop while the record still reads busy: nothing
+        // to report, and nothing left for the registry to close once the record reads idle.
+        Status("busy", 275);
+        Assert.Equal("UserPromptSubmit", Assert.Single(SyncAt(284).Events).Event);
+        rig.Tracker.Apply(Hook("Stop", 290));
+        Assert.Empty(SyncAt(291).Events);
+        Status("idle", 291.5);
+        Assert.Empty(SyncAt(292).Events);
+        Assert.Equal(SessionPhase.Idle, rig.Tracker.Sessions.Single().Phase);
+
+        // Once a hook of a resumed turn has spoken, that turn is the hooks' to close: the record going idle before its
+        // Stop is read changes nothing.
+        Status("busy", 320);
+        Assert.Equal("UserPromptSubmit", Assert.Single(SyncAt(329).Events).Event);
+        rig.Tracker.Apply(Hook("PostToolUse", 330));
+        Status("idle", 331);
+        Assert.Empty(SyncAt(332).Events);
+        Assert.Equal(SessionPhase.Working, rig.Tracker.Sessions.Single().Phase);
+        rig.Tracker.Apply(Hook("Stop", 333));
+
         // A session in error is left to its hooks.
-        rig.Tracker.Apply(Hook("StopFailure", 300));
-        Status("busy", 310);
-        Assert.Empty(SyncAt(330).Events);
+        rig.Tracker.Apply(Hook("StopFailure", 400));
+        Status("busy", 410);
+        Assert.Empty(SyncAt(430).Events);
         Assert.Equal(SessionPhase.Error, rig.Tracker.Sessions.Single().Phase);
     }
 
