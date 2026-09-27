@@ -30,4 +30,9 @@
          (dotnet publish con self-contained true). Letto a runtime da BuildInfo. -->
     <AssemblyMetadata Include="AIUsageMonitor.SelfContained" Value="$(SelfContained)" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- I due suoni delle card (spec 2026-09-27 §8), generati da tools/sounds/generate-sounds.js. Il nome della risorsa
+         ("Sounds.done.wav", "Sounds.attention.wav") e' quello che legge NotificationSound. -->
+    <EmbeddedResource Include="Assets\Sounds\*.wav" LogicalName="Sounds.%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

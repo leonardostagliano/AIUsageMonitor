@@ -185,7 +185,8 @@
             <Border Style="{StaticResource CardBorder}">
               <StackPanel>
                 <TextBlock Text="Quando" Style="{StaticResource CardTitle}"/>
-                <CheckBox Content="Attende input" IsChecked="{Binding NotifyNeedsInput}"/>
+                <CheckBox Content="Permessi e domande" IsChecked="{Binding NotifyNeedsInput}"
+                          ToolTip="Permessi (con lo strumento e il comando), domande e piani da approvare. Non più il promemoria di Claude Code dopo 60 secondi senza prompt."/>
                 <CheckBox Content="Turno completato" IsChecked="{Binding NotifyTurnCompleted}"/>
                 <CheckBox Content="Errore" IsChecked="{Binding NotifyError}"/>
               </StackPanel>
@@ -195,6 +196,13 @@
                 <TextBlock Text="Da" Style="{StaticResource CardTitle}"/>
                 <CheckBox Content="Claude Code" IsChecked="{Binding NotifyClaude}"/>
                 <CheckBox Content="Codex" IsChecked="{Binding NotifyCodex}"/>
+              </StackPanel>
+            </Border>
+            <Border Style="{StaticResource CardBorder}">
+              <StackPanel>
+                <TextBlock Text="Come" Style="{StaticResource CardTitle}"/>
+                <CheckBox Content="Suono" IsChecked="{Binding NotifySound}"
+                          ToolTip="Un suono morbido quando un turno finisce, uno più marcato per permessi, piani, domande ed errori. Gli avvisi dell'app sono muti; nessun suono con Non disturbare o con un'app a schermo intero."/>
               </StackPanel>
             </Border>
           </StackPanel>
