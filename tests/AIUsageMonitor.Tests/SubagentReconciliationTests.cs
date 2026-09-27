@@ -355,17 +355,117 @@ public class SubagentReconciliationTests
     {
         var tracker = new SessionTracker(new FakeClock(T0));
         tracker.Apply(Ev("UserPromptSubmit"));
-        // No agent_type, but a transcript under subagents/workflows/, with either separator.
-        tracker.Apply(Ev("SubagentStart", 1, "p1") with { AgentTranscriptPath = @"C:\p\s1\subagents\workflows\wf_1\agent-p1.jsonl" });
-        tracker.Apply(Ev("SubagentStart", 2, "p2") with { AgentTranscriptPath = "/home/demo/p/s1/subagents/workflows/wf_1/agent-p2.jsonl" });
-        // An Agent-tool agent writes directly under subagents/.
-        tracker.Apply(Ev("SubagentStart", 3, "p3") with { AgentTranscriptPath = @"C:\p\s1\subagents\agent-p3.jsonl" });
+        // No agent_type to tell them by, and SubagentStart never carries a transcript path: the pump finds the
+        // transcripts on disk and hands their paths over.
+        tracker.Apply(Ev("SubagentStart", 1, "p1"));
+        tracker.Apply(Ev("SubagentStart", 2, "p2"));
+        tracker.Apply(Ev("SubagentStart", 3, "p3"));
+        tracker.Apply(Ev("SubagentStart", 4, "done"));
+        tracker.Apply(Ev("SubagentStop", 5, "done"));
+        tracker.Apply(Ev("SubagentStart", 6, "bg", "general-purpose"));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
 
-        tracker.Apply(Ev("Stop", 4, tasks: [Workflow("wf1")]));
-        Assert.Equal(["p1", "p2"], tracker.Sessions.Single().RunningSubagents.Select(a => a.AgentId));
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s1", new Dictionary<string, string>
+        {
+            // Under subagents/workflows/, with either separator.
+            ["p1"] = @"C:\p\s1\subagents\workflows\wf_1\agent-p1.jsonl",
+            ["p2"] = "/home/demo/p/s1/subagents/workflows/wf_1/agent-p2.jsonl",
+            // An Agent-tool agent writes directly under subagents/.
+            ["p3"] = @"C:\p\s1\subagents\agent-p3.jsonl",
+            // Only a running agent gets one, and only an agent the session knows.
+            ["done"] = @"C:\p\s1\subagents\workflows\wf_1\agent-done.jsonl",
+            ["stranger"] = @"C:\p\s1\subagents\workflows\wf_1\agent-stranger.jsonl"
+        });
+        // A path already known is never replaced, and another session's agents are not touched.
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s1",
+            new Dictionary<string, string> { ["p3"] = @"C:\p\s1\subagents\workflows\wf_1\agent-p3.jsonl" });
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s2", new Dictionary<string, string> { ["bg"] = @"C:\p\s2\subagents\agent-bg.jsonl" });
+        tracker.UpdateSubagentPaths(AgentKind.Codex, "s1", new Dictionary<string, string> { ["bg"] = @"C:\p\s1\subagents\agent-bg.jsonl" });
 
-        tracker.Apply(Ev("SubagentStop", 5, "p9", "general-purpose", tasks: []));
-        Assert.Empty(tracker.Sessions.Single().RunningSubagents);
+        Assert.Empty(changes);                                       // nothing the UI shows has changed
+        var s = tracker.Sessions.Single();
+        Assert.Equal(@"C:\p\s1\subagents\workflows\wf_1\agent-p1.jsonl", s.Subagents!.Single(a => a.AgentId == "p1").TranscriptPath);
+        Assert.Equal(@"C:\p\s1\subagents\agent-p3.jsonl", s.Subagents!.Single(a => a.AgentId == "p3").TranscriptPath);
+        Assert.Null(s.Subagents!.Single(a => a.AgentId == "done").TranscriptPath);
+        Assert.Null(s.Subagents!.Single(a => a.AgentId == "bg").TranscriptPath);
+        Assert.DoesNotContain(s.Subagents!, a => a.AgentId == "stranger");
+
+        // A Stop that names a workflow keeps its agents running...
+        tracker.Apply(Ev("Stop", 7, tasks: [Workflow("wf1"), Agent("bg")]));
+        Assert.Equal(["p1", "p2", "bg"], tracker.Sessions.Single().RunningSubagents.Select(a => a.AgentId));
+
+        // ...and one that names none ends them.
+        tracker.Apply(Ev("UserPromptSubmit", 8));
+        tracker.Apply(Ev("Stop", 9, tasks: [Agent("bg")]));
+        s = tracker.Sessions.Single();
+        Assert.Equal("bg", s.RunningSubagents.Single().AgentId);
+        Assert.Equal(T0.AddSeconds(9), s.Subagents!.Single(a => a.AgentId == "p1").EndedAt);
+    }
+
+    [Fact]
+    public void The_workflow_agents_known_by_their_path_end_with_a_SubagentStop_that_lists_no_workflow()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "p1"));
+        tracker.Apply(Ev("SubagentStart", 2, "g1", "general-purpose"));
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s1",
+            new Dictionary<string, string> { ["p1"] = "/home/demo/p/s1/subagents/workflows/wf_1/agent-p1.jsonl" });
+        tracker.Apply(Ev("Stop", 3, tasks: [Workflow("wf1"), Agent("g1")]));
+
+        tracker.Apply(Ev("SubagentStop", 4, "g9", "general-purpose", tasks: [Agent("g1")]));
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal("g1", s.RunningSubagents.Single().AgentId);
+        Assert.Equal(T0.AddSeconds(4), s.Subagents!.Single(a => a.AgentId == "p1").EndedAt);
+    }
+
+    [Fact]
+    public void A_quiet_event_moves_the_session_without_announcing_it()
+    {
+        // The pump's own conclusions (an agent found dead in its transcript, a Codex child that ended) change the
+        // session exactly like the real event, but the notch only repaints: no card, no sound.
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "a1"));
+        tracker.Apply(Ev("Stop", 2, message: "Lanciati."));
+        Assert.All(changes, c => Assert.False(c.Silent));
+
+        var ended = tracker.Apply(Ev("SubagentStop", 3, "a1") with { Quiet = true });
+        Assert.NotNull(ended);
+        Assert.True(ended.Silent);
+        Assert.Same(ended, changes.Last());
+        Assert.Equal(SessionPhase.Working, ended.PreviousPhase);
+        Assert.Equal(SessionPhase.Idle, ended.Session.Phase);
+        Assert.Equal("Lanciati.", ended.Session.Message);
+
+        // Any event can be quiet; the ones that are not keep being announced.
+        Assert.False(tracker.Apply(Ev("UserPromptSubmit", 4))!.Silent);
+        var stop = tracker.Apply(Ev("Stop", 5) with { Quiet = true });
+        Assert.True(stop!.Silent);
+        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
+        Assert.True(tracker.Apply(Ev("SessionEnd", 6) with { Quiet = true })!.Silent);
+    }
+
+    [Fact]
+    public void A_backdated_subagent_event_never_moves_the_session_clocks_back()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "a1"));
+        tracker.Apply(Ev("SubagentStart", 8, "a2"));
+        tracker.Apply(Ev("Stop", 10, message: "Lanciati."));
+
+        // Closed at the last line of its transcript, written before what the session has heard since.
+        tracker.Apply(Ev("SubagentStop", 5, "a1"));
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal(T0.AddSeconds(5), s.Subagents!.Single(a => a.AgentId == "a1").EndedAt);
+        Assert.Equal(T0.AddSeconds(10), s.LastEventAt);
+        Assert.Equal(T0.AddSeconds(8), s.LastSubagentEventAt);
     }
 
     [Fact]

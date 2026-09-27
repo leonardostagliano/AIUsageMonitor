@@ -57,7 +57,14 @@ public sealed class SessionTracker
         return change;
     }
 
+    /// <summary>Applies one event; a <see cref="HookEvent.Quiet"/> one changes the session all the same, but its change is Silent.</summary>
     private SessionChange? ApplyCore(HookEvent e)
+    {
+        var change = ApplyEvent(e);
+        return change is not null && e.Quiet && !change.Silent ? change with { Silent = true } : change;
+    }
+
+    private SessionChange? ApplyEvent(HookEvent e)
     {
         var key = (e.Agent, e.SessionId);
         _sessions.TryGetValue(key, out var existing);
@@ -259,6 +266,11 @@ public sealed class SessionTracker
             }
         }
 
+        // A subagent event can be stamped earlier than what the session already heard (the pump closes an agent at the
+        // last line of its transcript): the session clocks only move forward, while the agent keeps its own EndedAt.
+        var lastEventAt = existing is null || e.Ts > existing.LastEventAt ? e.Ts : existing.LastEventAt;
+        var lastSubagentEventAt = existing?.LastSubagentEventAt is { } heard && heard > e.Ts ? heard : e.Ts;
+
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         var host = e.Host ?? existing?.Host;
         var title = e.Title ?? existing?.Title;
@@ -278,10 +290,10 @@ public sealed class SessionTracker
                 Attention = phase == SessionPhase.NeedsInput ? existing.Attention : null,
                 TurnStartedAt = turnStartedAt,
                 Message = message,
-                LastEventAt = e.Ts,
+                LastEventAt = lastEventAt,
                 Subagents = subagents,
                 AwaitingSubagents = awaiting,
-                LastSubagentEventAt = e.Ts,
+                LastSubagentEventAt = lastSubagentEventAt,
                 Host = host,
                 Origin = origin,
                 Title = title,
@@ -434,6 +446,32 @@ public sealed class SessionTracker
                                    .ToList())
             list.Remove(oldest);
         return list;
+    }
+
+    /// <summary>
+    /// Gives the running subagents of a session the transcript path the pump found on disk, by agent id: SubagentStart
+    /// carries none, and whether an agent belongs to a workflow shows in its path. Only a path still unknown is filled
+    /// (the one a SubagentStop carries is never replaced), agents the session does not know are ignored, and Changed is
+    /// not raised: nothing the UI shows depends on it.
+    /// </summary>
+    public void UpdateSubagentPaths(AgentKind agent, string sessionId, IReadOnlyDictionary<string, string> paths)
+    {
+        lock (_gate)
+        {
+            var key = (agent, sessionId);
+            if (paths.Count == 0 || !_sessions.TryGetValue(key, out var session) || session.Subagents is not { Count: > 0 } known) return;
+            List<SubagentState>? list = null;
+            for (var i = 0; i < known.Count; i++)
+            {
+                var subagent = known[i];
+                if (subagent.Phase != SubagentPhase.Running || subagent.TranscriptPath is not null) continue;
+                if (!paths.TryGetValue(subagent.AgentId, out var path) || string.IsNullOrWhiteSpace(path)) continue;
+                list ??= [.. known];
+                list[i] = subagent with { TranscriptPath = path };
+            }
+            // LastEventAt is left alone: a path found on disk is not session activity.
+            if (list is not null) _sessions[key] = session with { Subagents = list };
+        }
     }
 
     /// <summary>
