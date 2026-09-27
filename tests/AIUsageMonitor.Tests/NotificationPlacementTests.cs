@@ -27,7 +27,7 @@ public class NotificationPlacementTests
     }
 
     [Fact]
-    public void With_the_notch_hidden_only_the_transparent_margin_passes_the_edge()
+    public void With_the_notch_hidden_only_the_shadow_margin_passes_the_edge()
     {
         var (left, _) = NotificationPlacement.Compute(FullHd(insetDip: 0), Width, Height, Margin);
 
@@ -54,6 +54,19 @@ public class NotificationPlacementTests
         var (_, top) = NotificationPlacement.Compute(FullHd(notchCentre), Width, 136, Margin);
 
         Assert.Equal(notchCentre, top + 136 / 2.0, 6);
+    }
+
+    [Fact]
+    public void The_stack_centres_on_the_tab_NotchWindow_publishes_at_150_percent_with_an_offset()
+    {
+        // Notch 320x300 DIP moved down by 120 DIP on a 3840x2088 px work area at 150 %: the anchor carries the centre
+        // NotchWindow computes, and the stack must end up centred on the notch NotchPlacement places, in DIP.
+        var (_, notchTopDip) = NotchPlacement.Compute(0, 0, 3840, 2088, 1.5, 320, 300, 120);
+        var anchor = new NotchAnchor(0, 0, 3840, 2088, 1.5, NotchPlacement.CenterYPx(0, 0, 3840, 2088, 1.5, 300, 120), 42);
+
+        var (_, top) = NotificationPlacement.Compute(anchor, Width, 136, Margin);
+
+        Assert.Equal(notchTopDip + 300 / 2.0, top + 136 / 2.0, 6);
     }
 
     [Fact]
@@ -118,6 +131,66 @@ public class NotificationPlacementTests
 
         Assert.Equal(dip.Left * scale, px.Left, 6);
         Assert.Equal(dip.Top * scale, px.Top, 6);
+    }
+
+    // The shadow is faint but not transparent out to the window edge (alpha about 3 to 47), and a layered window takes
+    // the mouse wherever its alpha is not zero. The shadow margin (16) is wider than the gap (8), so in every state the
+    // window reaches 8 DIP into what the notch occupies: the left of the tab or of the open panel, which sit below the
+    // host in z-order, or the next monitor when the notch is hidden. The host clips that strip.
+    [Theory]
+    [InlineData(42)]    // tab
+    [InlineData(34)]    // compact tab
+    [InlineData(320)]   // panel open or pinned
+    [InlineData(0)]     // notch hidden: past the edge of the work area
+    public void The_window_reaches_8_DIP_into_what_the_notch_occupies(double insetDip)
+    {
+        var anchor = FullHd(insetDip: insetDip);
+        var (left, _) = NotificationPlacement.Compute(anchor, Width, Height, Margin);
+
+        var overlap = NotificationPlacement.RightOverlap(anchor, left, Width);
+
+        Assert.Equal(Margin - NotificationPlacement.GapDip, overlap, 6);
+        Assert.Equal(1920 - insetDip, left + Width - overlap, 6);      // the clip lands where the notch starts
+        Assert.True(Width - overlap >= Margin + 340, "the clip never cuts into the cards");
+    }
+
+    [Fact]
+    public void A_window_that_ends_before_the_notch_does_not_overlap_it()
+    {
+        var anchor = FullHd(insetDip: 42);   // the tab starts at x = 1878
+
+        Assert.Equal(0, NotificationPlacement.RightOverlap(anchor, 1878 - Width, Width), 6);
+        Assert.Equal(0, NotificationPlacement.RightOverlap(anchor, 1000, Width), 6);
+        Assert.Equal(2.5, NotificationPlacement.RightOverlap(anchor, 1878 - Width + 2.5, Width), 6);
+        // Notch hidden: what sticks out of the work area.
+        Assert.Equal(3, NotificationPlacement.RightOverlap(FullHd(insetDip: 0), 1920 - Width + 3, Width), 6);
+    }
+
+    [Theory]
+    [InlineData(0, 0, 3840, 2088, 1.5, 1044, 42)]       // tab
+    [InlineData(0, 0, 3840, 2088, 1.5, 1044, 34)]       // compact tab
+    [InlineData(-1920, -300, 1920, 1040, 1.25, 220, 320)] // panel open, negative origin
+    [InlineData(-1920, -300, 1920, 1040, 1.25, 220, 0)] // notch hidden, negative origin
+    [InlineData(2560, 0, 1920, 1080, 1.0, 540, 42)]     // secondary monitor on the right, 100 %
+    public void The_overlap_follows_the_physical_pixel_convention(
+        double x, double y, double w, double h, double scale, double centerYPx, double insetDip)
+    {
+        var anchor = new NotchAnchor(x, y, w, h, scale, centerYPx, insetDip);
+        var (leftDip, _) = NotificationPlacement.Compute(anchor, Width, Height, Margin);
+        Assert.Equal(8, NotificationPlacement.RightOverlap(anchor, leftDip, Width), 6);
+
+        // What NotificationHostWindow.Reposition passes: scale 1 on the area (already in px), every DIP length times the scale.
+        var px = anchor with { DpiScale = 1.0, RightInsetDip = insetDip * scale };
+        var (leftPx, _) = NotificationPlacement.Compute(
+            px, Width * scale, Height * scale, Margin * scale, NotificationPlacement.GapDip * scale);
+        Assert.Equal(8 * scale, NotificationPlacement.RightOverlap(px, leftPx, Width * scale), 6);
+    }
+
+    [Fact]
+    public void The_overlap_counts_a_non_positive_scale_as_100_percent()
+    {
+        var anchor = FullHd(insetDip: 42) with { DpiScale = 0 };
+        Assert.Equal(8, NotificationPlacement.RightOverlap(anchor, 1878 - Width + 8, Width), 6);
     }
 
     [Fact]

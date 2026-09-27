@@ -35,6 +35,9 @@ public partial class NotchWindow : Window, INotchHost
     private bool _expanded;
     private bool _pinned;
 
+    /// <inheritdoc/>
+    public event Action? AnchorChanged;
+
     public NotchWindow(AppServices services, object viewModel)
     {
         InitializeComponent();
@@ -74,9 +77,31 @@ public partial class NotchWindow : Window, INotchHost
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         services.Settings.Changed += _ => UiDispatcher.Post(ApplySettings);
+        // L'ancora delle notifiche dipende anche da visibilita' e larghezza della linguetta (modalita' compatta).
+        IsVisibleChanged += (_, _) => RaiseAnchorChanged();
+        if (viewModel is NotchViewModel notchViewModel)
+            notchViewModel.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(NotchViewModel.TabWidth)) RaiseAnchorChanged();
+            };
     }
 
     public bool IsNotchVisible => IsVisible;
+
+    /// <summary>
+    /// Ancora della pila delle notifiche: stesso monitor e stessa scala di <see cref="Reposition"/>; a destra occupa la
+    /// linguetta, il pannello (largo quanto la finestra) mentre e' aperto o fissato, niente a notch nascosto.
+    /// </summary>
+    public NotchAnchor Anchor
+    {
+        get
+        {
+            if (TargetArea() is not { } target) return new NotchAnchor(0, 0, 0, 0, 1.0, 0, 0);
+            var (area, scale) = target;
+            var inset = NotchAnchor.RightInset(IsVisible, _expanded || _pinned, Width, ViewModel?.TabWidth ?? Tab.ActualWidth);
+            return new NotchAnchor(area.Left, area.Top, area.Width, area.Height, scale, CenterYPx(area, scale), inset);
+        }
+    }
 
     private NotchViewModel? ViewModel => DataContext as NotchViewModel;
 
@@ -191,6 +216,8 @@ public partial class NotchWindow : Window, INotchHost
         Panel.Visibility = Visibility.Visible;
         Tab.IsHitTestVisible = false;
         if (ViewModel is { } vm) vm.IsPanelOpen = true;
+        // Subito: la pila delle notifiche si sposta a sinistra del pannello prima che questo entri scorrendo.
+        RaiseAnchorChanged();
         RunStoryboard(
             Fade(Tab, 0, TimeSpan.Zero),
             Slide(0, OpenDuration, new QuinticEase { EasingMode = EasingMode.EaseOut }),
@@ -218,6 +245,8 @@ public partial class NotchWindow : Window, INotchHost
                 Panel.Visibility = Visibility.Hidden;
                 Tab.IsHitTestVisible = true;
                 if (ViewModel is { } vm) vm.IsPanelOpen = false;
+                // A pannello uscito: la pila torna accanto alla linguetta senza passargli sopra mentre scorre via.
+                RaiseAnchorChanged();
             });
     }
 
@@ -302,11 +331,8 @@ public partial class NotchWindow : Window, INotchHost
     public void Reposition()
     {
         var settings = _services.Settings.Current;
-        var screens = EnumerateScreens();
-        if (screens.Length == 0) return;
-        var screen = settings.MonitorIndex < screens.Length ? screens[settings.MonitorIndex] : screens[0];
-        var area = screen.WorkingArea;
-        var scale = GetScaleFor(area);
+        if (TargetArea() is not { } target) return;
+        var (area, scale) = target;
 
         PanelScroll.MaxHeight = Math.Max(120, area.Height / scale * 0.8 - 60);
         var height = ActualHeight > 0 ? ActualHeight : MinHeight;
@@ -317,6 +343,7 @@ public partial class NotchWindow : Window, INotchHost
             var (leftDip, topDip) = NotchPlacement.Compute(area.Left, area.Top, area.Width, area.Height, scale, Width, height, settings.VerticalOffset);
             Left = leftDip;
             Top = topDip;
+            RaiseAnchorChanged();
             return;
         }
 
@@ -325,6 +352,37 @@ public partial class NotchWindow : Window, INotchHost
             area.Left, area.Top, area.Width, area.Height,
             1.0, Width * scale, height * scale, settings.VerticalOffset * scale);
         SetWindowPos(handle, IntPtr.Zero, (int)Math.Round(left), (int)Math.Round(top), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        RaiseAnchorChanged();
+    }
+
+    private void RaiseAnchorChanged() => AnchorChanged?.Invoke();
+
+    /// <summary>
+    /// Area di lavoro (pixel fisici) e scala DPI del monitor configurato, scelto come in <see cref="Reposition"/>; null
+    /// senza schermi.
+    /// </summary>
+    private (System.Drawing.Rectangle Area, double Scale)? TargetArea()
+    {
+        var screens = EnumerateScreens();
+        if (screens.Length == 0) return null;
+        var index = _services.Settings.Current.MonitorIndex;
+        var area = (index < screens.Length ? screens[index] : screens[0]).WorkingArea;
+        return (area, GetScaleFor(area));
+    }
+
+    /// <summary>
+    /// Centro verticale della linguetta in pixel fisici. La linguetta e' centrata nella Grid, alta quanto il pannello
+    /// (Hidden, non Collapsed, a pannello chiuso), quindi coincide con il centro della finestra: a finestra visibile si
+    /// legge il rettangolo reale; nascosta o prima che esista l'HWND lo si calcola come fa <see cref="Reposition"/>
+    /// (<see cref="NotchPlacement.CenterYPx"/>, verificato da NotchPlacementTests).
+    /// </summary>
+    private double CenterYPx(System.Drawing.Rectangle area, double scale)
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        if (IsVisible && handle != IntPtr.Zero && GetWindowRect(handle, out var rect))
+            return (rect.Top + rect.Bottom) / 2.0;
+        var height = ActualHeight > 0 ? ActualHeight : MinHeight;
+        return NotchPlacement.CenterYPx(area.Left, area.Top, area.Width, area.Height, scale, height, _services.Settings.Current.VerticalOffset);
     }
 
     /// <summary>
@@ -353,6 +411,15 @@ public partial class NotchWindow : Window, INotchHost
         public int Y;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
     [DllImport("user32.dll")]
     private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
@@ -365,6 +432,10 @@ public partial class NotchWindow : Window, INotchHost
 
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
     [DllImport("Shcore.dll")]
     private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
