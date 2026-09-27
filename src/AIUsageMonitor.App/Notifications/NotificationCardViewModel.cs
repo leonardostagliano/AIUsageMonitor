@@ -44,6 +44,13 @@ public sealed class NotificationCardViewModel : ObservableObject
     public string Title => _card.Title;
     public string Label => _card.Label;
     public string Message => _card.Message;
+
+    /// <summary>
+    /// La riga 3: il messaggio su una riga sola (una TextBlock disegna i suoi a capo anche senza wrapping); il testo
+    /// intero resta nel tooltip (<see cref="Message"/>).
+    /// </summary>
+    public string MessageLine => NotificationPresentation.OneLine(_card.Message);
+
     public string AgeText { get => _ageText; private set => Set(ref _ageText, value); }
 
     /// <summary>Pallino ed etichetta della riga 2 (SuccessText, WarningText, Focus, DangerText, TextMuted).</summary>
@@ -93,7 +100,7 @@ public sealed class NotificationCardViewModel : ObservableObject
         BrandBrush = ThemeBrush(NotificationPresentation.BrandKey(_card.Agent));
         Icon = NotificationPresentation.IconKey(_card.Agent) is { } icon ? Application.Current?.TryFindResource(icon) as Geometry : null;
         TimerBrush = ThemeBrush(NotificationPresentation.TimerBrushKey(_card));
-        foreach (var name in new[] { nameof(Card), nameof(Title), nameof(Label), nameof(Message), nameof(Logo),
+        foreach (var name in new[] { nameof(Card), nameof(Title), nameof(Label), nameof(Message), nameof(MessageLine), nameof(Logo),
                      nameof(AgentVisibility), nameof(LogoVisibility), nameof(HasTimer), nameof(TimerVisibility) })
             Raise(name);
     }

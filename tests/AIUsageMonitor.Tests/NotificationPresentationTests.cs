@@ -33,6 +33,29 @@ public class NotificationPresentationTests
     public void The_age_reads_now_then_minutes_hours_and_days(int seconds, string expected) =>
         Assert.Equal(expected, NotificationPresentation.AgeText(Now.AddSeconds(-seconds), Now));
 
+    /// <summary>
+    /// Row 3 is one line (spec §5.2): a TextBlock draws every line break of its text even without wrapping, and the last
+    /// message of a turn often spans several. The whole text stays in the tooltip; nothing is cut here, the ellipsis is
+    /// the TextBlock's.
+    /// </summary>
+    [Theory]
+    [InlineData("Tutti i test passano", "Tutti i test passano")]
+    [InlineData("Fatto.\r\n\r\n- build ok\r\n- test ok", "Fatto. - build ok - test ok")]
+    [InlineData("\nRiepilogo:\n\n\tdue file", "Riepilogo: due file")]
+    [InlineData("  Errore\r API   overloaded ", "Errore API overloaded")]
+    [InlineData("\r\n \t", "")]
+    [InlineData("", "")]
+    public void The_message_of_a_card_reads_on_one_line(string message, string expected) =>
+        Assert.Equal(expected, NotificationPresentation.OneLine(message));
+
+    [Fact]
+    public void A_long_message_on_one_line_is_not_cut()
+    {
+        var message = string.Join("\n", Enumerable.Repeat("riga di prova", 20));
+
+        Assert.Equal(string.Join(" ", Enumerable.Repeat("riga di prova", 20)), NotificationPresentation.OneLine(message));
+    }
+
     [Theory]
     [InlineData(0, "")]
     [InlineData(-1, "")]

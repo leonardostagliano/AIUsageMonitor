@@ -81,8 +81,9 @@
                   <TextBlock Text="{Binding Label}" Foreground="{Binding ToneBrush}" FontSize="11" FontWeight="SemiBold"
                              TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                 </StackPanel>
-                <!-- Riga 3: una riga di messaggio, il testo intero nel tooltip. -->
-                <TextBlock Text="{Binding Message}" ToolTip="{Binding Message}" Foreground="{StaticResource TextMuted}" FontSize="12"
+                <!-- Riga 3: una riga di messaggio (MessageLine, senza a capo: una TextBlock li disegna anche con NoWrap),
+                     il testo intero nel tooltip. -->
+                <TextBlock Text="{Binding MessageLine}" ToolTip="{Binding Message}" Foreground="{StaticResource TextMuted}" FontSize="12"
                            TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Margin="0,3,0,0"/>
               </StackPanel>
             </Grid>

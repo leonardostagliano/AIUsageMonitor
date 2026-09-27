@@ -1,3 +1,4 @@
+using System.Text;
 using AIUsageMonitor.Core.Models;
 using AIUsageMonitor.Core.Notifications;
 
@@ -20,6 +21,25 @@ public static class NotificationPresentation
         if (elapsed < TimeSpan.FromHours(1)) return $"{(int)elapsed.TotalMinutes} min";
         if (elapsed < TimeSpan.FromDays(1)) return $"{(int)elapsed.TotalHours} h";
         return $"{(int)elapsed.TotalDays} g";
+    }
+
+    /// <summary>
+    /// Row 3 of a card, on one line (spec §5.2): every run of whitespace (line breaks and tabs included) becomes one
+    /// space, and the ends are trimmed. A TextBlock draws the line breaks of its text even without wrapping, and the last
+    /// message of a turn often spans several lines. Nothing is cut: the TextBlock ends the line with its ellipsis, and the
+    /// tooltip keeps the text as it is.
+    /// </summary>
+    public static string OneLine(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var line = new StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (!char.IsWhiteSpace(c)) line.Append(c);
+            else if (line.Length > 0 && line[^1] != ' ') line.Append(' ');
+        }
+        if (line.Length > 0 && line[^1] == ' ') line.Length--;
+        return line.ToString();
     }
 
     /// <summary>The pill under the stack: "+1 altra", "+3 altre"; empty when no card is waiting for a slot.</summary>
