@@ -156,8 +156,9 @@ dell'app si mostrano sempre. Codex non ha hook `Notification`: per Codex arrivan
   posto (senza animazione d'ingresso).
 - **Ritiro.** Una card Permesso/Piano/Domanda si ritira quando la sessione esce da `NeedsInput`; una card Errore
   quando torna `Working`/`NeedsInput`; una card Finito quando parte un nuovo turno o scade. `SessionEnd` ritira
-  qualsiasi card della sessione. Un ritiro seguito da un nuovo stato notificabile (es. `NeedsInput` → `Idle` con turno
-  completato) diventa una sostituzione.
+  qualsiasi card della sessione. Quando il nuovo stato e' a sua volta notificabile (es. un secondo permesso, o
+  `Working` → `Idle` a fine turno) la card della sessione viene sostituita sul posto invece di ritirarla. "Finito"
+  nasce solo da `Working` → `Idle`: `NeedsInput` → `Idle` (permesso negato, turno chiuso) ritira la card e basta.
 - **Avvisi dell'app.** Ogni avviso e' una card a se'; un avviso identico (titolo e testo) gia' visibile viene solo
   rinnovato (eta' e timer ripartono).
 - **Pila.** Massimo 3 card visibili, la piu' recente in cima; le altre attendono e salgono quando si libera un posto;
