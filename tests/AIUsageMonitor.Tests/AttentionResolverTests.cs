@@ -178,6 +178,14 @@ public class AttentionResolverTests
 
         Assert.Equal(new AttentionDetail(AttentionKind.Permission, "Bash", "grep -r login src", Background: true),
             resolver.Resolve(Notification("permission_prompt", transcript), Session(transcript, Running("a1", agent))));
+        // Spec §4.2 step 2: while agents run the Agent call counts as nothing pending. When they have nothing pending
+        // either (or their transcript is not found yet), the permission is generic and in the background: the agent is
+        // already running, so the card must not read as a request to launch it.
+        var idle = layout.Agent("agent-a2.jsonl", ToolUse("x2", "u2", "Bash", new { command = "ls" }, 30), Result("u2", 31));
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, Background: true),
+            resolver.Resolve(Notification("permission_prompt", transcript), Session(transcript, Running("a2", idle))));
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, Background: true),
+            resolver.Resolve(Notification("permission_prompt", transcript), Session(transcript, Running("a3"))));
         // No agent at work: the Agent call itself is what waits.
         Assert.Equal(new AttentionDetail(AttentionKind.Permission, "Agent", "Esplora il login"),
             resolver.Resolve(Notification("permission_prompt", transcript), Session(transcript)));

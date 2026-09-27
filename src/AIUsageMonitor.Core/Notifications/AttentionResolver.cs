@@ -71,11 +71,13 @@ public sealed class AttentionResolver
         if (IsType(type, "worker_permission_prompt"))
             return FromAgents(session, transcript, cwd) ?? Generic(type, e, session);
 
-        // permission_prompt: the main session's own request first. A pending Agent/Task call is the agent at work,
-        // not a request, while agents run: what they wait on is more precise than the agent's description.
+        // permission_prompt: the main session's own request first. A pending Agent/Task call is the agent at work, not a
+        // request, while agents run (spec §4.2 step 2): it counts as nothing pending, and what they wait on is searched
+        // instead. When they have nothing pending either, the permission is generic: "Permesso · Agent" would read as a
+        // request to launch an agent that is already running.
         if (main is not null && !(main.Detail.Tool is "Agent" or "Task" && (session?.ActiveSubagents ?? 0) > 0))
             return main.Detail;
-        return FromAgents(session, transcript, cwd) ?? main?.Detail ?? Generic(type, e, session);
+        return FromAgents(session, transcript, cwd) ?? Generic(type, e, session);
     }
 
     /// <summary>The most recent tool_use pending in the transcript of a running agent of the session, as a background request.</summary>
