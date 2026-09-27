@@ -1903,4 +1903,104 @@ public class HookEventPumpTests
 
         Assert.Null(Assert.Single(tracker.Sessions).Tokens);
     }
+
+    /// <summary>
+    /// A Claude agent of session "n1" as Claude Code lays it out: its transcript under the session's subagents folder
+    /// and, when <paramref name="meta"/> is given, the agent-&lt;id&gt;.meta.json it writes next to it at start.
+    /// </summary>
+    private static string NamedAgent(TempDir dir, string agentId, string? meta)
+    {
+        var transcript = dir.File(Path.Combine("projects", "proj", "n1", "subagents", "workflows", "wf_01", $"agent-{agentId}.jsonl"),
+            """{"type":"user","message":{"role":"user","content":"Scrivi i test"}}""" + "\n");
+        if (meta is not null) File.WriteAllText(Path.ChangeExtension(transcript, ".meta.json"), meta);
+        return transcript;
+    }
+
+    [Fact]
+    public void Pump_names_the_running_claude_agents_after_their_meta_json_once()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var session = dir.File(Path.Combine("projects", "proj", "n1.jsonl"), "");
+        var named = NamedAgent(dir, "a1", """{"agentType":"workflow-subagent","description":"write:B (tasks 3,6)","workflowPhase":"Write"}""");
+        var late = NamedAgent(dir, "a2", null);
+        var nameless = NamedAgent(dir, "a3", """{"agentType":"workflow-subagent","workflowPhase":"Write"}""");
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        var logs = new List<string>();
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1),
+            TokenSource = new FakeTokenSource(),
+            OnInfo = logs.Add,
+            OnError = ex => logs.Add(ex.ToString())
+        };
+        pump.Start();
+        HookEvent Agent(string evt, string id, int plus) =>
+            new(now.AddSeconds(plus), AgentKind.Claude, evt, "n1", @"C:\demo\proj", null, null, null, id, "workflow-subagent");
+        pump.Inject([
+            new HookEvent(now, AgentKind.Claude, "UserPromptSubmit", "n1", @"C:\demo\proj", null, null, null, TranscriptPath: session),
+            Agent("SubagentStart", "a1", 1), Agent("SubagentStart", "a2", 2), Agent("SubagentStart", "a3", 3)
+        ]);
+        pump.Pump();
+        string? Name(string id) => tracker.Sessions.Single().Subagents!.Single(a => a.AgentId == id).Name;
+        // Names are read by the periodic pass, not on every event.
+        Assert.All(tracker.Sessions.Single().Subagents!, a => Assert.Null(a.Name));
+
+        changes.Clear();
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+
+        Assert.Equal("write:B (tasks 3,6)", Name("a1"));
+        Assert.Null(Name("a2"));
+        Assert.Null(Name("a3"));
+        Assert.Equal("write:B (tasks 3,6)", changes.Last().Session.Subagents!.Single(a => a.AgentId == "a1").Name);
+
+        // a2's meta.json shows up, a3's gains a description, a1's changes: only the agent that could not be read is read again.
+        File.WriteAllText(Path.ChangeExtension(late, ".meta.json"), """{"agentType":"workflow-subagent","description":"review:C"}""");
+        File.WriteAllText(Path.ChangeExtension(nameless, ".meta.json"), """{"agentType":"workflow-subagent","description":"write:D"}""");
+        File.WriteAllText(Path.ChangeExtension(named, ".meta.json"), """{"agentType":"workflow-subagent","description":"write:Z"}""");
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+
+        Assert.Equal("write:B (tasks 3,6)", Name("a1"));
+        Assert.Equal("review:C", Name("a2"));
+        Assert.Null(Name("a3"));
+        // The name stays with the agent once it is done.
+        pump.Inject([Agent("SubagentStop", "a1", 70)]);
+        pump.Pump();
+        Assert.Equal("write:B (tasks 3,6)", Name("a1"));
+        Assert.DoesNotContain(logs, line => line.Contains("write:", StringComparison.Ordinal) || line.Contains("review:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Pump_names_a_codex_child_after_its_nickname_and_its_agent_path()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 11, 0, 0, TimeSpan.Zero);
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1),
+            TokenRefreshEvery = TimeSpan.Zero,
+            TokenSource = new FakeTokenSource(),
+            CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, clock)
+        };
+
+        CodexThreadTurns(paths, CodexChild, "c1", guardian: false, ("task_started", now.AddSeconds(-3)));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now.AddSeconds(-10), agent: "codex") +
+            SubagentLine("SubagentStart", "c1", CodexChild, now, agent: "codex", agentType: "default"));
+        pump.Pump();
+
+        var child = Assert.Single(Assert.Single(tracker.Sessions).Subagents!);
+        Assert.Equal("Noether · login_audit", child.Name);
+        Assert.Equal("default", child.AgentType);
+    }
 }

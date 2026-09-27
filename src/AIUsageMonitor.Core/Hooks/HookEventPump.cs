@@ -45,6 +45,11 @@ public sealed class HookEventPump : IDisposable
     /// </summary>
     private readonly Dictionary<string, HashSet<string>> _endedFromTranscript = new(StringComparer.Ordinal);
     /// <summary>
+    /// Running subagents whose name is settled, per session: named, or found without a name. They are not asked again;
+    /// the others (no transcript, meta.json or rollout yet) are asked at every periodic pass while they run.
+    /// </summary>
+    private readonly Dictionary<(AgentKind Agent, string SessionId), HashSet<string>> _namesSettled = new();
+    /// <summary>
     /// The subagents the silent replay of <see cref="Start"/> left running, with the start of that run: one of them
     /// found over in its transcript ended while the app was closed, so its synthetic SubagentStop is
     /// <see cref="HookEvent.Quiet"/> and the turn it may end is not announced. A later run of the same agent (another
@@ -273,6 +278,8 @@ public sealed class HookEventPump : IDisposable
                             RefreshTokens(session);
                     // Same pass, with or without a token source: the Claude agents whose transcript says they are over.
                     EndTerminatedSubagents();
+                    // Then the name of every running agent that has none yet.
+                    ResolveSubagentNames();
                 }
                 if (_clock.UtcNow - _lastLivenessSweep >= LivenessSweepEvery)
                 {
@@ -436,6 +443,55 @@ public sealed class HookEventPump : IDisposable
                     "transcript", agent.AgentId, agent.AgentType, AgentTranscriptPath: path, Quiet: IsReplayedRun(session, agent)));
             }
         }
+    }
+
+    /// <summary>
+    /// Gives each running subagent the name it was started with, once (<see cref="SubagentNames"/>): a Claude agent the
+    /// description of the <c>agent-&lt;id&gt;.meta.json</c> next to its transcript (its own path, or the one the locator
+    /// finds while it runs), a Codex child the nickname and agent path of its rollout
+    /// (<see cref="CodexSubagentScanner.ChildInfo"/>). An agent whose files cannot tell yet is asked again at the next
+    /// pass; one they answered, with or without a name, is not. Called by the periodic pass only: the replayed agents
+    /// get their names at the first one. Names are never logged.
+    /// </summary>
+    private void ResolveSubagentNames()
+    {
+        var sessions = _tracker.Sessions;
+        var live = sessions.Select(s => (s.Agent, s.SessionId)).ToHashSet();
+        foreach (var gone in _namesSettled.Keys.Where(k => !live.Contains(k)).ToList()) _namesSettled.Remove(gone);
+
+        foreach (var session in sessions)
+        {
+            var key = (session.Agent, session.SessionId);
+            _namesSettled.TryGetValue(key, out var settled);
+            // An agent that finished leaves the set: a Codex child that comes back for a new turn keeps its name
+            // anyway, and a nameless one is simply asked again.
+            settled?.RemoveWhere(id => !session.RunningSubagents.Any(s => s.AgentId == id));
+            Dictionary<string, string>? names = null;
+            foreach (var agent in session.RunningSubagents)
+            {
+                if (agent.Name is not null || settled?.Contains(agent.AgentId) == true) continue;
+                if (!TryResolveName(session, agent, out var name)) continue;
+                if (settled is null) _namesSettled[key] = settled = new HashSet<string>(StringComparer.Ordinal);
+                settled.Add(agent.AgentId);
+                if (name is not null) (names ??= new Dictionary<string, string>(StringComparer.Ordinal))[agent.AgentId] = name;
+            }
+            if (names is not null) _tracker.UpdateSubagentNames(session.Agent, session.SessionId, names);
+        }
+    }
+
+    /// <summary>
+    /// False while the agent's files cannot tell its name yet (no transcript found, no meta.json, no rollout); true
+    /// once they did, with the name or null when the agent has none.
+    /// </summary>
+    private bool TryResolveName(SessionState session, SubagentState agent, out string? name)
+    {
+        name = null;
+        if (session.Agent == AgentKind.Claude)
+            return SubagentNames.TryReadClaude(
+                agent.TranscriptPath ?? _agentTranscripts.Locate(session.TranscriptPath, session.SessionId, agent.AgentId), out name);
+        if (session.Agent != AgentKind.Codex || CodexSubagents?.ChildInfo(agent.AgentId) is not { } child) return false;
+        name = SubagentNames.FromCodex(child.Nickname, child.AgentPath);
+        return true;
     }
 
     /// <summary>Records every subagent the silent replay left running, with the start of its run.</summary>

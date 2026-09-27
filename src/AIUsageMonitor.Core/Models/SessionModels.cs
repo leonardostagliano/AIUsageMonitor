@@ -88,7 +88,10 @@ public sealed record SubagentState(
     string? TranscriptPath,
     TokenUsage Tokens,
     string? Model = null,
-    UsageLedger? Ledger = null);
+    UsageLedger? Ledger = null,
+    // The name the agent was started with (the description of a Claude agent, the nickname and path of a Codex child),
+    // at most SubagentNames.MaxLength characters; set once by the pump and kept by every later event. Never logged.
+    string? Name = null);
 
 public sealed record SessionState(
     AgentKind Agent,
