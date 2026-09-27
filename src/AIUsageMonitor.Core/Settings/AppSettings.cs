@@ -34,6 +34,14 @@ public sealed class AppSettings
     public bool NotifyCodex { get; set; } = true;
 
     /// <summary>
+    /// I due suoni dell'app con le card (spec 2026-09-27 §8): uno morbido con "Finito", uno piu' marcato con permessi,
+    /// piani, domande ed errori; gli avvisi dell'app sono muti, e in "Non disturbare" o a schermo intero non suona
+    /// nulla. Spento, ogni card e' muta. Un settings.json scritto prima di questa opzione non ha la chiave e la lascia
+    /// attiva.
+    /// </summary>
+    public bool NotifySound { get; set; } = true;
+
+    /// <summary>
     /// Controllo automatico delle release (15 s dopo l'avvio, poi ogni 6 ore). Parte solo dopo che l'utente ha collegato
     /// l'account GitHub dalle impostazioni: senza sessione un controllo potrebbe solo fallire.
     /// </summary>

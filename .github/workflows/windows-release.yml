@@ -60,10 +60,10 @@ jobs:
           dotnet test AIUsageMonitor.slnx -c Release
           if ($LASTEXITCODE -ne 0) { throw "dotnet test non riuscito (codice $LASTEXITCODE)." }
 
-      - name: Test hook and release scripts
+      - name: Test hook, release and sound scripts
         if: steps.version.outputs.skip != 'true'
         run: |
-          node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs
+          node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs tools/sounds/generate-sounds.test.mjs
           if ($LASTEXITCODE -ne 0) { throw "node --test non riuscito (codice $LASTEXITCODE)." }
 
       # Framework-dependent con --no-self-contained: con l'SDK .NET 10 `--self-contained false` insieme a
