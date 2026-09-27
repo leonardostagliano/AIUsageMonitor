@@ -225,6 +225,384 @@ public class SubagentReconciliationTests
         Assert.False(change.Session.AwaitingSubagents);
     }
 
+    private const string WorkflowAgent = "workflow-subagent";
+
+    [Fact]
+    public void The_agents_of_a_workflow_survive_every_Stop_that_names_it_and_end_with_the_workflow()
+    {
+        // The shape of a real session: a workflow starts four agents, the main agent ends its turn listing the workflow
+        // (never its agents), the user keeps talking, the agents stop one by one, and the workflow's end wakes the session.
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 10, "w1", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 13, "w2", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 13, "w3", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 13, "w4", WorkflowAgent));
+        tracker.Apply(Ev("UserPromptSubmit", 31));
+
+        tracker.Apply(Ev("Stop", 51, tasks: [Workflow("wf1")], message: "Workflow avviato."));
+        var s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Working, s.Phase);
+        Assert.True(s.AwaitingSubagents);
+        Assert.Equal(1, s.PendingWorkflows);
+        Assert.Equal(4, s.ActiveSubagents);
+        Assert.Equal("al lavoro · 4 agenti", s.PhaseLabel);
+
+        tracker.Apply(Ev("SubagentStop", 1972, "w2", WorkflowAgent, tasks: [Workflow("wf1")]));
+        // Another turn of the main agent while the workflow runs: its Stop names the workflow again.
+        tracker.Apply(Ev("UserPromptSubmit", 2063));
+        tracker.Apply(Ev("Stop", 2548, tasks: [Workflow("wf1")]));
+        Assert.Equal(["w1", "w3", "w4"], tracker.Sessions.Single().RunningSubagents.Select(a => a.AgentId));
+
+        tracker.Apply(Ev("SubagentStop", 4175, "w1", WorkflowAgent, tasks: [Workflow("wf1")]));
+        tracker.Apply(Ev("SubagentStop", 4202, "w3", WorkflowAgent, tasks: [Workflow("wf1")]));
+        tracker.Apply(Ev("SubagentStop", 4404, "w4", WorkflowAgent, tasks: [Workflow("wf1")]));
+        s = tracker.Sessions.Single();
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.Equal(SessionPhase.Working, s.Phase);                // the workflow itself is still in flight
+
+        tracker.Apply(Ev("Stop", 4410, tasks: [], message: "Workflow completato."));
+        s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.Equal(0, s.PendingWorkflows);
+        Assert.False(s.AwaitingSubagents);
+        Assert.All(s.Subagents!, a => Assert.Equal(SubagentPhase.Done, a.Phase));
+        // Each agent ended with its own SubagentStop, never with a Stop that could not see it.
+        Assert.Equal(T0.AddSeconds(1972), s.Subagents!.Single(a => a.AgentId == "w2").EndedAt);
+        Assert.Equal(T0.AddSeconds(4404), s.Subagents!.Single(a => a.AgentId == "w4").EndedAt);
+        // The turn ended once, when the workflow did.
+        Assert.Single(changes, c => c.Session.Phase == SessionPhase.Idle);
+    }
+
+    [Fact]
+    public void A_Stop_that_lists_no_workflow_ends_the_workflow_agents_it_does_not_name()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "w1", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 2, "w2", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 3, "bg", "general-purpose"));
+
+        // Only a background agent is in flight: no workflow, so none of its agents can be alive.
+        tracker.Apply(Ev("Stop", 4, tasks: [Agent("bg")]));
+        var s = tracker.Sessions.Single();
+        Assert.Equal("bg", s.RunningSubagents.Single().AgentId);
+        Assert.Equal(T0.AddSeconds(4), s.Subagents!.Single(a => a.AgentId == "w1").EndedAt);
+        Assert.Equal(SessionPhase.Working, s.Phase);
+
+        tracker.Apply(Ev("SubagentStart", 5, "w3", WorkflowAgent));
+        tracker.Apply(Ev("Stop", 6, tasks: []));
+        s = tracker.Sessions.Single();
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+    }
+
+    [Fact]
+    public void A_SubagentStop_whose_list_names_no_workflow_ends_the_workflow_agents_left()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "w1", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 2, "w2", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 3, "g1", "general-purpose"));
+        tracker.Apply(Ev("SubagentStart", 4, "g2", "general-purpose"));
+        tracker.Apply(Ev("Stop", 5, tasks: [Workflow("wf1"), Agent("g1"), Agent("g2")]));
+
+        // A list with a workflow in it changes nothing for the workflow's agents.
+        tracker.Apply(Ev("SubagentStop", 6, "g1", "general-purpose", tasks: [Workflow("wf1"), Agent("g2")]));
+        Assert.Equal(["w1", "w2", "g2"], tracker.Sessions.Single().RunningSubagents.Select(a => a.AgentId));
+        // Neither does a SubagentStop without a list (Codex, an older Claude Code).
+        tracker.Apply(Ev("SubagentStart", 7, "g3", "general-purpose"));
+        tracker.Apply(Ev("SubagentStop", 8, "g3", "general-purpose"));
+        Assert.Equal(["w1", "w2", "g2"], tracker.Sessions.Single().RunningSubagents.Select(a => a.AgentId));
+
+        // The workflow is gone from the list: its agents that never sent their SubagentStop are over too. The agent
+        // running next to the one that stopped is not a background task and is left alone, as ever.
+        tracker.Apply(Ev("SubagentStop", 9, "g4", "general-purpose", tasks: [Agent("g2")]));
+        var s = tracker.Sessions.Single();
+        Assert.Equal("g2", s.RunningSubagents.Single().AgentId);
+        Assert.Equal(T0.AddSeconds(9), s.Subagents!.Single(a => a.AgentId == "w1").EndedAt);
+        Assert.Equal(T0.AddSeconds(9), s.Subagents!.Single(a => a.AgentId == "w2").EndedAt);
+        Assert.Equal(0, s.PendingWorkflows);
+        Assert.Equal(SessionPhase.Working, s.Phase);
+
+        tracker.Apply(Ev("SubagentStop", 10, "g2", "general-purpose", tasks: []));
+        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
+    }
+
+    [Fact]
+    public void A_general_purpose_agent_the_Stop_does_not_name_is_ended_even_while_a_workflow_runs()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "w1", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 2, "g1", "general-purpose"));
+
+        tracker.Apply(Ev("Stop", 3, tasks: [Workflow("wf1")]));
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal("w1", s.RunningSubagents.Single().AgentId);
+        var ended = s.Subagents!.Single(a => a.AgentId == "g1");
+        Assert.Equal(SubagentPhase.Done, ended.Phase);
+        Assert.Equal(T0.AddSeconds(3), ended.EndedAt);
+    }
+
+    [Fact]
+    public void An_agent_is_known_as_a_workflow_agent_by_its_transcript_path_too()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        // No agent_type to tell them by, and SubagentStart never carries a transcript path: the pump finds the
+        // transcripts on disk and hands their paths over.
+        tracker.Apply(Ev("SubagentStart", 1, "p1"));
+        tracker.Apply(Ev("SubagentStart", 2, "p2"));
+        tracker.Apply(Ev("SubagentStart", 3, "p3"));
+        tracker.Apply(Ev("SubagentStart", 4, "done"));
+        tracker.Apply(Ev("SubagentStop", 5, "done"));
+        tracker.Apply(Ev("SubagentStart", 6, "bg", "general-purpose"));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s1", new Dictionary<string, string>
+        {
+            // Under subagents/workflows/, with either separator.
+            ["p1"] = @"C:\p\s1\subagents\workflows\wf_1\agent-p1.jsonl",
+            ["p2"] = "/home/demo/p/s1/subagents/workflows/wf_1/agent-p2.jsonl",
+            // An Agent-tool agent writes directly under subagents/.
+            ["p3"] = @"C:\p\s1\subagents\agent-p3.jsonl",
+            // Only a running agent gets one, and only an agent the session knows.
+            ["done"] = @"C:\p\s1\subagents\workflows\wf_1\agent-done.jsonl",
+            ["stranger"] = @"C:\p\s1\subagents\workflows\wf_1\agent-stranger.jsonl"
+        });
+        // A path already known is never replaced, and another session's agents are not touched.
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s1",
+            new Dictionary<string, string> { ["p3"] = @"C:\p\s1\subagents\workflows\wf_1\agent-p3.jsonl" });
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s2", new Dictionary<string, string> { ["bg"] = @"C:\p\s2\subagents\agent-bg.jsonl" });
+        tracker.UpdateSubagentPaths(AgentKind.Codex, "s1", new Dictionary<string, string> { ["bg"] = @"C:\p\s1\subagents\agent-bg.jsonl" });
+
+        Assert.Empty(changes);                                       // nothing the UI shows has changed
+        var s = tracker.Sessions.Single();
+        Assert.Equal(@"C:\p\s1\subagents\workflows\wf_1\agent-p1.jsonl", s.Subagents!.Single(a => a.AgentId == "p1").TranscriptPath);
+        Assert.Equal(@"C:\p\s1\subagents\agent-p3.jsonl", s.Subagents!.Single(a => a.AgentId == "p3").TranscriptPath);
+        Assert.Null(s.Subagents!.Single(a => a.AgentId == "done").TranscriptPath);
+        Assert.Null(s.Subagents!.Single(a => a.AgentId == "bg").TranscriptPath);
+        Assert.DoesNotContain(s.Subagents!, a => a.AgentId == "stranger");
+
+        // A Stop that names a workflow keeps its agents running...
+        tracker.Apply(Ev("Stop", 7, tasks: [Workflow("wf1"), Agent("bg")]));
+        Assert.Equal(["p1", "p2", "bg"], tracker.Sessions.Single().RunningSubagents.Select(a => a.AgentId));
+
+        // ...and one that names none ends them.
+        tracker.Apply(Ev("UserPromptSubmit", 8));
+        tracker.Apply(Ev("Stop", 9, tasks: [Agent("bg")]));
+        s = tracker.Sessions.Single();
+        Assert.Equal("bg", s.RunningSubagents.Single().AgentId);
+        Assert.Equal(T0.AddSeconds(9), s.Subagents!.Single(a => a.AgentId == "p1").EndedAt);
+    }
+
+    [Fact]
+    public void The_workflow_agents_known_by_their_path_end_with_a_SubagentStop_that_lists_no_workflow()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "p1"));
+        tracker.Apply(Ev("SubagentStart", 2, "g1", "general-purpose"));
+        tracker.UpdateSubagentPaths(AgentKind.Claude, "s1",
+            new Dictionary<string, string> { ["p1"] = "/home/demo/p/s1/subagents/workflows/wf_1/agent-p1.jsonl" });
+        tracker.Apply(Ev("Stop", 3, tasks: [Workflow("wf1"), Agent("g1")]));
+
+        tracker.Apply(Ev("SubagentStop", 4, "g9", "general-purpose", tasks: [Agent("g1")]));
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal("g1", s.RunningSubagents.Single().AgentId);
+        Assert.Equal(T0.AddSeconds(4), s.Subagents!.Single(a => a.AgentId == "p1").EndedAt);
+    }
+
+    [Fact]
+    public void A_quiet_event_moves_the_session_without_announcing_it()
+    {
+        // The pump's own conclusions (an agent found dead in its transcript, a Codex child that ended) change the
+        // session exactly like the real event, but the notch only repaints: no card, no sound.
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "a1"));
+        tracker.Apply(Ev("Stop", 2, message: "Lanciati."));
+        Assert.All(changes, c => Assert.False(c.Silent));
+
+        var ended = tracker.Apply(Ev("SubagentStop", 3, "a1") with { Quiet = true });
+        Assert.NotNull(ended);
+        Assert.True(ended.Silent);
+        Assert.Same(ended, changes.Last());
+        Assert.Equal(SessionPhase.Working, ended.PreviousPhase);
+        Assert.Equal(SessionPhase.Idle, ended.Session.Phase);
+        Assert.Equal("Lanciati.", ended.Session.Message);
+
+        // Any event can be quiet; the ones that are not keep being announced.
+        Assert.False(tracker.Apply(Ev("UserPromptSubmit", 4))!.Silent);
+        var stop = tracker.Apply(Ev("Stop", 5) with { Quiet = true });
+        Assert.True(stop!.Silent);
+        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
+        Assert.True(tracker.Apply(Ev("SessionEnd", 6) with { Quiet = true })!.Silent);
+    }
+
+    [Fact]
+    public void A_backdated_subagent_event_never_moves_the_session_clocks_back()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "a1"));
+        tracker.Apply(Ev("SubagentStart", 8, "a2"));
+        tracker.Apply(Ev("Stop", 10, message: "Lanciati."));
+
+        // Closed at the last line of its transcript, written before what the session has heard since.
+        tracker.Apply(Ev("SubagentStop", 5, "a1"));
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal(T0.AddSeconds(5), s.Subagents!.Single(a => a.AgentId == "a1").EndedAt);
+        Assert.Equal(T0.AddSeconds(10), s.LastEventAt);
+        Assert.Equal(T0.AddSeconds(8), s.LastSubagentEventAt);
+    }
+
+    [Fact]
+    public void The_sweep_ends_an_agent_silent_for_the_timeout_while_the_others_keep_the_session_busy()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 60, "dead", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 61, "busy", WorkflowAgent));
+        tracker.Apply(Ev("Stop", 62, tasks: [Workflow("wf1")]));
+        // The workflow keeps starting agents: the session is anything but quiet.
+        tracker.Apply(Ev("SubagentStart", 39 * 60, "fresh", WorkflowAgent));
+        clock.Advance(TimeSpan.FromMinutes(41));
+
+        DateTimeOffset? Activity(SubagentState agent) => agent.AgentId switch
+        {
+            "dead" => T0.AddMinutes(1),                // interrupted 40 minutes ago, no SubagentStop
+            "busy" => clock.UtcNow.AddSeconds(-20),
+            _ => null                                   // "fresh" has not written its transcript yet
+        };
+        var change = Assert.Single(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, a) => Activity(a)));
+
+        var s = change.Session;
+        Assert.Equal(SessionPhase.Working, s.Phase);
+        Assert.Equal(SessionPhase.Working, change.PreviousPhase);
+        Assert.True(s.AwaitingSubagents);
+        Assert.Equal(1, s.PendingWorkflows);
+        Assert.Equal(["busy", "fresh"], s.RunningSubagents.Select(a => a.AgentId));
+        Assert.Equal(clock.UtcNow, s.Subagents!.Single(a => a.AgentId == "dead").EndedAt);
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, a) => Activity(a)));
+    }
+
+    [Fact]
+    public void An_agent_without_known_activity_waits_for_the_whole_session_to_go_quiet()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 60, "a1"));
+        tracker.Apply(Ev("Stop", 61, message: "Lanciati."));
+        tracker.Apply(Ev("SubagentStart", 25 * 60, "a2"));
+
+        // a1 started 34 minutes ago, but its session heard from an agent 9 minutes ago.
+        clock.Advance(TimeSpan.FromMinutes(34));
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => null));
+        Assert.Equal(2, tracker.Sessions.Single().ActiveSubagents);
+
+        clock.Advance(TimeSpan.FromMinutes(22));
+        var change = Assert.Single(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => null));
+        Assert.Equal(SessionPhase.Idle, change.Session.Phase);
+        Assert.Equal("Lanciati.", change.Session.Message);
+        Assert.Equal(0, change.Session.ActiveSubagents);
+    }
+
+    [Fact]
+    public void No_agent_is_released_for_inactivity_while_the_session_waits_for_input()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "asks", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 2, "quiet", WorkflowAgent));
+        tracker.Apply(Ev("Stop", 3, tasks: [Workflow("wf1")]));
+        // The workflow agent asks for a permission and the user is away.
+        tracker.Apply(new HookEvent(T0.AddSeconds(4), AgentKind.Claude, "Notification", "s1", @"C:\p\demo", "permission_prompt", null, null));
+        clock.Advance(TimeSpan.FromMinutes(50));
+
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => T0.AddSeconds(4)));
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30)));
+        var waiting = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.NeedsInput, waiting.Phase);
+        Assert.Equal(2, waiting.ActiveSubagents);
+        Assert.Equal(1, waiting.PendingWorkflows);
+
+        // Answered: the agent that asked writes again, the other one stays silent and is released.
+        tracker.Apply(Ev("PostToolUse", 50 * 60));
+        var change = Assert.Single(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30),
+            (_, a) => a.AgentId == "asks" ? clock.UtcNow : T0.AddSeconds(4)));
+        Assert.Equal(SessionPhase.Working, change.Session.Phase);
+        Assert.Equal("asks", change.Session.RunningSubagents.Single().AgentId);
+    }
+
+    [Fact]
+    public void Ending_the_last_silent_agent_ends_the_turn_only_when_no_workflow_is_left()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "w1", WorkflowAgent));
+        tracker.Apply(Ev("SubagentStart", 2, "w2", WorkflowAgent));
+        tracker.Apply(Ev("Stop", 3, tasks: [Workflow("wf1")], message: "Workflow avviato."));
+        tracker.Apply(Ev("SubagentStop", 35 * 60, "w2", WorkflowAgent, tasks: [Workflow("wf1")]));
+        clock.Advance(TimeSpan.FromMinutes(36));
+
+        // w1 died long ago; the workflow was still in flight a minute ago: the session waits on it, between two phases.
+        var change = Assert.Single(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => T0.AddMinutes(1)));
+        Assert.Equal(0, change.Session.ActiveSubagents);
+        Assert.Equal(SessionPhase.Working, change.Session.Phase);
+        Assert.True(change.Session.AwaitingSubagents);
+        Assert.Equal(1, change.Session.PendingWorkflows);
+
+        // An older Claude Code (no list): the turn waited on its agents alone, and the last one is gone.
+        var other = new SessionTracker(new FakeClock(T0.AddMinutes(36)));
+        other.Apply(Ev("UserPromptSubmit"));
+        other.Apply(Ev("SubagentStart", 1, "a1"));
+        other.Apply(Ev("SubagentStart", 2, "a2"));
+        other.Apply(Ev("Stop", 3, message: "Lanciati."));
+        other.Apply(Ev("SubagentStop", 35 * 60, "a2"));
+        change = Assert.Single(other.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => T0.AddMinutes(1)));
+        Assert.Equal(SessionPhase.Idle, change.Session.Phase);
+        Assert.Equal("Lanciati.", change.Session.Message);
+        Assert.False(change.Session.AwaitingSubagents);
+    }
+
+    [Fact]
+    public void The_children_synthesised_from_Codex_rollouts_keep_the_session_rule()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        tracker.Apply(Ev("UserPromptSubmit", agent: AgentKind.Codex));
+        tracker.Apply(Ev("SubagentStart", 1, "thread-1", CodexSubagentScanner.SyntheticAgentType, agent: AgentKind.Codex));
+        // The pump announces a child it still sees again every half timeout: the session is not quiet.
+        tracker.Apply(Ev("SubagentStart", 20 * 60, "thread-1", CodexSubagentScanner.SyntheticAgentType, agent: AgentKind.Codex));
+        clock.Advance(TimeSpan.FromMinutes(40));
+
+        // An activity older than the timeout does not end a child the scanner keeps announcing.
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => T0));
+        Assert.Equal(1, tracker.Sessions.Single().ActiveSubagents);
+
+        // The announcements stop: a recent activity still keeps it, as before; without one the timeout ends it.
+        clock.Advance(TimeSpan.FromMinutes(11));
+        Assert.Empty(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => clock.UtcNow));
+        Assert.Single(tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30), (_, _) => T0));
+        Assert.Equal(0, tracker.Sessions.Single().ActiveSubagents);
+    }
+
     [Fact]
     public void Origin_and_title_come_from_the_source_and_survive_later_events()
     {

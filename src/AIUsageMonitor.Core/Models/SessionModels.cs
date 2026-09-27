@@ -198,4 +198,7 @@ public sealed record HookEvent(
     // Set by the app's own sources on the phase they find a session in when they first see it (the registry adopting a
     // session, the first read of a cloud session), as opposed to a change they saw happen: a turn already under way
     // began at a time nobody saw, so it starts no turn (no TurnStartedAt).
-    bool Adopted = false);
+    bool Adopted = false,
+    // Set by the pump on the events it synthesises from its own reading (an agent found dead in its transcript, a Codex
+    // child that ended): the session changes as usual, but the change is raised Silent (no card, no sound).
+    bool Quiet = false);

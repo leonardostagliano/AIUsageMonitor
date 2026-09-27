@@ -196,7 +196,7 @@ public class WaitingAndIdleTests
     }
 
     [Fact]
-    public void After_idle_prompt_a_turn_that_resumes_on_its_own_waits_for_its_hooks()
+    public void After_idle_prompt_a_turn_that_resumes_on_its_own_is_seen_through_the_session_registry()
     {
         using var dir = new TempDir();
         var clock = new FakeClock(T0.AddMinutes(5));
@@ -213,16 +213,19 @@ public class WaitingAndIdleTests
         Assert.Empty(feed.Sync(tracker.Sessions, HookOwned).Events);
         Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
 
-        // A background command finishes and the main agent works again with no UserPromptSubmit: the registry only
-        // answers a wait for a session the hooks own, so the row stays "finito"...
+        // A background command finishes and the main agent works again with no UserPromptSubmit: the record went busy
+        // after the last event of the session, and the registry reports the turn the hooks did not.
         Record(dir.Path, 10, "s1", "busy", T0, T0.AddSeconds(120));
-        Assert.Empty(feed.Sync(tracker.Sessions, HookOwned).Events);
-        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
-
-        // ...until a hook of the resumed turn speaks: an agent it starts takes the session back to work.
-        tracker.Apply(Ev("SubagentStart", 125, agentId: "a1"));
+        var resumed = Assert.Single(feed.Sync(tracker.Sessions, HookOwned).Events);
+        Assert.Equal(("UserPromptSubmit", "registry"), (resumed.Event, resumed.Source));
+        tracker.Apply(resumed);
         Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase);
         Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
+        Assert.Empty(feed.Sync(tracker.Sessions, HookOwned).Events);
+
+        // The hooks of the resumed turn go on as usual.
+        tracker.Apply(Ev("SubagentStart", 125, agentId: "a1"));
+        Assert.Equal("al lavoro · 1 agente", tracker.Sessions.Single().PhaseLabel);
     }
 
     [Fact]

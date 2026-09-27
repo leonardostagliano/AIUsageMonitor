@@ -15,14 +15,16 @@ public class ClaudeRegistrySessionFeedTests
     private static long FileTime(DateTimeOffset at) => at.UtcDateTime.ToFileTimeUtc();
 
     private static void Record(string dir, int pid, string sessionId, string status, DateTimeOffset startedAt,
-        string entrypoint = "claude-desktop", string kind = "interactive", string? waitingFor = null, string cwd = @"C:\p\demo")
+        string entrypoint = "claude-desktop", string kind = "interactive", string? waitingFor = null, string cwd = @"C:\p\demo",
+        DateTimeOffset? statusAt = null)
     {
         Directory.CreateDirectory(dir);
         var json = JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["pid"] = pid, ["sessionId"] = sessionId, ["cwd"] = cwd, ["startedAt"] = startedAt.ToUnixTimeMilliseconds(),
             ["procStart"] = "683", ["version"] = "2.1.282", ["kind"] = kind, ["entrypoint"] = entrypoint,
-            ["status"] = status, ["waitingFor"] = waitingFor, ["updatedAt"] = startedAt.ToUnixTimeMilliseconds()
+            ["status"] = status, ["waitingFor"] = waitingFor, ["updatedAt"] = startedAt.ToUnixTimeMilliseconds(),
+            ["statusUpdatedAt"] = statusAt?.ToUnixTimeMilliseconds()
         });
         File.WriteAllText(Path.Combine(dir, $"{pid}.json"), json);
     }
@@ -154,6 +156,104 @@ public class ClaudeRegistrySessionFeedTests
         Assert.Empty(sync.Events);
         var live = Assert.Single(sync.Live);
         Assert.Equal(("h1", 10, FileTime(T0.AddMinutes(-6))), (live.SessionId, live.Pid, live.StartedAtFileTime!.Value));
+    }
+
+    [Fact]
+    public void A_hook_session_that_goes_back_to_work_without_a_prompt_is_reported_once_per_busy_period()
+    {
+        using var rig = new Rig();
+        rig.Probe.Start(10, FileTime(T0.AddMinutes(-6)));
+        rig.HookOwned.Add("h1");
+        HookEvent Hook(string evt, double plusSeconds) =>
+            new(T0.AddSeconds(plusSeconds), AgentKind.Claude, evt, "h1", @"C:\p\demo", null, null, null);
+        void Status(string status, double plusSeconds) =>
+            Record(rig.Sessions, 10, "h1", status, T0.AddMinutes(-5), entrypoint: "cli", statusAt: T0.AddSeconds(plusSeconds));
+        ClaudeRegistrySync SyncAt(double plusSeconds)
+        {
+            rig.Clock.UtcNow = T0.AddSeconds(plusSeconds);
+            return rig.Sync();
+        }
+
+        // A turn and its Stop. The Stop hooks run before Claude Code writes idle: the busy of the turn they end says nothing.
+        rig.Tracker.Apply(Hook("UserPromptSubmit", 0));
+        rig.Tracker.Apply(Hook("Stop", 60));
+        Status("busy", 0);
+        Assert.Empty(SyncAt(61).Events);
+        Status("idle", 61);
+        Assert.Empty(SyncAt(62).Events);
+
+        // A prompt typed by the user: the record goes busy a moment before the hook's own UserPromptSubmit lands, and
+        // the hooks get that moment to report it themselves.
+        Status("busy", 100);
+        Assert.Empty(SyncAt(100.3).Events);
+        rig.Tracker.Apply(Hook("UserPromptSubmit", 100.6));
+        Assert.Empty(SyncAt(110).Events);
+        rig.Tracker.Apply(Hook("Stop", 150));
+        Status("idle", 150.2);
+        Assert.Empty(SyncAt(151).Events);
+
+        // A background task finishes and wakes the main agent: busy again, and no hook says so.
+        Status("busy", 200);
+        Assert.Empty(SyncAt(203).Events);
+        var resumed = Assert.Single(SyncAt(209).Events);
+        Assert.Equal(("UserPromptSubmit", "registry", false), (resumed.Event, resumed.Source, resumed.Adopted));
+        var s = rig.Tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Working, s.Phase);
+        // The turn began when the record went busy, not when this read noticed it.
+        Assert.Equal(T0.AddSeconds(200), s.TurnStartedAt);
+        Assert.Empty(SyncAt(215).Events);                          // once per busy period
+
+        // No hook ever spoke for that turn, and none closes it: the record going idle does, silently (nobody asked for
+        // that turn, there is nothing to announce), and only once.
+        var changes = new List<SessionChange>();
+        rig.Tracker.Changed += changes.Add;
+        Status("idle", 230);
+        var closed = Assert.Single(SyncAt(231).Events);
+        Assert.Equal(("Notification", "idle_prompt", "registry"), (closed.Event, closed.NotificationType, closed.Source));
+        Assert.Equal(SessionPhase.Idle, rig.Tracker.Sessions.Single().Phase);
+        Assert.True(Assert.Single(changes).Silent);
+        Assert.Empty(SyncAt(235).Events);
+        // The next prompt is a turn of its own.
+        Status("busy", 240);
+        rig.Tracker.Apply(Hook("UserPromptSubmit", 240.5));
+        Assert.Empty(SyncAt(250).Events);
+        Assert.Equal(T0.AddSeconds(240.5), rig.Tracker.Sessions.Single().TurnStartedAt);
+        rig.Tracker.Apply(Hook("Stop", 255));
+        Status("idle", 255.2);
+        Assert.Empty(SyncAt(256).Events);
+
+        // A shell command typed at the prompt runs no turn: its record reads "shell", and nothing is reported.
+        Status("shell", 258);
+        Assert.Empty(SyncAt(268).Events);
+        Status("idle", 269);
+        Assert.Empty(SyncAt(270).Events);
+        Assert.Equal(SessionPhase.Idle, rig.Tracker.Sessions.Single().Phase);
+
+        // Woken again, and this time the resumed turn ends with its own Stop while the record still reads busy: nothing
+        // to report, and nothing left for the registry to close once the record reads idle.
+        Status("busy", 275);
+        Assert.Equal("UserPromptSubmit", Assert.Single(SyncAt(284).Events).Event);
+        rig.Tracker.Apply(Hook("Stop", 290));
+        Assert.Empty(SyncAt(291).Events);
+        Status("idle", 291.5);
+        Assert.Empty(SyncAt(292).Events);
+        Assert.Equal(SessionPhase.Idle, rig.Tracker.Sessions.Single().Phase);
+
+        // Once a hook of a resumed turn has spoken, that turn is the hooks' to close: the record going idle before its
+        // Stop is read changes nothing.
+        Status("busy", 320);
+        Assert.Equal("UserPromptSubmit", Assert.Single(SyncAt(329).Events).Event);
+        rig.Tracker.Apply(Hook("PostToolUse", 330));
+        Status("idle", 331);
+        Assert.Empty(SyncAt(332).Events);
+        Assert.Equal(SessionPhase.Working, rig.Tracker.Sessions.Single().Phase);
+        rig.Tracker.Apply(Hook("Stop", 333));
+
+        // A session in error is left to its hooks.
+        rig.Tracker.Apply(Hook("StopFailure", 400));
+        Status("busy", 410);
+        Assert.Empty(SyncAt(430).Events);
+        Assert.Equal(SessionPhase.Error, rig.Tracker.Sessions.Single().Phase);
     }
 
     [Fact]
