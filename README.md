@@ -62,7 +62,10 @@ Windows.
   for 10 seconds.
 - **Jump to the terminal.** Click a session name to bring its terminal to the front: the exact pane in Herdr or
   wmux, otherwise the Windows Terminal or VS Code window that hosts it.
-- **Notifications** when a session needs input, finishes or fails, per agent and per kind.
+- **Notifications that say what is needed.** Cards in the app's own style slide out of the notch when a session
+  asks for a permission (with the command or the file), asks a question, finishes (with the turn's duration) or
+  fails. They go away once answered, wait while Do not disturb or a full-screen app is on, and use two sounds of
+  their own: a soft one when a turn finishes, a stronger one when you are needed.
 - **A dark, quiet interface.** The notch is a small pill on the right edge of the screen that opens on hover and
   stays open on click. Settings use one tab per section. Bars, numbers and status dots move smoothly, and all of
   it stops when Windows animations are turned off.
@@ -149,18 +152,17 @@ The agents don't expose their state, so the app reads it from their hooks.
    line** to `%USERPROFILE%\.aiusagemonitor\events.jsonl` and always exits with code 0, so it can neither block
    nor slow down the agent. Prompts are never recorded.
 3. The app tails that file and keeps a state machine per session: `SessionStart` → ready, `UserPromptSubmit` →
-   working, a `permission_prompt`/`idle_prompt` notification → waiting for input, `Stop` → done, `StopFailure` →
-   error, `SessionEnd` → removed. At start-up it replays the last 24 hours silently, without toasts.
-   `idle_prompt` only means the finished turn waits for the next prompt: it is ignored while the session's
-   background agents or workflows are still running, and in the card's dot and the tray icon a session waiting that
-   way never hides one that is working (a permission prompt still does). Granting a permission fires no hook, so
-   for Claude Code the app watches the session's status in Claude Code's own registry (see below) and goes back
-   to "working" as soon as the prompt is answered.
+   working, a `permission_prompt` notification (or a question, an MCP request, an agent waiting for input) →
+   waiting for input, `Stop` → done, `StopFailure` → error, `SessionEnd` → removed. At start-up it replays the last
+   24 hours silently, without notifications. `idle_prompt` only means that the finished turn waits for the next
+   prompt, so it never makes a session wait (see [Notifications](#notifications)). Granting a permission fires no
+   hook, so for Claude Code the app watches the session's status in Claude Code's own registry (see below) and goes
+   back to "working" as soon as the prompt is answered.
 4. **Subagents.** `SubagentStart`/`SubagentStop` keep the list of running agents. On `Stop`, Claude Code (2.1 and
    later) also lists the background agents and workflows still in flight: an agent missing from that list has
    finished even if its `SubagentStop` never arrived (interrupted, killed), an agent in the list the app never saw
-   start is added, and a background workflow between two phases keeps the session "al lavoro" instead of toasting
-   "finito" at every phase. An agent that sends no event for 30 minutes is considered finished only if its
+   start is added, and a background workflow between two phases keeps the session "al lavoro" instead of showing
+   "Finito" at every phase. An agent that sends no event for 30 minutes is considered finished only if its
    transcript has not been written in that time either.
 5. **Closed terminals.** Closing a terminal kills the agent before it can fire `SessionEnd`. The app ties every
    session to the process of its agent (from the process walk of the hook and from Claude Code's own session
@@ -205,6 +207,61 @@ approving again with `/hooks`. If hooks are turned off in `config.toml` (`hooks 
 leaves the file alone.
 
 </details>
+
+### Notifications
+
+Notifications are the app's own cards, not Windows toasts. They slide out from under the notch tab, on the same
+screen and at the same height, never take the focus and never show up in the taskbar or in Alt+Tab. Up to three
+cards are visible, the newest on top; the others wait behind a "+N altre" pill (click it to pin the notch open).
+
+| Card | When | Goes away |
+|---|---|---|
+| **Finito · 4m 12s** | a turn ends, with its duration and the agent's last message | after 8 seconds, or when the next turn starts |
+| **Permesso · Bash** | Claude Code asks for a permission: the tool and what it would run or touch | when the session stops waiting (granted or denied) |
+| **Piano da approvare** | Claude Code proposes a plan | when the session stops waiting |
+| **Domanda** | Claude Code asks you a question, or an agent waits for input | when the session stops waiting |
+| **Errore** | the turn failed (for example `API Error: 529 overloaded`) | when the session works again |
+| app notices | an update is available, hooks were installed, a terminal was not found... | after 6 seconds for information, otherwise when you close them |
+
+A session has one card at most: a new state replaces it in place. Click a session card to jump to its terminal (or
+to the desktop app, or to the cloud session), like clicking the session name in the notch; click the update card
+to open the update confirmation. ✕ closes a card, and the same state does not bring it back. Hovering over the
+stack pauses every timer.
+
+Finished turns play a soft sound of the app's own (two rising notes), permissions, plans, questions and errors a
+stronger one (two short, bright taps); app notices are silent. **Suono** in the settings turns both off. The sounds
+go through the app's own audio session, so they follow the Windows volume and the app's slider in the volume mixer.
+They are generated by `tools/sounds/generate-sounds.js` (no third-party audio) and embedded in the executable.
+
+<details>
+<summary>Where the detail comes from</summary>
+
+Claude Code's `permission_prompt` always says "Claude needs your permission", even for a question or a plan, and it
+arrives about 7 seconds after the pending tool call has been written to the session's transcript. So on a live
+notification the app reads the last 256 KB of that transcript and takes the last `tool_use` without a
+`tool_result`: `AskUserQuestion` becomes a question (the first one, with "(+N)" when there are more),
+`ExitPlanMode` a plan (its first line), and any other tool a permission with a short summary: the first line of a
+`Bash` or `PowerShell` command, the file of `Edit`, `Write` or `Read` (relative to the session's folder), the URL
+of `WebFetch`, the query of `WebSearch`, the description of an `Agent` task, the server of an MCP tool. When the
+main transcript has nothing pending, the transcripts of the session's running agents are checked and the card says
+"agente in background". Summaries are cut at 120 characters and appear only in the card, never in the logs. The
+replay at start-up never reads transcripts for this.
+
+`idle_prompt`, which Claude Code sends when the prompt has been left empty for 60 seconds after a turn, no longer
+counts as "waiting for input": the session stays "finito" and no card appears. If the session was still marked as
+working because its `Stop` got lost, it quietly moves to done.
+
+</details>
+
+While Windows' **Do not disturb** is on, or an app, a game or a presentation runs full screen, cards wait. When
+that ends, only those still valid appear (permissions, plans, questions and errors nobody has answered yet), with
+a single stronger sound; finished turns and information notices are dropped, and nothing plays while the cards
+wait. Do not disturb is read from an undocumented Windows state: if it cannot be read, cards always show and the log
+says so once.
+
+In *Settings → Notifiche* you choose the events (**Permessi e domande**, **Turno completato**, **Errore**), the
+agents, and whether to play the **Suono**. App notices always show. Codex sends no `Notification` event, so Codex
+sessions only bring "Finito" and "Errore" cards.
 
 ### Costs
 
@@ -252,7 +309,7 @@ Claude Code or Codex session to the front, without unpinning the notch.
    agent's pid and the first ancestor that owns a top-level window.
 3. On click it tries, in order: **Herdr** (`herdr agent focus <pane>`, with `herdr tab focus` as a fallback),
    **wmux** (the workspace, pane and tab of the pty, then the wmux window), the window found in step 2, and
-   finally the `VSCODE_PID` and `WT_SESSION` hints. If nothing works, a "Terminale non trovato" toast appears.
+   finally the `VSCODE_PID` and `WT_SESSION` hints. If nothing works, a "Terminale non trovato" card appears.
 
 <details>
 <summary>What each strategy can and cannot do</summary>
@@ -296,7 +353,7 @@ downloads it and replaces itself.
    and then every 6 hours; **Controlla ora** checks at once. It reads the 100 most recent releases and picks the
    highest stable SemVer version (not the "Latest" label) that ships the executable of the **same variant** you
    are running (framework-dependent or self-contained).
-3. **Offer.** A new version brings a Windows notification (once per version) and an **Aggiorna alla versione X…**
+3. **Offer.** A new version brings a card (once per version) and an **Aggiorna alla versione X…**
    item at the top of the tray menu. Both open a confirmation that downloads and restarts with one consent;
    **Più tardi** skips that version until the app restarts. In the settings the steps are separate (**Scarica**,
    **Installa e riavvia**) and **Apri release** opens the GitHub page with the notes.
@@ -313,8 +370,8 @@ match each other); the file must be a Windows executable whose embedded version 
 The executable is a single file with no installer. The app verifies it again, renames the running exe to
 `AIUsageMonitor.exe.old-<id>` (Windows lets you rename a running exe, not overwrite it), puts the new version
 **at the same path**, starts it with `--updated <pid>` and exits. The new instance waits for the old one to exit
-before taking the single-instance mutex and shows an "AIUsageMonitor aggiornato" notification. Autostart, taskbar
-pins and notifications keep working because the path does not change; settings, hooks and caches are untouched.
+before taking the single-instance mutex and shows an "AIUsageMonitor aggiornato" card. Autostart and taskbar pins
+keep working because the path does not change; settings, hooks and caches are untouched.
 If a step fails, the previous exe goes back in place. If you quit the app while the swap is running, it waits for
 it to finish and does not reopen: the new version starts next time. The `.old-*` files are deleted at the next
 start.
@@ -357,7 +414,8 @@ skipped: they are local sessions the hooks already report. The first read after 
 ## Privacy
 
 - **Read locally only:** Claude credentials, Codex session files, the hook configuration, the event file, Claude
-  Code's session registry (`~/.claude/sessions`) and the organization id in `~/.claude.json`.
+  Code's session registry (`~/.claude/sessions`), the organization id in `~/.claude.json` and Claude Code's
+  transcripts (for token counts, and for what a waiting session asks).
 - **Network:** the Anthropic usage endpoint, with the OAuth token already on your machine. With cloud sessions on
   (the default), also the sessions and routines endpoints of the same API, with the same token: they return titles,
   statuses and token counts, which stay in memory and are never logged. With costs on (the
@@ -365,7 +423,9 @@ skipped: they are local sessions the hooks already report. The first read after 
   `raw.githubusercontent.com` and the reference rate from `www.ecb.europa.eu`. The updater talks to GitHub only
   after you link an account: this repository's release API and its asset downloads, with the session the app
   created (never logged or shown).
-- **Never sent, logged or shown:** prompts, conversation content and tokens. Recorded events hold event names,
+- **Never sent or logged:** prompts, conversation content and tokens. The only conversation content the app shows is
+  the pending tool call of a session that waits for you (a command, a file, a question), in that session's card.
+  Recorded events hold event names,
   the session id, the working folder, a short message from the agent and, on start and prompt events, a few hints
   about the hosting terminal (parent pid, Herdr pane, wmux pty, `WT_SESSION`, `TERM_PROGRAM`, `VSCODE_PID`,
   Claude Code's entry point), used only by the jump-to-terminal click, and on stop events the ids of the background
@@ -391,8 +451,9 @@ skipped: they are local sessions the hooks already report. The first read after 
 | `%USERPROFILE%\.aiusagemonitor\backups\` | backups of the configuration files before every change |
 
 The settings cover: enabled agents and refresh intervals, cloud sessions and routines, the notch's monitor, vertical offset, close delay and
-compact mode, which notifications to show and for which agents, automatic update checks, costs (show or hide,
-fallback rate) and autostart (the `AIUsageMonitor` value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+compact mode, which notifications to show, for which agents and with or without sound, automatic update checks, costs
+(show or hide, fallback rate) and autostart (the `AIUsageMonitor` value in
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 
 ## Build from source
 
@@ -401,7 +462,7 @@ You need the .NET 10 SDK.
 ```powershell
 dotnet build AIUsageMonitor.slnx
 dotnet test AIUsageMonitor.slnx
-node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs   # hook script and release tests
+node --test tests/hook/hook.test.cjs scripts/windows-release.test.mjs tools/sounds/generate-sounds.test.mjs   # hook script, release and sound tests
 dotnet run --project src/AIUsageMonitor.App
 
 pwsh scripts/publish.ps1                                     # -> publish/AIUsageMonitor.exe (needs the .NET 10 Desktop Runtime)
@@ -409,6 +470,7 @@ pwsh scripts/publish.ps1 -SelfContained -Output publish-sc   # self-contained ex
 pwsh scripts/publish.ps1 -Version 0.2.0                      # same build with the given version, as CI does
 
 dotnet run --project tools/MakeIcon                          # regenerates src/AIUsageMonitor.App/Assets/app.ico
+node tools/sounds/generate-sounds.js                         # regenerates the two notification sounds in src/AIUsageMonitor.App/Assets/Sounds
 dotnet run --project src/AIUsageMonitor.Probe -- --update-price-snapshot   # regenerates the built-in price list
 ```
 
@@ -418,7 +480,8 @@ For the framework-dependent build the script uses `--no-self-contained`: with th
 The app is single-instance (mutex `Local\AIUsageMonitor`): starting it again pins the running instance's notch
 open instead of opening a second one. A few switches help when checking the interface: `--settings` opens the
 settings window, `--tray-menu` opens the tray menu in the middle of the main screen, and `--test-notification`
-(with the app closed) sends a test notification.
+(with the app closed) shows sample cards with their sounds (Finito and a notice, Permesso · Bash a moment later,
+then Domanda and Errore ten seconds later) and quits once you have closed them all, or after a minute.
 
 ### Releases
 
@@ -451,6 +514,9 @@ The version lives in tags and releases: the workflow never commits or pushes to 
   exception: its `PostToolUse` puts the session back to "working" at once.
 - **Codex, waiting for input:** Codex exposes `PermissionRequest`, but the app does not register it, to stay out
   of the approval flow. Codex sessions therefore never show "waiting for input": they go from "working" to "done".
+- **Notification detail:** Claude Code does not say what a permission is for, so the app reads it from the
+  session's transcript: a pending tool call further back than the last 256 KB, or a transcript that cannot be
+  read, gives a plain "Permesso" card. Do not disturb is read from an undocumented Windows state.
 - Live status depends on the hooks: without them (and, for Codex, without approval through `/hooks`) the cards
   say "Stato live non attivo: installa hook".
 - Codex quotas only update when a Codex session writes a new `token_count`.
