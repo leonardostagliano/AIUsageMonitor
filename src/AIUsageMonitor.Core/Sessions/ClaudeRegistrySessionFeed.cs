@@ -138,7 +138,11 @@ public sealed class ClaudeRegistrySessionFeed
             Host: new HostInfo(record.Pid, null, null, null, null, Entrypoint: record.Entrypoint),
             Origin: HostInfo.OriginOf(record.Entrypoint) ?? SessionOrigin.Terminal);
 
-    /// <summary>The event that moves a session to <paramref name="status"/>; null when there is nothing to say (idle at adoption).</summary>
+    /// <summary>
+    /// The event that moves a session to <paramref name="status"/>; null when there is nothing to say (idle at adoption).
+    /// At adoption (<paramref name="previous"/> null) it is <see cref="HookEvent.Adopted"/>: a session found busy has
+    /// been at work since before this feed saw it, and the start of that turn is unknown.
+    /// </summary>
     private HookEvent? Transition(ClaudeSessionRecord record, string status, string? previous, DateTimeOffset now)
     {
         var transcript = _transcripts?.Find(record.Cwd, record.SessionId!);
@@ -152,7 +156,8 @@ public sealed class ClaudeRegistrySessionFeed
         };
 
         HookEvent Event(string name, string? notificationType = null, string? message = null) =>
-            new(now, AgentKind.Claude, name, record.SessionId!, record.Cwd, notificationType, message, "registry", TranscriptPath: transcript);
+            new(now, AgentKind.Claude, name, record.SessionId!, record.Cwd, notificationType, message, "registry", TranscriptPath: transcript,
+                Adopted: previous is null);
     }
 
     /// <summary>Whether the record changed status (or started) within <see cref="IdleWindow"/>.</summary>

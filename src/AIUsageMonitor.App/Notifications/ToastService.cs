@@ -69,6 +69,8 @@ public sealed class ToastService
     public static (string Title, string Text, WinForms.ToolTipIcon Icon)? Describe(SessionChange change, AppSettings settings)
     {
         if (change.Kind == SessionChangeKind.Removed) return null;
+        // Un cambiamento silenzioso (turno chiuso da idle_prompt perche' lo Stop si e' perso) non si annuncia.
+        if (change.Silent) return null;
         var session = change.Session;
         if (session.Agent == AgentKind.Claude && !settings.NotifyClaude) return null;
         if (session.Agent == AgentKind.Codex && !settings.NotifyCodex) return null;

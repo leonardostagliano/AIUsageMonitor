@@ -5,7 +5,11 @@ namespace AIUsageMonitor.Core.Hooks;
 
 public enum SessionChangeKind { Added, Updated, Removed }
 
-public sealed record SessionChange(SessionChangeKind Kind, SessionState Session, SessionPhase? PreviousPhase);
+/// <summary>
+/// One change of a session. <paramref name="Silent"/> marks a change the UI must not announce: a turn closed by
+/// <c>idle_prompt</c> because its Stop never arrived.
+/// </summary>
+public sealed record SessionChange(SessionChangeKind Kind, SessionState Session, SessionPhase? PreviousPhase, bool Silent = false);
 
 /// <summary>State machine per (agent, session id). Thread-safe; Changed fires outside the lock on the caller's thread.</summary>
 public sealed class SessionTracker
@@ -17,8 +21,7 @@ public sealed class SessionTracker
 
     private static readonly HashSet<string> NeedsInputNotifications = new(StringComparer.OrdinalIgnoreCase)
     {
-        "permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog",
-        "worker_permission_prompt"
+        "permission_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog", "worker_permission_prompt"
     };
 
     private readonly IClock _clock;
@@ -69,11 +72,8 @@ public sealed class SessionTracker
         if (e.Event is "SubagentStart" or "SubagentStop")
             return ApplySubagentEvent(e, key, existing);
 
-        // idle_prompt ("Claude is waiting for your input") fires once the main session has been quiet for a while,
-        // whether or not its background agents are still at work: while they work, so is the session.
-        var idlePrompt = e.Event == "Notification" && string.Equals(e.NotificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase);
-        if (idlePrompt && existing is { } busy && (busy.ActiveSubagents > 0 || busy.AwaitingSubagents && busy.PendingWorkflows > 0))
-            return null;
+        if (e.Event == "Notification" && string.Equals(e.NotificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase))
+            return ApplyIdlePrompt(e, key, existing);
 
         SessionPhase? phase = e.Event switch
         {
@@ -132,9 +132,16 @@ public sealed class SessionTracker
             }
         }
 
-        // SessionStart keeps the phase, and with it the reason of a wait; a notification (re)starts the wait.
-        var awaitsPrompt = phase == SessionPhase.NeedsInput && (e.Event == "SessionStart" ? existing?.AwaitsPrompt ?? false : idlePrompt);
+        // SessionStart keeps the phase, and with it the detail of a wait; a notification (re)starts the wait with its own.
+        var attention = phase != SessionPhase.NeedsInput ? null : e.Event == "Notification" ? e.Attention : existing?.Attention;
         DateTimeOffset? waitingSince = phase != SessionPhase.NeedsInput ? null : e.Event == "Notification" ? e.Ts : existing?.WaitingSince ?? e.Ts;
+        // A turn starts with a prompt submitted while the session was Idle, in Error or not yet known. Back at work after
+        // a permission it is the same turn; a session first seen mid-turn (any other event, or the prompt a source
+        // reports for a session it found already at work) has no known start and keeps none.
+        var turnStartedAt = e.Event == "UserPromptSubmit" && !e.Adopted
+                            && existing?.Phase is null or SessionPhase.Idle or SessionPhase.Error
+            ? e.Ts
+            : existing?.TurnStartedAt;
 
         var cwd = e.Cwd ?? existing?.Cwd ?? ResolveCwd(e.Agent, e.SessionId);
         // Every Claude hook payload carries the session transcript; an event without one (Codex, an older hook)
@@ -151,14 +158,15 @@ public sealed class SessionTracker
                 e.Agent, e.SessionId, NameFor(title, cwd, e.SessionId), cwd,
                 phase.Value, message, e.Ts, e.Ts, TranscriptPath: transcriptPath, Subagents: subagents, AwaitingSubagents: awaiting,
                 LastSubagentEventAt: lastSubagentEventAt, Host: host, Origin: origin, Title: title, PendingWorkflows: pendingWorkflows,
-                AwaitsPrompt: awaitsPrompt, WaitingSince: waitingSince)
+                WaitingSince: waitingSince, Attention: attention, TurnStartedAt: turnStartedAt)
             : existing with
             {
                 DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase.Value,
-                AwaitsPrompt = awaitsPrompt,
                 WaitingSince = waitingSince,
+                Attention = attention,
+                TurnStartedAt = turnStartedAt,
                 Message = message,
                 LastEventAt = e.Ts,
                 TranscriptPath = transcriptPath,
@@ -172,6 +180,29 @@ public sealed class SessionTracker
             };
         _sessions[key] = updated;
         return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
+    }
+
+    /// <summary>
+    /// <c>idle_prompt</c> ("Claude is waiting for your input") only says that the prompt has been waiting for a minute
+    /// after a turn: it is never a request. A session still Working with no agent or workflow in flight lost its Stop,
+    /// and goes Idle without being announced (<see cref="SessionChange.Silent"/>); in every other case (finished
+    /// already, a permission pending, agents at work, a session never seen) nothing changes.
+    /// </summary>
+    private SessionChange? ApplyIdlePrompt(HookEvent e, (AgentKind Agent, string SessionId) key, SessionState? existing)
+    {
+        if (existing is not { Phase: SessionPhase.Working } working) return null;
+        if (working.ActiveSubagents > 0 || working.AwaitingSubagents && working.PendingWorkflows > 0) return null;
+        var updated = working with
+        {
+            Phase = SessionPhase.Idle,
+            Message = working.Message ?? "Turno completato",
+            LastEventAt = e.Ts,
+            AwaitingSubagents = false,
+            WaitingSince = null,
+            Attention = null
+        };
+        _sessions[key] = updated;
+        return new SessionChange(SessionChangeKind.Updated, updated, working.Phase, Silent: true);
     }
 
     /// <summary>
@@ -192,15 +223,18 @@ public sealed class SessionTracker
         var pendingWorkflows = existing?.PendingWorkflows ?? 0;
         if (e.Event == "SubagentStop" && e.BackgroundTasks is { } inFlight) pendingWorkflows = inFlight.Count(t => t.IsWorkflow);
 
-        // A session merely waiting for its next prompt (idle_prompt) is back at work when an agent starts, like an Idle
-        // one; a permission or a question still pending is not cleared by an agent a workflow happens to start.
-        if (e.Event == "SubagentStart" && (phase == SessionPhase.Idle || phase == SessionPhase.NeedsInput && existing!.AwaitsPrompt))
+        // An agent that starts wakes an Idle session and starts a turn; a permission or a question still pending is not
+        // cleared by an agent a workflow happens to start.
+        var turnStartedAt = existing?.TurnStartedAt;
+        if (e.Event == "SubagentStart" && phase == SessionPhase.Idle)
         {
             // The session is Idle because the turn's Stop was already seen: an agent that starts afterwards
             // (a workflow step, a background task) re-arms the deferred Idle, so its SubagentStop takes the
             // session back to Idle instead of pinning it to "al lavoro" until the 12 h stale removal.
             phase = SessionPhase.Working;
             awaiting = true;
+            // A session first seen through one of its agents is already mid-turn: its start is unknown.
+            if (existing is not null) turnStartedAt = e.Ts;
         }
         // A background workflow still in flight is between two phases: its next agents are about to start, and the
         // session wakes up (and sends its own Stop) when the workflow ends. Going Idle here would toast "finito" at
@@ -229,14 +263,15 @@ public sealed class SessionTracker
                 e.Agent, e.SessionId, NameFor(title, cwd, e.SessionId), cwd,
                 phase, message, e.Ts, e.Ts,
                 Subagents: subagents, AwaitingSubagents: awaiting, LastSubagentEventAt: e.Ts, Host: host,
-                Origin: origin, Title: title, PendingWorkflows: pendingWorkflows)
+                Origin: origin, Title: title, PendingWorkflows: pendingWorkflows, TurnStartedAt: turnStartedAt)
             : existing with
             {
                 DisplayName = NameFor(title, cwd, e.SessionId),
                 Cwd = cwd,
                 Phase = phase,
-                AwaitsPrompt = phase == SessionPhase.NeedsInput && existing.AwaitsPrompt,
                 WaitingSince = phase == SessionPhase.NeedsInput ? existing.WaitingSince : null,
+                Attention = phase == SessionPhase.NeedsInput ? existing.Attention : null,
+                TurnStartedAt = turnStartedAt,
                 Message = message,
                 LastEventAt = e.Ts,
                 Subagents = subagents,
@@ -586,9 +621,8 @@ public sealed class SessionTracker
     }
 
     /// <summary>
-    /// Most urgent phase among the agent's sessions: Error > NeedsInput (a permission or a question) > Working >
-    /// NeedsInput (only waiting for the next prompt) > Idle; null when there are none. A session that finished its turn
-    /// and waits for the next prompt must not paint the icon amber while another one is at work.
+    /// Most urgent phase among the agent's sessions: Error > NeedsInput (a permission, a question, a plan) > Working >
+    /// Idle; null when there are none.
     /// </summary>
     public SessionPhase? AggregatePhase(AgentKind agent)
     {
@@ -601,13 +635,12 @@ public sealed class SessionTracker
         }
     }
 
-    /// <summary>Ranks a session for <see cref="AggregatePhase"/> and the notch summary.</summary>
+    /// <summary>Ranks a session for <see cref="AggregatePhase"/>.</summary>
     public static int Urgency(SessionState session) => session.Phase switch
     {
-        SessionPhase.Error => 4,
-        SessionPhase.NeedsInput when !session.AwaitsPrompt => 3,
-        SessionPhase.Working => 2,
-        SessionPhase.NeedsInput => 1,
+        SessionPhase.Error => 3,
+        SessionPhase.NeedsInput => 2,
+        SessionPhase.Working => 1,
         _ => 0
     };
 
