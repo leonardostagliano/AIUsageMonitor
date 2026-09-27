@@ -6,7 +6,7 @@ namespace AIUsageMonitor.Core.Hooks;
 /// <summary>
 /// The name a subagent was started with, as its agent wrote it down: the <c>description</c> of the
 /// <c>agent-&lt;id&gt;.meta.json</c> Claude Code writes next to the agent's transcript ("write:B (tasks 3,6)"), or the
-/// nickname and the agent path Codex gives a child thread ("Harvey · oasis_brand"). The hooks only carry the agent's
+/// nickname and the agent path Codex gives a child thread ("Harvey · login_audit"). The hooks only carry the agent's
 /// type ("workflow-subagent", "general-purpose", "default"), which says nothing about what the agent does.
 /// </summary>
 /// <remarks>A name is shown in the notch only: it is never logged.</remarks>
@@ -55,8 +55,8 @@ public static class SubagentNames
     }
 
     /// <summary>
-    /// "Harvey · oasis_brand": the nickname of a Codex child and the last segment of its agent path
-    /// ("/root/oasis_brand"); one of the two when the other is missing; null when neither is there.
+    /// "Harvey · login_audit": the nickname of a Codex child and the last segment of its agent path
+    /// ("/root/login_audit"); one of the two when the other is missing; null when neither is there.
     /// </summary>
     public static string? FromCodex(string? nickname, string? agentPath)
     {

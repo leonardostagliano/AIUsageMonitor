@@ -95,12 +95,12 @@ public class SubagentNamesTests
     }
 
     [Theory]
-    [InlineData("Harvey", "/root/oasis_brand", "Harvey · oasis_brand")]
-    [InlineData("Harvey", "/root/audit/oasis_brand/", "Harvey · oasis_brand")]
+    [InlineData("Harvey", "/root/login_audit", "Harvey · login_audit")]
+    [InlineData("Harvey", "/root/audit/login_audit/", "Harvey · login_audit")]
     [InlineData("Harvey", null, "Harvey")]
     [InlineData("Harvey", "/", "Harvey")]
-    [InlineData(null, "/root/oasis_brand", "oasis_brand")]
-    [InlineData("  ", "root\\oasis_brand", "oasis_brand")]
+    [InlineData(null, "/root/login_audit", "login_audit")]
+    [InlineData("  ", "root\\login_audit", "login_audit")]
     [InlineData(null, null, null)]
     [InlineData("", "", null)]
     public void A_codex_child_is_named_after_its_nickname_and_the_last_segment_of_its_path(string? nickname, string? path, string? expected)

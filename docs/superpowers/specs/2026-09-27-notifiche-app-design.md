@@ -54,7 +54,11 @@ Dati reali di questa macchina, 13–27 settembre 2026 (`~/.aiusagemonitor/events
 - `AwaitsPrompt` sparisce da `SessionState` insieme alla logica che lo leggeva (aggregato della tray e della
   linguetta, `SubagentStart` che risveglia una sessione in attesa del prompt). `NeedsInput` resta solo per permessi,
   domande, piani, richieste MCP e agenti che attendono input.
-- `SessionChange` guadagna `bool Silent` (default `false`).
+- `SessionChange` guadagna `bool Silent` (default `false`). Un cambiamento `Silent` non mostra mai una card ne' suona,
+  qualunque sia la sua fase: puo' solo ritirare la card di uno stato finito. Sono `Silent` anche i cambiamenti che non
+  cambiano stato (token, nomi degli agenti, agenti chiusi dallo sweep senza cambio di fase, agenti che partono o
+  finiscono mentre la sessione attende l'utente o e' in errore): un'attesa o un errore ripristinati dal replay non
+  tornano come card.
 
 ### 4.2 Dettaglio dell'attesa (`AttentionDetail`)
 
@@ -103,8 +107,10 @@ del cloud in `requires_action` usano `Input` con il messaggio di `pending_action
 
 `SessionState` guadagna `DateTimeOffset? TurnStartedAt`, l'inizio dell'ultimo turno: impostato all'ora dell'evento
 quando la sessione entra in `Working` da `Idle`, `Error` o da nuova (`UserPromptSubmit`, `SubagentStart` su una
-sessione `Idle`); **non** cambia quando torna `Working` da `NeedsInput` (stesso turno, dopo un permesso) ne' in
-`Idle`/`Error`, cosi' la card lo legge sullo stato del `SessionChange`. La durata e' `LastEventAt - TurnStartedAt`
+sessione `Idle`), e con un prompt scritto mentre la sessione aspetta solo gli agenti di un turno gia' chiuso (`Stop`
+gia' visto) o, riportato dagli hook, mentre attende un permesso (negato: e' un'interruzione, senza `Stop`); **non**
+cambia quando torna `Working` da `NeedsInput` per un permesso concesso (stesso turno: registro e cloud lo riportano
+come prompt) ne' in `Idle`/`Error`, cosi' la card lo legge sullo stato del `SessionChange`. La durata e' `LastEventAt - TurnStartedAt`
 nel formato `42s`, `4m 12s`, `1h 03m`; la card "Finito" mostra `Finito · 4m 12s`, oppure solo "Finito" senza
 `TurnStartedAt` (sessioni nate dal replay o dal registro gia' al lavoro).
 
@@ -119,7 +125,7 @@ nel formato `42s`, `4m 12s`, `1h 03m`; la card "Finito" mostra `Finito · 4m 12s
 | Piano | `NeedsInput`, Kind `Plan` | `Piano da approvare` | `WarningText` | Summary | no |
 | Domanda | `NeedsInput`, Kind `Question`/`Input` | `Domanda`, `Un agente attende input` | `Focus` | Summary o messaggio | no |
 | Errore | `Error` | `Errore` | `DangerText` | messaggio dell'errore o "Errore API" | no |
-| Avviso dell'app | `AppServices.Notice`, aggiornamenti | titolo dell'avviso | `TextMuted` (Info), `WarningText`, `DangerText` | testo dell'avviso | 6 s (Info), no (Warning/Error) |
+| Avviso dell'app | `AppServices.Notice`, aggiornamenti | titolo dell'avviso | `TextMuted` (Info), `WarningText`, `DangerText` | testo dell'avviso | 6 s (Info), no (Warning/Error e l'offerta di aggiornamento, fatta una volta sola) |
 
 Le impostazioni esistenti restano: `NotifyNeedsInput` (etichetta "Permessi e domande") copre Permesso, Piano e Domanda;
 `NotifyTurnCompleted` → Finito; `NotifyError` → Errore; `NotifyClaude`/`NotifyCodex` filtrano per agente. Gli avvisi
@@ -135,7 +141,8 @@ dell'app si mostrano sempre. Codex non ha hook `Notification`: per Codex arrivan
   in `TextPrimary` 13 SemiBold con ellissi; a destra l'eta' ("ora", "2 min", "1 h") in `TextMuted` 11 (AA su `Card`), aggiornata
   ogni 30 s; ✕ visibile solo al passaggio del mouse.
 - Riga 2: puntino da 7 DIP ed etichetta 11 SemiBold nel colore del tipo.
-- Riga 3: messaggio in `TextMuted` 12, una riga con ellissi; tooltip con il testo completo.
+- Riga 3: messaggio in `TextMuted` 12, una riga con ellissi (a capo e spazi ripetuti diventano uno spazio: una
+  TextBlock disegna gli a capo anche senza wrapping); tooltip con il testo completo.
 - Card con chiusura automatica: barra da 2 DIP sul bordo inferiore (gradiente del tono `ToneNormalBrush` per Finito,
   `TextDisabled` per gli avvisi) che si svuota; il passaggio del mouse sopra la pila ferma tutti i timer.
 - Tutti i colori vengono da `Theme.xaml`; i rapporti di contrasto dei nuovi abbinamenti testo/superficie entrano in
@@ -161,6 +168,10 @@ dell'app si mostrano sempre. Codex non ha hook `Notification`: per Codex arrivan
   qualsiasi card della sessione. Quando il nuovo stato e' a sua volta notificabile (es. un secondo permesso, o
   `Working` → `Idle` a fine turno) la card della sessione viene sostituita sul posto invece di ritirarla. "Finito"
   nasce solo da `Working` → `Idle`: `NeedsInput` → `Idle` (permesso negato, turno chiuso) ritira la card e basta.
+  Negare un permesso (o chiudere una domanda o un piano) e' un'interruzione: nessun hook lo riporta, nemmeno `Stop`.
+  Per una sessione degli hook lo dice il registro: il record torna `idle` dopo l'inizio dell'attesa e ci resta per
+  `AdoptAfter`; allora un evento `Quiet` chiude l'attesa (`Stop`, o il ritorno al lavoro se agenti o workflow sono
+  ancora in corso) e la card si ritira.
 - **Avvisi dell'app.** Ogni avviso e' una card a se'; un avviso identico (titolo e testo) gia' visibile viene solo
   rinnovato (eta' e timer ripartono).
 - **Pila.** Massimo 3 card visibili, la piu' recente in cima; le altre attendono e salgono quando si libera un posto;

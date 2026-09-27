@@ -49,7 +49,9 @@ Fuori ambito (minori o storici): un agente ripreso con SendMessage dopo il suo `
   il transcript (`SubagentState.TranscriptPath` o `ClaudeAgentTranscriptLocator`) e, se e' terminato, applica come evento
   live un `SubagentStop` sintetico (`Source = "transcript"`, stesso `AgentId`/`AgentType`), che segue le regole normali
   (ultimo agente di una sessione in attesa → `Idle`).
-- Mai durante il replay silenzioso dell'avvio; ogni agente viene chiuso una volta sola.
+- Mai durante il replay silenzioso dell'avvio; ogni agente viene chiuso una volta sola. Un agente ripristinato dal
+  replay il cui transcript (e `meta.json`) e' stato scritto l'ultima volta prima dell'avvio e' finito ad app chiusa: il
+  suo `SubagentStop` e' `Quiet`. Se finisce dopo l'avvio si chiude come un agente live.
 
 ## 3. Test
 
@@ -72,7 +74,7 @@ Confronto tra i rollout dei figli (`~/.codex/sessions/**/rollout-*-<thread id>.j
 
 | # | Problema | Evidenza |
 |---|---|---|
-| C1 | Il notch mostra `AgentType`: "default" dagli hook di Codex, "codex-thread" dal fallback. Il nome vero sta nel `session_meta` del rollout del figlio: `agent_nickname` ("Harvey") e `agent_path` ("/root/oasis_brand"). Per Claude, `AgentType` vale "workflow-subagent"/"general-purpose" mentre `<transcript>/../agent-<id>.meta.json` ha una `description` leggibile ("write:B (tasks 3,6)"). | Harvey, Popper, Anscombe, Pasteur, Aquinas, Boole, Hypatia |
+| C1 | Il notch mostra `AgentType`: "default" dagli hook di Codex, "codex-thread" dal fallback. Il nome vero sta nel `session_meta` del rollout del figlio: `agent_nickname` ("Harvey") e `agent_path` ("/root/login_audit"). Per Claude, `AgentType` vale "workflow-subagent"/"general-purpose" mentre `<transcript>/../agent-<id>.meta.json` ha una `description` leggibile ("write:B (tasks 3,6)"). | Harvey, Popper, Anscombe, Pasteur, Aquinas, Boole, Hypatia |
 | C2 | Un figlio di Codex e' un thread che riceve piu' turni: un solo `SubagentStart`, un `SubagentStop` per turno (e non sempre: il turno di Anscombe chiuso alle 11:21:17 non ne ha). Dopo il primo `SubagentStop` il tracker lo tiene finito anche mentre lavora ai turni successivi, e il fallback dei rollout e' spento per 6 h (`CodexHookGrace`) nelle sessioni i cui hook riportano subagenti. | Harvey: 8 turni 18:39–00:38, una sola Start |
 | C3 | I thread "guardian" di Codex (`thread_source: "guardian_review"`, `source.subagent.other: "guardian"`) hanno `parent_thread_id` del padre e turni da 3–4 s a raffica: il fallback li conterebbe come subagenti. Solo i figli con `source.subagent.thread_spawn` sono subagenti. | 9 thread guardian in una sessione |
 
@@ -82,7 +84,7 @@ Confronto tra i rollout dei figli (`~/.codex/sessions/**/rollout-*-<thread id>.j
 
 - **Nome (task 12).** `SubagentState` guadagna `string? Name`. Il pump lo risolve nel giro periodico dei token, una volta
   per agente (poi resta): Claude → `description` di `agent-<id>.meta.json` accanto al transcript dell'agente; Codex →
-  `agent_nickname` e l'ultimo segmento di `agent_path` ("Harvey · oasis_brand", solo uno dei due se l'altro manca). La riga
+  `agent_nickname` e l'ultimo segmento di `agent_path` ("Harvey · login_audit", solo uno dei due se l'altro manca). La riga
   dell'agente nel notch mostra `Name`, poi `AgentType`, poi l'id corto; il tooltip mostra anche il tipo. Nomi tagliati
   a 60 caratteri; nessun nome nei log.
 - **Stato dei figli di Codex (task 13).** Per ogni figlio noto di una sessione Codex, anche quando gli hook riportano
