@@ -6,6 +6,7 @@ using AIUsageMonitor.App.Updates;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
 using AIUsageMonitor.Core.Pricing;
 using AIUsageMonitor.Core.Sessions;
 using AIUsageMonitor.Core.Settings;
@@ -148,7 +149,11 @@ public sealed class AppServices : IDisposable
             CodexSubagents = new CodexSubagentScanner(paths.CodexSessionsDir, Clock),
             CodexSubagentsEnabled = () => Settings.Current.CodexSubagentFallback,
             // Totali dei token di sessione e subagenti: tutta la sua IO gira sul thread della pump.
-            TokenSource = tokens
+            TokenSource = tokens,
+            // Cosa aspetta una sessione (il tool_use in sospeso nel transcript suo o di un suo agente) per le notifiche
+            // live di permesso e domanda; mai durante il replay silenzioso. Un transcript illeggibile finisce nel log
+            // solo come tipo di errore: mai il percorso, il comando o la domanda.
+            Attention = new AttentionResolver { LogError = Log.Warn }
         };
 
         // Legge le sessioni cloud alla cadenza della quota di Claude, su un suo ciclo in background; gli eventi passano

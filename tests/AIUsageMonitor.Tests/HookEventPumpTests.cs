@@ -1,6 +1,9 @@
+using System.Globalization;
+using System.Text.Json;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
 using AIUsageMonitor.Tests.Helpers;
 
 namespace AIUsageMonitor.Tests;
@@ -1031,6 +1034,117 @@ public class HookEventPumpTests
         pump.Pump();
 
         Assert.Equal(["needsinput", "working"], source.Reads.OrderBy(id => id, StringComparer.Ordinal));
+    }
+
+    /// <summary>An events.jsonl Notification line that carries the session transcript, as hook.cjs writes it.</summary>
+    private static string NotificationLine(string sid, DateTimeOffset ts, string notificationType, string transcriptPath) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["ts"] = ts.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
+            ["agent"] = "claude",
+            ["event"] = "Notification",
+            ["session_id"] = sid,
+            ["cwd"] = @"C:\demo\proj",
+            ["notification_type"] = notificationType,
+            ["message"] = "Claude needs your permission",
+            ["source"] = null,
+            ["transcript_path"] = transcriptPath
+        }) + "\n";
+
+    /// <summary>A transcript whose last tool_use (a Bash command) is still waiting for its result.</summary>
+    private static string PendingBashTranscript(TempDir dir) =>
+        dir.File("projects/proj/s1.jsonl", TranscriptLines.Jsonl(
+            TranscriptLines.Prompt("lancia i test", 0),
+            TranscriptLines.ToolUse("m1", "t1", "Bash", new { command = "dotnet test" }, 2)));
+
+    [Fact]
+    public void Live_attention_notifications_carry_the_pending_request_and_replayed_ones_do_not()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcript = PendingBashTranscript(dir);
+        Directory.CreateDirectory(paths.MonitorDir);
+        // Replayed at start: the same transcript would resolve, but history is never read back.
+        File.WriteAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "old", now.AddMinutes(-5)) +
+            NotificationLine("old", now.AddMinutes(-4), "permission_prompt", transcript));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            Attention = new AttentionResolver()
+        };
+
+        pump.Start();
+
+        var replayed = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.NeedsInput, replayed.Phase);
+        Assert.Null(replayed.Attention);
+        Assert.Equal("attende input", replayed.PhaseLabel);
+
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "s1", now) +
+            NotificationLine("s1", now.AddSeconds(7), "permission_prompt", transcript));
+        pump.Pump();
+
+        var expected = new AttentionDetail(AttentionKind.Permission, "Bash", "dotnet test");
+        var live = tracker.Sessions.Single(s => s.SessionId == "s1");
+        Assert.Equal(expected, live.Attention);
+        Assert.Equal("permesso", live.PhaseLabel);
+        // The change the UI receives carries the detail too.
+        Assert.Equal(expected, changes.Last(c => c.Session.SessionId == "s1").Session.Attention);
+        // The replayed wait is never resolved afterwards.
+        Assert.Null(tracker.Sessions.Single(s => s.SessionId == "old").Attention);
+    }
+
+    [Fact]
+    public void Without_a_resolver_live_notifications_carry_no_detail()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcript = PendingBashTranscript(dir);
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock);
+        pump.Start();
+
+        File.AppendAllText(paths.EventsFile, NotificationLine("s1", now, "permission_prompt", transcript));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal(SessionPhase.NeedsInput, session.Phase);
+        Assert.Null(session.Attention);
+    }
+
+    [Fact]
+    public void Injected_cloud_waits_are_resolved_only_when_they_are_live()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            Attention = new AttentionResolver()
+        };
+        pump.Start();
+        HookEvent Wait(string id) =>
+            new(now, AgentKind.Claude, "Notification", id, null, "permission_prompt", "Permesso richiesto: Bash", "cloud",
+                Origin: SessionOrigin.Cloud, Title: "Deploy");
+
+        // The first read of the cloud sessions is silent: what was already waiting is not announced, nor resolved.
+        pump.Inject([Wait("cse_first")], silent: true);
+        pump.Inject([Wait("cse_live")]);
+        pump.Pump();
+
+        Assert.Null(tracker.Sessions.Single(s => s.SessionId == "cse_first").Attention);
+        Assert.Equal(new AttentionDetail(AttentionKind.Input, null, "Permesso richiesto: Bash"),
+            tracker.Sessions.Single(s => s.SessionId == "cse_live").Attention);
     }
 
     [Fact]
