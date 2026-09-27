@@ -233,7 +233,7 @@ cards are visible, the newest on top; the others wait behind a "+N altre" pill (
 | **Piano da approvare** | Claude Code proposes a plan | when the session stops waiting |
 | **Domanda** | Claude Code asks you a question, or an agent waits for input | when the session stops waiting |
 | **Errore** | the turn failed (for example `API Error: 529 overloaded`) | when the session works again |
-| app notices | an update is available, hooks were installed, a terminal was not found... | after 6 seconds for information, otherwise when you close them |
+| app notices | an update is available, hooks were installed, a terminal was not found... | after 6 seconds for information, otherwise (the update offer included) when you close them |
 
 A session has one card at most: a new state replaces it in place. Click a session card to jump to its terminal (or
 to the desktop app, or to the cloud session), like clicking the session name in the notch; click the update card

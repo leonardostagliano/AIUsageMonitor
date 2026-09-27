@@ -435,6 +435,21 @@ public class NotificationBoardTests
     }
 
     [Fact]
+    public void An_update_offer_that_arrives_while_quiet_is_still_there_when_the_quiet_ends()
+    {
+        var update = NotificationComposer.Notice("AIUsageMonitor · aggiornamento", "È disponibile la versione 1.5.0.",
+            NoticeSeverity.Info, NotificationAction.OpenUpdate);
+        _board.SetQuiet(true);
+        Show(update);
+
+        Assert.Equal(Redrawn, _board.SetQuiet(false));
+        Assert.Equal(["AIUsageMonitor · aggiornamento"], Stack());
+        _clock.Advance(TimeSpan.FromMinutes(10));
+        Assert.Equal(Unchanged, _board.Tick());
+        Assert.Equal(["AIUsageMonitor · aggiornamento"], Stack());
+    }
+
+    [Fact]
     public void Only_a_card_that_asks_for_attention_owes_its_sound_to_the_end_of_quiet()
     {
         // A card that stays and has the soft sound: it survives the end of quiet, yet only Attention is ever owed.

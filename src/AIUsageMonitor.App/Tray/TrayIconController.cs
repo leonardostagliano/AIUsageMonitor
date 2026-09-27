@@ -179,8 +179,9 @@ public sealed class TrayIconController : IDisposable
 
     /// <summary>
     /// Card dell'app la prima volta che la conferma offre una versione, in questo processo; il clic
-    /// (<see cref="NotificationAction.OpenUpdate"/>) apre la conferma. Dopo "Più tardi" la versione non viene piu'
-    /// offerta fino al riavvio, quindi non torna nemmeno la card.
+    /// (<see cref="NotificationAction.OpenUpdate"/>) apre la conferma. La card resta finche' non la si apre o la si
+    /// chiude (anche dopo "Non disturbare"): e' l'unica volta che viene offerta. Dopo "Più tardi" la versione non viene
+    /// piu' offerta fino al riavvio, quindi non torna nemmeno la card.
     /// </summary>
     private void AnnounceUpdate(UpdatePromptState state)
     {

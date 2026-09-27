@@ -385,6 +385,22 @@ public class NotificationComposerTests
         Assert.Equal(NotificationAction.OpenUpdate, card.Action);
     }
 
+    /// <summary>
+    /// The update offer is shown once per process: a card that closed by itself after a few seconds, or was dropped by
+    /// the end of a quiet time, would lose it for good. It stays until the user answers it, silent and neutral as any
+    /// Info notice.
+    /// </summary>
+    [Fact]
+    public void An_update_offer_stays_until_the_user_answers_it()
+    {
+        var card = NotificationComposer.Notice("AIUsageMonitor · aggiornamento", "È disponibile la versione 1.5.0.",
+            NoticeSeverity.Info, NotificationAction.OpenUpdate);
+
+        Assert.Null(card.AutoClose);
+        Assert.Equal(NotificationTone.Neutral, card.Tone);
+        Assert.Equal(NotificationSoundKind.None, card.Sound);
+    }
+
     [Theory]
     [InlineData(0.0, "0s")]
     [InlineData(42.0, "42s")]

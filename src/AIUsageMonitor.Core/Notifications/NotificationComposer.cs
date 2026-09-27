@@ -53,7 +53,9 @@ public static class NotificationComposer
 
     /// <summary>
     /// The card of an app notice: one per distinct title and text, labelled with the title under the app's name; an
-    /// Info notice closes after <see cref="InfoAutoClose"/>, a warning or an error stays. Notices are always silent.
+    /// Info notice closes after <see cref="InfoAutoClose"/>, a warning or an error stays. The update offer
+    /// (<see cref="NotificationAction.OpenUpdate"/>) stays too: it is made once per process, and a card that closed by
+    /// itself, or was dropped at the end of a quiet time, would lose it for good. Notices are always silent.
     /// </summary>
     public static NotificationCard Notice(string title, string text, NoticeSeverity severity, NotificationAction action)
     {
@@ -64,7 +66,7 @@ public static class NotificationComposer
             NoticeSeverity.Error => NotificationTone.Danger,
             _ => NotificationTone.Neutral
         };
-        TimeSpan? autoClose = severity == NoticeSeverity.Info ? InfoAutoClose : null;
+        TimeSpan? autoClose = severity == NoticeSeverity.Info && action != NotificationAction.OpenUpdate ? InfoAutoClose : null;
         return new NotificationCard(key, NotificationKind.Notice, tone, null, AppName, title, text, key, autoClose,
             NotificationSoundKind.None, action);
     }
