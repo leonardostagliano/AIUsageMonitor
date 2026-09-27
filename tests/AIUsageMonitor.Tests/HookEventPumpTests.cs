@@ -4,6 +4,7 @@ using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
 using AIUsageMonitor.Core.Notifications;
+using AIUsageMonitor.Core.Settings;
 using AIUsageMonitor.Tests.Helpers;
 
 namespace AIUsageMonitor.Tests;
@@ -1844,6 +1845,104 @@ public class HookEventPumpTests
                 Assert.Equal(SessionPhase.Idle, c.Session.Phase);
                 Assert.Equal(SessionPhase.Working, c.PreviousPhase);
             });
+    }
+
+    /// <summary>The line Claude Code writes when the API refuses to go on (the session limit).</summary>
+    private const string ApiErrorLine =
+        """{"type":"assistant","timestamp":"2026-09-27T11:57:00.000Z","message":{"id":"m9","role":"assistant","content":[{"type":"text","text":"You've hit your session limit"}]},"isApiErrorMessage":true}""";
+
+    /// <summary>
+    /// Subagent spec §1, session limit: the turn failed and its agent stopped while the app was closed. The replay
+    /// restores the session in error with the agent running; the first periodic pass finds the agent over in its
+    /// transcript and closes it quietly, and that change must not bring back the old error as a card with a sound.
+    /// </summary>
+    [Fact]
+    public void An_agent_the_replay_restored_in_a_session_in_error_is_closed_without_a_card()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        transcripts.Agent("a1", [.. AgentTranscripts.AtWork("t1"), ApiErrorLine]);
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            ClaudeAgentLine("UserPromptSubmit", now.AddMinutes(-5), transcriptPath: transcripts.Session) +
+            ClaudeAgentLine("SubagentStart", now.AddMinutes(-4), "a1") +
+            ClaudeAgentLine("StopFailure", now.AddMinutes(-3)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+        pump.Start();
+        var restored = tracker.Sessions.Single();
+        Assert.Equal((SessionPhase.Error, 1), (restored.Phase, restored.ActiveSubagents));
+
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal((SessionPhase.Error, 0), (s.Phase, s.ActiveSubagents));
+        var change = Assert.Single(changes);
+        Assert.True(change.Silent);
+        Assert.Null(NotificationComposer.Compose(change, new AppSettings()));
+    }
+
+    /// <summary>
+    /// A wait and an error restored by the replay began while the app was closed. What later moves their rows without
+    /// changing their state (an agent's name, fresh token totals, a refresh on demand) must not announce them.
+    /// </summary>
+    [Fact]
+    public async Task Names_and_totals_of_sessions_the_replay_restored_waiting_or_in_error_show_no_card()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        var agent = transcripts.Agent("a1", AgentTranscripts.AtWork("t1"));
+        File.WriteAllText(Path.ChangeExtension(agent, ".meta.json"), """{"agentType":"general-purpose","description":"review:C"}""");
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            ClaudeAgentLine("UserPromptSubmit", now.AddMinutes(-5), transcriptPath: transcripts.Session) +
+            ClaudeAgentLine("SubagentStart", now.AddMinutes(-4), "a1") +
+            NotificationLine("s1", now.AddMinutes(-3), "permission_prompt", transcripts.Session) +
+            Line("UserPromptSubmit", "e1", now.AddMinutes(-5)) +
+            Line("StopFailure", "e1", now.AddMinutes(-4)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        var source = new FakeTokenSource();
+        source.Session["s1"] = new TokenUsage(1, 0, 0, 0);
+        source.Session["e1"] = new TokenUsage(2, 0, 0, 0);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1),
+            TokenSource = source
+        };
+        pump.Start();
+        pump.Pump();                                               // the one-shot fill of the replayed rows, silent
+        Assert.Empty(changes);
+
+        // The agent keeps writing while the permission waits, and the user asks for fresh totals.
+        source.Session["s1"] = new TokenUsage(3, 0, 0, 0);
+        source.Session["e1"] = new TokenUsage(4, 0, 0, 0);
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+        await pump.RefreshTokensNowAsync(AgentKind.Claude);
+
+        var waiting = tracker.Sessions.Single(s => s.SessionId == "s1");
+        Assert.Equal(SessionPhase.NeedsInput, waiting.Phase);
+        Assert.Equal("review:C", waiting.Subagents!.Single().Name);
+        Assert.Equal(new TokenUsage(3, 0, 0, 0), waiting.Tokens);
+        var failed = tracker.Sessions.Single(s => s.SessionId == "e1");
+        Assert.Equal((SessionPhase.Error, new TokenUsage(4, 0, 0, 0)), (failed.Phase, failed.Tokens));
+        Assert.Equal(2, changes.Count(c => c.Session.SessionId == "s1"));   // the totals, then the name
+        Assert.Single(changes, c => c.Session.SessionId == "e1");
+        Assert.All(changes, c => Assert.Null(NotificationComposer.Compose(c, new AppSettings())));
     }
 
     [Fact]

@@ -832,6 +832,30 @@ public class SessionTrackerTests
         Assert.Equal(T0, s.TurnStartedAt);
     }
 
+    /// <summary>
+    /// A token refresh and an agent's name are no change of state: their change is Silent, so a wait or an error the
+    /// session was already in (restored by the replay, maybe) is not announced again by them.
+    /// </summary>
+    [Fact]
+    public void Token_totals_and_agent_names_are_silent_changes_that_keep_the_phase()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("Notification", notificationType: "permission_prompt", plusSeconds: 2));
+
+        var tokens = tracker.UpdateTokens(AgentKind.Claude, "s1", new TokenUsage(10, 20, 30, 40), null)!;
+        var names = tracker.UpdateSubagentNames(AgentKind.Claude, "s1", new Dictionary<string, string> { ["a1"] = "review:C" })!;
+
+        Assert.All([tokens, names], change =>
+        {
+            Assert.True(change.Silent);
+            Assert.Equal(SessionChangeKind.Updated, change.Kind);
+            Assert.Equal(SessionPhase.NeedsInput, change.Session.Phase);
+            Assert.Equal(SessionPhase.NeedsInput, change.PreviousPhase);
+        });
+    }
+
     [Fact]
     public void UpdateTokensSilently_stores_the_totals_without_raising_changed()
     {

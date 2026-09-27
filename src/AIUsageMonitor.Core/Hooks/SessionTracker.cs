@@ -6,8 +6,10 @@ namespace AIUsageMonitor.Core.Hooks;
 public enum SessionChangeKind { Added, Updated, Removed }
 
 /// <summary>
-/// One change of a session. <paramref name="Silent"/> marks a change the UI must not announce: a turn closed by
-/// <c>idle_prompt</c> because its Stop never arrived.
+/// One change of a session. <paramref name="Silent"/> marks a change the UI must not announce (no card, no sound): a
+/// turn closed by <c>idle_prompt</c> because its Stop never arrived, what a <see cref="HookEvent.Quiet"/> event reports,
+/// and the changes that are no change of state (token totals, agent names, agents released by the sweep while the
+/// phase stays).
 /// </summary>
 public sealed record SessionChange(SessionChangeKind Kind, SessionState Session, SessionPhase? PreviousPhase, bool Silent = false);
 
@@ -477,9 +479,11 @@ public sealed class SessionTracker
     /// <summary>
     /// Stores the token totals read from the transcripts (or the Codex rollouts) for a session and, by agent id, for
     /// its subagents. A null total means "unknown right now" and keeps the value already stored: a transcript that
-    /// could not be read must never blank a row. Changed fires once, as <see cref="SessionChangeKind.Updated"/> with
-    /// the current phase as the previous one, only when at least one total really moved — the counters run every few
-    /// seconds and an unconditional event would repaint the notch (and re-evaluate the toasts) for nothing.
+    /// could not be read must never blank a row. Changed fires once, as a <see cref="SessionChange.Silent"/>
+    /// <see cref="SessionChangeKind.Updated"/> with the current phase as the previous one, only when at least one total
+    /// really moved — the counters run every few seconds and an unconditional event would repaint the notch for
+    /// nothing. Silent, because new totals are no change of state: a wait or an error the session was already in (one
+    /// the startup replay restored, say) must not be announced by them.
     /// The ledgers follow the same rules: null keeps the stored one, an equal one is not a change.
     /// Returns null when nothing changed or the session is unknown.
     /// </summary>
@@ -584,16 +588,17 @@ public sealed class SessionTracker
         // would keep a dead session out of the 12 h stale sweep forever.
         var updated = session with { Tokens = tokens, Subagents = subagents, Ledger = ledger };
         _sessions[key] = updated;
-        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase);
+        // Silent: the rows move, the state does not, and a wait or an error the session was already in is no news.
+        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase, Silent: true);
     }
 
     /// <summary>
     /// Gives the subagents of a session, by agent id, the name the pump read for them. A name is set once: an agent
     /// that already has one keeps it, and every later event keeps it too (the subagent records are only ever copied
-    /// with <c>with</c>). Blank names and ids the session does not know are ignored. Changed fires once, as
-    /// <see cref="SessionChangeKind.Updated"/> with the current phase as the previous one, only when a name was set;
-    /// null when nothing changed or the session is unknown. Like a token refresh, it is not session activity:
-    /// LastEventAt stays.
+    /// with <c>with</c>). Blank names and ids the session does not know are ignored. Changed fires once, as a
+    /// <see cref="SessionChange.Silent"/> <see cref="SessionChangeKind.Updated"/> with the current phase as the previous
+    /// one, only when a name was set; null when nothing changed or the session is unknown. Like a token refresh, it is
+    /// neither a change of state nor session activity: LastEventAt stays.
     /// </summary>
     public SessionChange? UpdateSubagentNames(AgentKind agent, string sessionId, IReadOnlyDictionary<string, string> names)
     {
@@ -617,7 +622,7 @@ public sealed class SessionTracker
         if (updatedList is null) return null;
         var updated = session with { Subagents = updatedList };
         _sessions[key] = updated;
-        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase);
+        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase, Silent: true);
     }
 
     /// <summary>
@@ -632,7 +637,9 @@ public sealed class SessionTracker
     /// running even if it sent no event for a long while. Null, or a null answer, means "no evidence": that agent is
     /// released only when its whole session heard from no subagent for the timeout. The children synthesised from Codex
     /// rollouts keep that session rule, which the pump's re-announcements feed. Nothing is released while the session
-    /// is in NeedsInput: the agent may be the very one waiting for the answer.
+    /// is in NeedsInput: the agent may be the very one waiting for the answer. Only the release of a turn (Working to
+    /// Idle) is announced; a change that keeps the phase (agents released from a session still at work or in error) is
+    /// <see cref="SessionChange.Silent"/>.
     /// </remarks>
     public IReadOnlyList<SessionChange> SweepSubagentTimeouts(TimeSpan timeout,
         Func<SessionState, SubagentState, DateTimeOffset?>? lastActivity = null)
@@ -688,7 +695,8 @@ public sealed class SessionTracker
                 PendingWorkflows = pendingWorkflows
             };
             _sessions[key] = updated;
-            changes.Add(new SessionChange(SessionChangeKind.Updated, updated, session.Phase));
+            // Only the end of the turn is news; agents released from a session that stays at work or in error are not.
+            changes.Add(new SessionChange(SessionChangeKind.Updated, updated, session.Phase, Silent: !release));
         }
         return changes;
 

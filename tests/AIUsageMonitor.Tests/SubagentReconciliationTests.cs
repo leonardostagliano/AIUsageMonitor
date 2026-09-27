@@ -225,6 +225,42 @@ public class SubagentReconciliationTests
         Assert.False(change.Session.AwaitingSubagents);
     }
 
+    /// <summary>
+    /// Only the end of a turn the sweep releases is news. An agent released from a session that stays in error, or at
+    /// work, changes the rows but no state the user is told about: silent, so an error the session was already in (maybe
+    /// restored by the replay) is not announced again.
+    /// </summary>
+    [Fact]
+    public void A_sweep_that_keeps_the_phase_is_silent_and_the_turn_it_ends_is_not()
+    {
+        var clock = new FakeClock(T0);
+        var tracker = new SessionTracker(clock);
+        HookEvent In(string sessionId, HookEvent e) => e with { SessionId = sessionId };
+        // An error that arrived while its agent ran.
+        tracker.Apply(In("error", Ev("UserPromptSubmit")));
+        tracker.Apply(In("error", Ev("SubagentStart", 1, "a1")));
+        tracker.Apply(In("error", Ev("StopFailure", 2, message: "API overloaded")));
+        // A main agent still at work next to its agent.
+        tracker.Apply(In("busy", Ev("UserPromptSubmit")));
+        tracker.Apply(In("busy", Ev("SubagentStart", 1, "a2")));
+        // A turn whose Stop waits for its agent.
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", 1, "a3"));
+        tracker.Apply(Ev("Stop", 2));
+        clock.Advance(TimeSpan.FromMinutes(31));
+
+        var changes = tracker.SweepSubagentTimeouts(TimeSpan.FromMinutes(30));
+
+        Assert.Equal(3, changes.Count);
+        Assert.All(changes, c => Assert.Equal(0, c.Session.ActiveSubagents));
+        var error = changes.Single(c => c.Session.SessionId == "error");
+        Assert.Equal((SessionPhase.Error, SessionPhase.Error, true), (error.Session.Phase, error.PreviousPhase!.Value, error.Silent));
+        var busy = changes.Single(c => c.Session.SessionId == "busy");
+        Assert.Equal((SessionPhase.Working, SessionPhase.Working, true), (busy.Session.Phase, busy.PreviousPhase!.Value, busy.Silent));
+        var released = changes.Single(c => c.Session.SessionId == "s1");
+        Assert.Equal((SessionPhase.Idle, SessionPhase.Working, false), (released.Session.Phase, released.PreviousPhase!.Value, released.Silent));
+    }
+
     private const string WorkflowAgent = "workflow-subagent";
 
     [Fact]

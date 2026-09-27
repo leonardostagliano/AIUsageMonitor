@@ -22,9 +22,11 @@ public static class NotificationComposer
 
     /// <summary>
     /// A wait (permission, plan, question, input) or an error shows its card, and so does a turn that ran from Working to
-    /// Idle unless the change is <see cref="SessionChange.Silent"/>; back at work, a wait or an error that ends, a session
-    /// that ends, an agent or an event the settings mute retire the card. Any other change (a token update, an Idle
-    /// session seen again) leaves the board alone: null.
+    /// Idle; back at work, a wait or an error that ends, a session that ends, an agent or an event the settings mute
+    /// retire the card. Any other change (an Idle session seen again) leaves the board alone: null. A
+    /// <see cref="SessionChange.Silent"/> change never shows a card nor plays a sound, whatever its phase: it tells what
+    /// happened while the app was not looking, or is no change of state at all (a token refresh, an agent's name), and a
+    /// wait or an error it carries began before. It still retires the card of a state that is over.
     /// </summary>
     public static NotificationIntent? Compose(SessionChange change, AppSettings settings)
     {
@@ -34,11 +36,11 @@ public static class NotificationComposer
         var retire = new RetireIntent(SessionKey(session.Agent, session.SessionId));
         if (change.Kind == SessionChangeKind.Removed || !Notifies(session.Agent, settings)) return retire;
 
-        return session.Phase switch
+        NotificationIntent? intent = session.Phase switch
         {
             SessionPhase.NeedsInput => settings.NotifyNeedsInput ? new ShowIntent(Waiting(session, settings)) : retire,
             SessionPhase.Error => settings.NotifyError ? new ShowIntent(Failed(session, settings)) : retire,
-            SessionPhase.Idle when change.PreviousPhase == SessionPhase.Working && !change.Silent =>
+            SessionPhase.Idle when change.PreviousPhase == SessionPhase.Working =>
                 settings.NotifyTurnCompleted ? new ShowIntent(Finished(session, settings)) : retire,
             // A permission denied or an error, then the end of the turn: the card is over, and "Finito" is only for a turn
             // that ran to its end.
@@ -46,6 +48,7 @@ public static class NotificationComposer
             SessionPhase.Working => retire,
             _ => null
         };
+        return change.Silent && intent is ShowIntent ? null : intent;
     }
 
     /// <summary>

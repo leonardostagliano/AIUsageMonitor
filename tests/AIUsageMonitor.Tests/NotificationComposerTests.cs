@@ -199,6 +199,36 @@ public class NotificationComposerTests
         Assert.Null(Compose(EndOfTurn(turnStartedAt: T0, silent: true)));
     }
 
+    /// <summary>
+    /// A Silent change reports what happened while the app was not looking (an agent restored by the replay found over
+    /// in its transcript) or is no change of state at all (a token refresh, an agent's name): a wait or an error it
+    /// carries began before, and announcing it now would bring back history, with the attention sound.
+    /// </summary>
+    [Theory]
+    [InlineData(SessionPhase.NeedsInput, SessionPhase.NeedsInput)]
+    [InlineData(SessionPhase.NeedsInput, SessionPhase.Working)]
+    [InlineData(SessionPhase.Error, SessionPhase.Error)]
+    [InlineData(SessionPhase.Error, SessionPhase.Working)]
+    public void A_silent_change_never_shows_a_wait_or_an_error(SessionPhase phase, SessionPhase previous)
+    {
+        var session = Session(phase, "You've hit your session limit",
+            phase == SessionPhase.NeedsInput ? new AttentionDetail(AttentionKind.Permission, "Bash", "npm test") : null);
+
+        Assert.Null(Compose(Change(session, previous, silent: true)));
+    }
+
+    [Theory]
+    [InlineData(SessionPhase.NeedsInput)]
+    [InlineData(SessionPhase.Error)]
+    public void A_silent_change_still_retires_a_card_whose_state_is_over(SessionPhase previous)
+    {
+        Assert.Equal(RetireS1, Compose(Change(Session(SessionPhase.Idle, "Turno completato"), previous, silent: true)));
+        Assert.Equal(RetireS1, Compose(Change(Session(SessionPhase.Working), previous, silent: true)));
+        // A wait whose event the settings mute is retired whether the change is silent or not.
+        Assert.Equal(RetireS1, Compose(Change(Session(SessionPhase.NeedsInput), SessionPhase.NeedsInput, silent: true),
+            new AppSettings { NotifyNeedsInput = false }));
+    }
+
     [Theory]
     [InlineData(SessionPhase.NeedsInput)]
     [InlineData(SessionPhase.Error)]
