@@ -1012,6 +1012,127 @@ public class HookEventPumpTests
         Assert.Equal(SubagentPhase.Running, live.Subagents!.Single(s => s.AgentId == CodexChild).Phase);
         Assert.Equal(SubagentPhase.Done, live.Subagents!.Single(s => s.AgentId == second).Phase);
         Assert.Equal(now.AddMinutes(-4), live.Subagents!.Single(s => s.AgentId == second).EndedAt);
+        // The second child's turn ended before the app was looking: its close changes the row without being announced.
+        Assert.True(Assert.Single(changes, c => c.Session.Subagents!.Single(s => s.AgentId == second).Phase == SubagentPhase.Done).Silent);
+        // That close is stamped with the end of the turn, before the restart of the first child applied just ahead of
+        // it: the clocks of the session do not go back.
+        Assert.Equal(now, live.LastSubagentEventAt);
+        Assert.Equal(now, live.LastEventAt);
+    }
+
+    /// <summary>
+    /// A child the replay left running, whose turn ended while the app was not running: the first live scan closes it,
+    /// and with it the session's turn, without announcing a turn that was over before the app was looking. The turns
+    /// that follow happen in front of the app and are announced as usual.
+    /// </summary>
+    [Fact]
+    public void Pump_closes_silently_a_replayed_codex_child_whose_turn_ended_before_the_start()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 11, 0, 0, TimeSpan.Zero);
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = CodexPump(dir, clock, tracker, out var paths);
+
+        File.WriteAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now.AddMinutes(-10), agent: "codex") +
+            SubagentLine("SubagentStart", "c1", CodexChild, now.AddMinutes(-10), agent: "codex", agentType: "default") +
+            Line("Stop", "c1", now.AddMinutes(-5), agent: "codex"));
+        CodexThreadTurns(paths, CodexChild, "c1", guardian: false, ("task_started", now.AddMinutes(-10)), ("task_complete", now.AddMinutes(-4)));
+        pump.Start();
+        Assert.Equal(SessionPhase.Working, Assert.Single(tracker.Sessions).Phase);
+
+        pump.Pump();
+
+        var closed = Assert.Single(changes);
+        Assert.Equal(SessionPhase.Idle, closed.Session.Phase);
+        Assert.Equal(now.AddMinutes(-4), Assert.Single(closed.Session.Subagents!).EndedAt);
+        Assert.True(closed.Silent);
+
+        // The next turn starts and ends while the app runs: its end is announced.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var nextStart = clock.UtcNow.AddSeconds(-5);
+        CodexThreadTurns(paths, CodexChild, "c1", guardian: false,
+            ("task_started", now.AddMinutes(-10)), ("task_complete", now.AddMinutes(-4)), ("task_started", nextStart));
+        pump.Pump();
+        clock.Advance(TimeSpan.FromMinutes(1));
+        CodexThreadTurns(paths, CodexChild, "c1", guardian: false,
+            ("task_started", now.AddMinutes(-10)), ("task_complete", now.AddMinutes(-4)), ("task_started", nextStart),
+            ("task_complete", clock.UtcNow.AddSeconds(-5)));
+        changes.Clear();
+        pump.Pump();
+
+        var announced = Assert.Single(changes);
+        Assert.Equal(SessionPhase.Idle, announced.Session.Phase);
+        Assert.False(announced.Silent);
+    }
+
+    /// <summary>
+    /// The hooks can start reporting, under the very same thread id, a child the fallback announced a moment before:
+    /// the child is theirs from then on, and handing it over must not stop a thread that is still at work.
+    /// </summary>
+    [Fact]
+    public void Pump_keeps_running_a_codex_child_the_hooks_take_over_under_the_same_id()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 11, 0, 0, TimeSpan.Zero);
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = CodexPump(dir, clock, tracker, out var paths);
+
+        CodexThreadTurns(paths, CodexChild, "c1", guardian: false, ("task_started", now.AddSeconds(-20)));
+        File.AppendAllText(paths.EventsFile, Line("UserPromptSubmit", "c1", now.AddSeconds(-30), agent: "codex"));
+        pump.Pump();
+        Assert.Equal(CodexSubagentScanner.SyntheticAgentType, Assert.Single(Assert.Single(tracker.Sessions).Subagents!).AgentType);
+
+        clock.Advance(TimeSpan.FromSeconds(30));
+        File.AppendAllText(paths.EventsFile, SubagentLine("SubagentStart", "c1", CodexChild, clock.UtcNow, agent: "codex", agentType: "default"));
+        pump.Pump();
+        clock.Advance(TimeSpan.FromSeconds(30));
+        pump.Pump();
+
+        var session = Assert.Single(tracker.Sessions);
+        Assert.Equal("al lavoro · 1 agente", session.PhaseLabel);
+        var child = Assert.Single(session.Subagents!);
+        Assert.Equal(SubagentPhase.Running, child.Phase);
+        Assert.Equal("default", child.AgentType);
+    }
+
+    /// <summary>
+    /// A child the hooks reported can work on a single turn for longer than the subagent timeout, with no hook event in
+    /// between: while its rollout says the turn is open it is announced again, so the timeout sweep never releases it,
+    /// and the row keeps the instant the turn started.
+    /// </summary>
+    [Fact]
+    public void Pump_keeps_a_codex_child_whose_single_turn_outlasts_the_subagent_timeout()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 11, 0, 0, TimeSpan.Zero);
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = CodexPump(dir, clock, tracker, out var paths);
+
+        CodexThreadTurns(paths, CodexChild, "c1", guardian: false, ("task_started", now.AddSeconds(-3)));
+        File.AppendAllText(paths.EventsFile,
+            Line("UserPromptSubmit", "c1", now.AddSeconds(-10), agent: "codex") +
+            SubagentLine("SubagentStart", "c1", CodexChild, now, agent: "codex", agentType: "default") +
+            Line("Stop", "c1", now.AddSeconds(5), agent: "codex"));
+        pump.Pump();
+
+        // Forty minutes on the same turn, well past SubagentTimeout, with the timeout sweep running at every step.
+        for (var minute = 10; minute <= 40; minute += 10)
+        {
+            clock.Advance(TimeSpan.FromMinutes(10));
+            pump.Pump();
+
+            var live = Assert.Single(tracker.Sessions);
+            Assert.Equal(SessionPhase.Working, live.Phase);
+            var child = Assert.Single(live.Subagents!);
+            Assert.Equal(SubagentPhase.Running, child.Phase);
+            Assert.Equal(now, child.StartedAt);
+        }
     }
 
     /// <summary>

@@ -45,6 +45,16 @@ public sealed class HookEventPump : IDisposable
     /// younger than <see cref="CodexHookGrace"/> that session counts its subagents from the hooks alone.
     /// </summary>
     private readonly Dictionary<string, DateTimeOffset> _hookSubagents = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Instant this pump last announced each Codex child it follows from the child's own rollout, per session: a child
+    /// whose turn stays open is announced again once half the subagent timeout has passed, so the sweep cannot release it.
+    /// </summary>
+    private readonly Dictionary<string, Dictionary<string, DateTimeOffset>> _followedChildren = new(StringComparer.Ordinal);
+    /// <summary>
+    /// The Codex children left Running by <see cref="Start"/>, per session: what the first live scan learns about them
+    /// happened while the app was not looking, so the events it synthesises for them are Quiet. Spent by that scan.
+    /// </summary>
+    private Dictionary<string, HashSet<string>>? _replayedChildren;
 
     public TimeSpan ReplayWindow { get; init; } = TimeSpan.FromHours(24);
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromHours(12);
@@ -175,6 +185,9 @@ public sealed class HookEventPump : IDisposable
                 // A Codex child thread that is running right now must be picked up before the first Changed is
                 // raised, or the replayed session would flip Idle → Working → Idle and toast a turn it never ran.
                 SyncCodexSubagents(silent: true);
+                // The children still running now may have finished while the app was not running: the first live
+                // scan must not announce the end of a turn that was over before the app was looking.
+                _replayedChildren = RunningCodexChildren();
                 _lastStaleSweep = _clock.UtcNow;
                 _lastCodexScan = _clock.UtcNow;
                 _lastTokenRefresh = _clock.UtcNow;
@@ -392,6 +405,8 @@ public sealed class HookEventPump : IDisposable
             _synthesisedChildren.Remove(gone);
         foreach (var gone in _hookSubagents.Keys.Where(id => !live.Contains(id)).ToList())
             _hookSubagents.Remove(gone);
+        foreach (var gone in _followedChildren.Keys.Where(id => !live.Contains(id)).ToList())
+            _followedChildren.Remove(gone);
 
         var enabled = CodexSubagentsEnabled?.Invoke() ?? true;
         var now = _clock.UtcNow;
@@ -443,6 +458,21 @@ public sealed class HookEventPump : IDisposable
             // the one that takes the session Idle — the totals must be read before the row stops being refreshed.
             else foreach (var e in events) ApplyTracked(e);
         }
+        // Only the first live scan speaks for the time before the start: what the next ones find happened in front of the app.
+        if (!silent) _replayedChildren = null;
+    }
+
+    /// <summary>The Codex children Running right now, per session; null when there is none (or no scanner to follow them).</summary>
+    private Dictionary<string, HashSet<string>>? RunningCodexChildren()
+    {
+        if (CodexSubagents is null) return null;
+        var running = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var session in _tracker.Sessions.Where(s => s.Agent == AgentKind.Codex))
+        {
+            var ids = session.Subagents?.Where(s => s.Phase == SubagentPhase.Running).Select(s => s.AgentId).ToHashSet(StringComparer.Ordinal);
+            if (ids is { Count: > 0 }) running[session.SessionId] = ids;
+        }
+        return running.Count > 0 ? running : null;
     }
 
     /// <summary>
@@ -529,11 +559,18 @@ public sealed class HookEventPump : IDisposable
     /// <summary>
     /// Stops the children this pump had announced for a session the fallback no longer owns (its hooks took over, or
     /// the setting went off). Leaving them running would pin the session to "al lavoro" until the 30-minute timeout.
+    /// A child the hooks now report under the same id (its type is no longer the fallback's) is theirs and is left alone:
+    /// stopping it would end a thread that is still at work.
     /// </summary>
     private void ReleaseSynthesisedChildren(SessionState session, DateTimeOffset now, bool silent)
     {
         if (!_synthesisedChildren.Remove(session.SessionId, out var announced) || announced.Count == 0) return;
-        var events = announced.Keys.Select(child => SyntheticSubagentEvent("SubagentStop", session, child, now)).ToList();
+        var events = announced.Keys
+            .Where(child => session.Subagents?.FirstOrDefault(s => s.AgentId == child) is not { } tracked
+                            || tracked.AgentType == CodexSubagentScanner.SyntheticAgentType)
+            .Select(child => SyntheticSubagentEvent("SubagentStop", session, child, now))
+            .ToList();
+        if (events.Count == 0) return;
         if (silent) _tracker.ApplySilently(events);
         else foreach (var e in events) ApplyTracked(e);
     }
@@ -548,6 +585,13 @@ public sealed class HookEventPump : IDisposable
     /// stopped. A child without a readable rollout, or whose rollout is not a spawned child (a guardian thread), is
     /// left to the hooks. Live scans only: the startup replay must not read today's rollouts into history.
     /// </summary>
+    /// <remarks>
+    /// A running child whose rollout still shows the turn open is announced again once half the subagent timeout has
+    /// passed since its last announcement, as the fallback does for its own children: the sweep judges these children
+    /// by the session's newest subagent event, and a single turn can outlast the timeout. The events for a child the
+    /// startup replay left running are Quiet on the first live scan: what they report happened before the app was
+    /// looking.
+    /// </remarks>
     /// <param name="followSynthesised">
     /// False while the fallback setting is off: a child only the rollouts ever reported is not brought back.
     /// </param>
@@ -556,30 +600,54 @@ public sealed class HookEventPump : IDisposable
         var session = _tracker.Sessions.FirstOrDefault(s => s.Agent == AgentKind.Codex && s.SessionId == sessionId);
         if (session?.Subagents is not { Count: > 0 } known) return;
         var now = _clock.UtcNow;
+        var refreshAfter = SubagentTimeout / 2;
+        if (!_followedChildren.TryGetValue(sessionId, out var announced))
+            _followedChildren[sessionId] = announced = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var gone in announced.Keys.Where(id => !known.Any(s => s.AgentId == id)).ToList()) announced.Remove(gone);
+        var replayed = _replayedChildren?.GetValueOrDefault(sessionId);
         var events = new List<HookEvent>();
         foreach (var child in known)
         {
             if (!followSynthesised && child.AgentType == CodexSubagentScanner.SyntheticAgentType) continue;
             if (CodexSubagents!.ChildInfo(child.AgentId) is not { StateAt: { } at } info) continue;
+            var quiet = replayed?.Contains(child.AgentId) ?? false;
             // Strictly newer than the end, with no tolerance: the next turn can start 0.3 s after the hook's
             // SubagentStop (measured), while the task_started of the turn that stop closed is minutes older.
             if (child.Phase == SubagentPhase.Done && info.State == CodexTurnState.Running && at > (child.EndedAt ?? child.StartedAt))
+            {
                 // Stamped with the scan, like the fallback's announcements: the proof of life the timeout sweep reads
                 // must be fresh, or a turn found running long after it began would be released at the next sweep.
-                events.Add(RolloutChildEvent("SubagentStart", session, child, now));
+                events.Add(RolloutChildEvent("SubagentStart", session, child, now, quiet));
+                announced[child.AgentId] = now;
+            }
             else if (child.Phase == SubagentPhase.Running && info.State == CodexTurnState.Finished)
                 // Stamped with the end of the turn (never before the child started, never in the future): the row
                 // shows how long the turn really took, and a task_started written right after it is newer than it.
-                events.Add(RolloutChildEvent("SubagentStop", session, child, at < child.StartedAt ? child.StartedAt : at > now ? now : at));
+                events.Add(RolloutChildEvent("SubagentStop", session, child, at < child.StartedAt ? child.StartedAt : at > now ? now : at, quiet));
+            else if (child.Phase == SubagentPhase.Running && info.State == CodexTurnState.Running
+                     && now - LastAnnounced(announced, child) >= refreshAfter)
+            {
+                // A turn longer than the timeout: the refresh keeps StartedAt (UpsertSubagent does, for a running agent)
+                // and renews the proof of life the sweep reads.
+                events.Add(RolloutChildEvent("SubagentStart", session, child, now, quiet));
+                announced[child.AgentId] = now;
+            }
         }
         // ApplyTracked, as for the fallback: the stop of the last child may end the session's turn, and the totals must
         // be read before the row stops being refreshed.
         foreach (var e in events) ApplyTracked(e);
     }
 
+    /// <summary>
+    /// The last time a followed child was announced: this pump's own announcement, or its start (a hook's
+    /// SubagentStart, a restart) when that is newer.
+    /// </summary>
+    private static DateTimeOffset LastAnnounced(Dictionary<string, DateTimeOffset> announced, SubagentState child) =>
+        announced.TryGetValue(child.AgentId, out var at) && at > child.StartedAt ? at : child.StartedAt;
+
     /// <summary>The SubagentStart/SubagentStop a child's rollout implies: its own id and type, source "rollout".</summary>
-    private static HookEvent RolloutChildEvent(string name, SessionState session, SubagentState child, DateTimeOffset ts) =>
-        new(ts, session.Agent, name, session.SessionId, session.Cwd, null, null, "rollout", child.AgentId, child.AgentType);
+    private static HookEvent RolloutChildEvent(string name, SessionState session, SubagentState child, DateTimeOffset ts, bool quiet) =>
+        new(ts, session.Agent, name, session.SessionId, session.Cwd, null, null, "rollout", child.AgentId, child.AgentType, Quiet: quiet);
 
     private static bool IsRunning(SessionState session, string agentId) =>
         session.Subagents?.Any(s => s.AgentId == agentId && s.Phase == SubagentPhase.Running) ?? false;
