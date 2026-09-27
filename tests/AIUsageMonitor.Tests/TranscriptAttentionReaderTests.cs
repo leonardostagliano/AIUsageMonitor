@@ -77,6 +77,18 @@ public class TranscriptAttentionReaderTests
     }
 
     [Fact]
+    public void Of_tool_uses_written_on_one_line_the_last_one_without_a_result_is_returned()
+    {
+        var line = ToolUses("m1", 2,
+            ("t1", "Bash", new { command = "git status" }),
+            ("t2", "Edit", new { file_path = Cwd + @"\b.txt" }));
+
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, "Edit", "b.txt"), Find(Prompt("controlla", 0), line)!.Detail);
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, "Bash", "git status"),
+            Find(Prompt("controlla", 0), line, Result("t2", 3))!.Detail);
+    }
+
+    [Fact]
     public void Only_the_latest_message_with_tool_uses_counts()
     {
         // m1 was abandoned without a result long ago; the latest message (m2) is fully answered.
@@ -128,6 +140,29 @@ public class TranscriptAttentionReaderTests
     }
 
     [Fact]
+    public void A_lone_surrogate_in_a_value_or_a_property_name_never_makes_the_reader_throw()
+    {
+        // "\ud83d" alone is valid JSON but not valid UTF-16: System.Text.Json throws when it has to decode it.
+        var inCommand = Find(
+            Prompt("lancia", 0),
+            ToolUse("m1", "t1", "Bash", new { command = "echo LONE" }, 2).Replace("LONE", @"\ud83d"));
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, "Bash"), inCommand!.Detail);
+        Assert.Equal(At(2), inCommand.At);
+
+        var inTimestamp = Find(ToolUse("m1", "t1", "Bash", new { command = "make" }, 2).Replace("000Z\"", "000Z\\ud83d\""));
+        Assert.Equal("make", inTimestamp!.Detail.Summary);
+        Assert.Null(inTimestamp.At);
+
+        // A line whose property names cannot be compared is skipped like a malformed one. System.Text.Json searches the
+        // properties from the last, so the lookup of "type" meets the unreadable name first.
+        var inName = Find(
+            Prompt("lancia", 0),
+            ToolUse("m1", "t1", "Bash", new { command = "make" }, 2),
+            """{"type":"user","message":{"role":"user","content":"illeggibile"},"\ud83d":1}""");
+        Assert.Equal("make", inName!.Detail.Summary);
+    }
+
+    [Fact]
     public void Windows_line_endings_are_read_like_plain_ones()
     {
         using var dir = new TempDir();
@@ -159,6 +194,21 @@ public class TranscriptAttentionReaderTests
 
         Assert.Equal("make", Find(near)!.Detail.Summary);
         Assert.Null(Find(far));
+    }
+
+    [Fact]
+    public void A_line_starting_exactly_at_the_start_of_the_window_is_read_and_one_starting_a_byte_earlier_is_not()
+    {
+        const int window = TranscriptAttentionReader.MaxTailBytes;
+        var toolUse = ToolUse("m1", "t1", "Bash", new { command = "make" }, 2);
+        var bare = Other("system", 0, 3);
+        // The last line, padded so that the tool_use line starts `offset` bytes before the end of the file.
+        string LastLine(int offset) => Other("system", offset - (toolUse.Length + 1) - (bare.Length + 1), 3);
+
+        var atStart = LastLine(window);
+        Assert.Equal(window, System.Text.Encoding.UTF8.GetByteCount(Jsonl(toolUse, atStart)));
+        Assert.Equal("make", Find(Prompt("lancia", 0), toolUse, atStart)!.Detail.Summary);
+        Assert.Null(Find(Prompt("lancia", 0), toolUse, LastLine(window + 1)));
     }
 
     [Fact]

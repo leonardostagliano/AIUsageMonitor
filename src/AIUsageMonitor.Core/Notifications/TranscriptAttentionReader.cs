@@ -109,38 +109,47 @@ public static class TranscriptAttentionReader
 
             using (document)
             {
-                var root = document.RootElement;
-                if (root.ValueKind != JsonValueKind.Object) continue;
-                var type = Text(root, "type");
-
-                if (type == "user")
+                try
                 {
-                    // Meta lines (skill bodies, reminders, command caveats) are written by Claude Code, not typed.
-                    if (root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True) continue;
-                    var content = Content(root);
-                    if (CollectResults(content, answered)) continue;
-                    // A prompt newer than every tool_use still unanswered: the turn they belonged to is over.
-                    if (IsPrompt(content)) return null;
+                    var root = document.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object) continue;
+                    var type = Text(root, "type");
+
+                    if (type == "user")
+                    {
+                        // Meta lines (skill bodies, reminders, command caveats) are written by Claude Code, not typed.
+                        if (root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True) continue;
+                        var content = Content(root);
+                        if (CollectResults(content, answered)) continue;
+                        // A prompt newer than every tool_use still unanswered: the turn they belonged to is over.
+                        if (IsPrompt(content)) return null;
+                        continue;
+                    }
+
+                    if (type != "assistant") continue;
+                    var messageId = MessageId(root);
+                    // Past the lines of the target message: every one of its tool_use blocks has been seen.
+                    if (found && (messageId is null || messageId != targetId)) return null;
+
+                    var uses = ToolUses(root);
+                    if (!found)
+                    {
+                        if (uses.Count == 0) continue;
+                        found = true;
+                        targetId = messageId;
+                    }
+
+                    for (var k = uses.Count - 1; k >= 0; k--)
+                    {
+                        if (answered.Contains(uses[k].Id)) continue;
+                        return new PendingToolUse(ToolSummary.Describe(uses[k].Name, uses[k].Input, cwd), Timestamp(root));
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // An escaped lone surrogate ("\ud83d") is valid JSON, but System.Text.Json throws when it has to
+                    // decode it, in a string value or in a property name a lookup compares: the line is skipped.
                     continue;
-                }
-
-                if (type != "assistant") continue;
-                var messageId = MessageId(root);
-                // Past the lines of the target message: every one of its tool_use blocks has been seen.
-                if (found && (messageId is null || messageId != targetId)) return null;
-
-                var uses = ToolUses(root);
-                if (!found)
-                {
-                    if (uses.Count == 0) continue;
-                    found = true;
-                    targetId = messageId;
-                }
-
-                for (var k = uses.Count - 1; k >= 0; k--)
-                {
-                    if (answered.Contains(uses[k].Id)) continue;
-                    return new PendingToolUse(ToolSummary.Describe(uses[k].Name, uses[k].Input, cwd), Timestamp(root));
                 }
             }
         }
@@ -193,11 +202,20 @@ public static class TranscriptAttentionReader
     private static string? MessageId(JsonElement root) =>
         root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object ? Text(message, "id") : null;
 
-    private static DateTimeOffset? Timestamp(JsonElement root) =>
-        root.TryGetProperty("timestamp", out var value) && value.ValueKind == JsonValueKind.String && value.TryGetDateTimeOffset(out var at)
-            ? at
-            : null;
+    private static DateTimeOffset? Timestamp(JsonElement root)
+    {
+        if (!root.TryGetProperty("timestamp", out var value) || value.ValueKind != JsonValueKind.String) return null;
+        try
+        {
+            return value.TryGetDateTimeOffset(out var at) ? at : null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;                                // an escaped lone surrogate ("\ud83d") cannot be decoded
+        }
+    }
 
+    /// <remarks>Throws InvalidOperationException on an escaped lone surrogate ("\ud83d"): <see cref="Scan"/> skips the line.</remarks>
     private static string? Text(JsonElement obj, string property) =>
         obj.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 }

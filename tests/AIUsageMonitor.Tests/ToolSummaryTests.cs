@@ -100,6 +100,14 @@ public class ToolSummaryTests
     public void A_file_outside_the_working_directory_keeps_its_full_path(string path, string? cwd, string expected) =>
         Assert.Equal(expected, Describe("Edit", new { file_path = path }, cwd).Summary);
 
+    [Theory]
+    [InlineData("C:/Users/demo/Progetti/Demo/src/a.cs", Cwd, "src/a.cs")]                            // '/' path, '\' cwd
+    [InlineData(@"C:\Users\demo\Progetti\Demo\src\a.cs", "C:/Users/demo/Progetti/Demo", @"src\a.cs")] // '\' path, '/' cwd
+    [InlineData(@"c:/users/demo\progetti/DEMO\src/a.cs", Cwd, "src/a.cs")]                           // both mixed, other case
+    [InlineData("C:/Users/demo/Progetti/Demo2/x.cs", Cwd, "C:/Users/demo/Progetti/Demo2/x.cs")]        // a sibling is still no child
+    public void A_file_under_the_working_directory_is_relative_whatever_separators_either_uses(string path, string cwd, string expected) =>
+        Assert.Equal(expected, Describe("Edit", new { file_path = path }, cwd).Summary);
+
     [Fact]
     public void A_notebook_edit_names_its_notebook()
     {
@@ -130,6 +138,7 @@ public class ToolSummaryTests
     [InlineData("mcp__claude-in-chrome__navigate", "navigate", "claude-in-chrome")]
     [InlineData("mcp__plugin_design_figma__get_design_context", "get_design_context", "plugin_design_figma")]
     [InlineData("mcp__demo_server__run_query", "run_query", "demo_server")]
+    [InlineData("mcp__srv__tool__x", "tool__x", "srv")]                                // split at the first "__"
     public void An_mcp_tool_shows_the_tool_and_its_server(string name, string tool, string server) =>
         Assert.Equal(new AttentionDetail(AttentionKind.Permission, tool, server), Describe(name, new { tabId = 1 }));
 
@@ -149,6 +158,23 @@ public class ToolSummaryTests
         Assert.Equal(new AttentionDetail(AttentionKind.Question), ToolSummary.Describe("AskUserQuestion", Input("text"), null));
         Assert.Equal(new AttentionDetail(AttentionKind.Permission, "WebFetch"), Describe("WebFetch", new { url = "   " }));
         Assert.Equal(new AttentionDetail(AttentionKind.Permission), ToolSummary.Describe("  ", default, null));
+    }
+
+    [Fact]
+    public void Input_holding_a_lone_surrogate_never_throws_and_leaves_no_summary()
+    {
+        // "\ud83d" alone is valid JSON but not valid UTF-16: System.Text.Json throws when it has to decode it.
+        static JsonElement Json(string json) => JsonSerializer.Deserialize<JsonElement>(json);
+
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, "Bash"),
+            ToolSummary.Describe("Bash", Json("""{"command":"echo \ud83d"}"""), Cwd));                // in a value
+        // In a property name, the lookup of a short name ("url", "plan") throws: the input reads as missing.
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, "WebFetch"),
+            ToolSummary.Describe("WebFetch", Json("""{"\ud83d":1}"""), Cwd));
+        Assert.Equal(new AttentionDetail(AttentionKind.Plan),
+            ToolSummary.Describe("ExitPlanMode", Json("""{"\ud83d":1}"""), Cwd));
+        Assert.Equal(new AttentionDetail(AttentionKind.Permission, "navigate", "srv"),
+            ToolSummary.Describe("mcp__srv__navigate", Json("""{"\ud83d":1}"""), Cwd));
     }
 
     [Theory]

@@ -21,6 +21,23 @@ public static class ToolSummary
     /// </remarks>
     public static AttentionDetail Describe(string toolName, JsonElement input, string? cwd)
     {
+        try
+        {
+            return DescribeInput(toolName, input, cwd);
+        }
+        catch (InvalidOperationException)
+        {
+            // An escaped lone surrogate ("\ud83d") is valid JSON, but System.Text.Json throws when it has to decode it: in
+            // a string value, or in a property name a lookup compares. The input is then read as missing.
+            return DescribeInput(toolName, default, cwd);
+        }
+    }
+
+    /// <summary>Cuts to MaxLength (with "…" as last char when cut), collapses whitespace runs to one space, trims.</summary>
+    public static string Shorten(string text) => Cut(text, MaxLength);
+
+    private static AttentionDetail DescribeInput(string toolName, JsonElement input, string? cwd)
+    {
         var name = toolName?.Trim();
         if (string.IsNullOrEmpty(name)) return new AttentionDetail(AttentionKind.Permission);
 
@@ -46,9 +63,6 @@ public static class ToolSummary
         if (McpParts(name) is { } mcp) return Permission(mcp.Tool, mcp.Server);
         return Permission(name, $"Vuole usare {name}");
     }
-
-    /// <summary>Cuts to MaxLength (with "…" as last char when cut), collapses whitespace runs to one space, trims.</summary>
-    public static string Shorten(string text) => Cut(text, MaxLength);
 
     private static AttentionDetail Permission(string tool, string? summary) =>
         new(AttentionKind.Permission, tool, OrNull(summary));
@@ -106,7 +120,9 @@ public static class ToolSummary
         if (string.IsNullOrWhiteSpace(cwd)) return path;
         var root = cwd.Trim().TrimEnd('\\', '/');
         if (root.Length == 0 || path.Length <= root.Length + 1) return path;
-        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return path;
+        // Claude Code often writes "C:/p/demo/a.cs" under a cwd "C:\p\demo", and the reverse: '\' and '/' match.
+        if (!string.Equals(path[..root.Length].Replace('\\', '/'), root.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            return path;
         // "C:\p\demo2\x" starts with "C:\p\demo" too: only a separator right after the root makes it a child.
         return path[root.Length] is '\\' or '/' ? path[(root.Length + 1)..] : path;
     }
@@ -129,6 +145,7 @@ public static class ToolSummary
         return (rest[..separator], rest[(separator + 2)..]);
     }
 
+    /// <remarks>Throws InvalidOperationException on an escaped lone surrogate ("\ud83d"): <see cref="Describe"/> catches it.</remarks>
     private static string? Text(JsonElement obj, string property) =>
         obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()

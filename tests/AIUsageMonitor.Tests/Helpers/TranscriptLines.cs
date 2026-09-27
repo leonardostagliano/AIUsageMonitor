@@ -39,6 +39,17 @@ public static class TranscriptLines
             }
         }));
 
+    /// <summary>One assistant line of message <paramref name="messageId"/> carrying several tool_use blocks, in order.</summary>
+    public static string ToolUses(string messageId, int plusSeconds, params (string Id, string Name, object Input)[] uses) =>
+        JsonSerializer.Serialize(Line("assistant", plusSeconds, new Dictionary<string, object?>
+        {
+            ["id"] = messageId,
+            ["role"] = "assistant",
+            ["content"] = uses
+                .Select(u => (object)new Dictionary<string, object?> { ["type"] = "tool_use", ["id"] = u.Id, ["name"] = u.Name, ["input"] = u.Input })
+                .ToArray()
+        }));
+
     /// <summary>One assistant line of message <paramref name="messageId"/> carrying only text.</summary>
     public static string Text(string messageId, string text, int plusSeconds = 0) =>
         JsonSerializer.Serialize(Line("assistant", plusSeconds, new Dictionary<string, object?>
