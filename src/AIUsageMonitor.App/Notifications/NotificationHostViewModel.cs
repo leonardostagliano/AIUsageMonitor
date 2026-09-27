@@ -55,7 +55,11 @@ public sealed class NotificationHostViewModel : ObservableObject
     /// <summary>Clic sulla pillola "+N altre".</summary>
     public event Action? MoreActivated;
 
-    /// <summary>Il mouse entra (true) o esce (false) dalla pila; alzato solo quando <see cref="IsHovering"/> cambia.</summary>
+    /// <summary>
+    /// Il mouse entra (true) o esce (false) dalla pila; alzato solo quando <see cref="IsHovering"/> cambia. Puo' partire
+    /// anche dentro <see cref="Sync"/>, alla fine (la pila si svuota o torna ad avere card vive), a stato gia' allineato:
+    /// chi ascolta deve tollerare di essere richiamato da li' e puo' richiamare Sync.
+    /// </summary>
     public event Action<bool>? HoverChanged;
 
     /// <summary>
@@ -110,7 +114,11 @@ public sealed class NotificationHostViewModel : ObservableObject
 
     public void ActivateMore() => MoreActivated?.Invoke();
 
-    /// <summary>Il mouse entra (true) o esce (false) dalla pila: lo dice la finestra.</summary>
+    /// <summary>
+    /// Il mouse entra (true) o esce (false) dalla pila: lo dice solo la finestra, il servizio non la chiama. Registra lo
+    /// stato del puntatore; <see cref="HoverChanged"/>(true) parte solo a finestra mostrata (<see cref="SetShown"/>) e con
+    /// almeno una card viva.
+    /// </summary>
     public void SetHover(bool hovering)
     {
         _pointerOver = hovering;

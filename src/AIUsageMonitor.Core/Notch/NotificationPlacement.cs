@@ -14,8 +14,8 @@ public static class NotificationPlacement
     /// <paramref name="windowWidthDip"/> x <paramref name="windowHeightDip"/> whose visible content is inset by
     /// <paramref name="shadowMarginDip"/> on every side: content right edge = area right - RightInsetDip - gap, content
     /// vertically centred on <see cref="NotchAnchor.CenterYPx"/>, window clamped vertically inside the work area (a
-    /// window taller than the area starts at its top). The transparent shadow margin may stick out on the right when
-    /// the notch is hidden: only the content keeps the gap.
+    /// window taller than the area starts at its top). Only the content keeps the gap: on the right the shadow margin
+    /// reaches past it into the tab, the open panel or (notch hidden) past the work area, see <see cref="RightOverlap"/>.
     /// <para>
     /// Like <see cref="NotchPlacement.Compute"/> it also works in physical pixels, the convention of
     /// <c>NotchWindow.Reposition</c>: pass the anchor with <c>DpiScale = 1</c> and <c>RightInsetDip</c> times the target
@@ -39,15 +39,20 @@ public static class NotificationPlacement
     }
 
     /// <summary>
-    /// How far a window at <paramref name="windowLeft"/>, <paramref name="windowWidth"/> wide, sticks out past the right
-    /// edge of the work area; 0 when it does not. Only the transparent shadow margin can (notch hidden), and the host
-    /// clips that part: the shadow is faint but not transparent out to the window edge, and a layered window takes the
-    /// mouse wherever its alpha is not zero, so it would swallow clicks on the next monitor or on a taskbar at the
-    /// right. Same units as <see cref="Compute"/>: DIP, or pixels with the anchor at <c>DpiScale = 1</c>.
+    /// How far a window at <paramref name="windowLeft"/>, <paramref name="windowWidth"/> wide, reaches into what the
+    /// notch occupies at the right edge (from area right - <see cref="NotchAnchor.RightInsetDip"/> to area right: the
+    /// tab, the open or pinned panel, or with the notch hidden whatever lies past the work area); 0 when it ends before.
+    /// A window placed by <see cref="Compute"/> always reaches in by the shadow margin minus the gap (16 - 8 = 8 DIP),
+    /// in every state. The host clips that strip: the shadow is faint but not transparent out to the window edge, and a
+    /// layered window takes the mouse wherever its alpha is not zero, so it would draw over the left edge of the tab or
+    /// panel and swallow their hover and clicks (the host is above the notch in z-order), or those of the next monitor
+    /// or of a taskbar at the right. Same units as <see cref="Compute"/>: DIP, or pixels with the anchor at
+    /// <c>DpiScale = 1</c> and <c>RightInsetDip</c> times the target scale.
     /// </summary>
-    public static double RightOverhang(NotchAnchor anchor, double windowLeft, double windowWidth)
+    public static double RightOverlap(NotchAnchor anchor, double windowLeft, double windowWidth)
     {
         var scale = anchor.DpiScale > 0 ? anchor.DpiScale : 1;
-        return Math.Max(0, windowLeft + windowWidth - (anchor.AreaLeftPx + anchor.AreaWidthPx) / scale);
+        var notchLeft = (anchor.AreaLeftPx + anchor.AreaWidthPx) / scale - anchor.RightInsetDip;
+        return Math.Max(0, windowLeft + windowWidth - notchLeft);
     }
 }

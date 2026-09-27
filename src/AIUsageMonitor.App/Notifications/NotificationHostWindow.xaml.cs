@@ -24,7 +24,10 @@ namespace AIUsageMonitor.App.Notifications;
 /// </summary>
 public sealed partial class NotificationHostWindow : Window
 {
-    /// <summary>Margine trasparente per l'ombra su ogni lato: la finestra e' larga 340 + 2 x 16 DIP.</summary>
+    /// <summary>
+    /// Margine per l'ombra su ogni lato: la finestra e' larga 340 + 2 x 16 DIP. L'ombra e' tenue ma non trasparente fino
+    /// al bordo, quindi a destra la finestra taglia la striscia che entra nel notch (<see cref="ClipRight"/>).
+    /// </summary>
     public const double ShadowMargin = 16;
 
     private const double SlideDistance = 24;
@@ -39,9 +42,9 @@ public sealed partial class NotificationHostWindow : Window
     private static readonly Duration ReflowDuration = new(TimeSpan.FromMilliseconds(180));
 
     /// <summary>
-    /// Fra una card e l'altra c'e' uno spazio trasparente, che in una finestra a livelli non riceve il mouse: l'uscita
-    /// conta solo se il mouse non rientra entro questo tempo, altrimenti ogni passaggio da una card all'altra farebbe
-    /// ripartire i timer per un istante.
+    /// Fra una card e l'altra c'e' uno spazio senza elementi (solo l'ombra, che non conta per l'hit test di WPF), dove
+    /// la pila perde il mouse: l'uscita conta solo se il mouse non rientra entro questo tempo, altrimenti ogni passaggio
+    /// da una card all'altra farebbe ripartire i timer per un istante.
     /// </summary>
     private static readonly TimeSpan HoverLeaveDelay = TimeSpan.FromMilliseconds(150);
 
@@ -52,6 +55,7 @@ public sealed partial class NotificationHostWindow : Window
     private readonly Dictionary<NotificationCardViewModel, ScaleTransform> _timers = new();
     private readonly HashSet<NotificationCardViewModel> _entered = new();
     private NotificationCardViewModel? _pressed;
+    private RectangleGeometry? _clip;
     private bool _reflowPending;
     private bool _closing;
 
@@ -132,14 +136,32 @@ public sealed partial class NotificationHostWindow : Window
             inPixels, Width * scale, height * scale, ShadowMargin * scale, NotificationPlacement.GapDip * scale);
         SetWindowPos(handle, IntPtr.Zero, (int)Math.Round(left), (int)Math.Round(top), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
-        // Notch nascosto: meta' del margine dell'ombra sporge oltre l'area di lavoro. L'ombra e' tenue ma non trasparente
-        // fino al bordo della finestra, e una finestra a livelli prende il mouse dove l'alfa non e' zero: senza taglio
-        // ruberebbe i clic al monitor accanto (o a una taskbar a destra). Si taglia solo la parte che sporge; la
-        // finestra resta dov'e', quindi DPI e posizione delle card non cambiano.
-        var overhang = NotificationPlacement.RightOverhang(inPixels, Math.Round(left), Width * scale) / scale;
-        Stack.Clip = overhang > 0
-            ? new RectangleGeometry(new Rect(-ShadowMargin, -ShadowMargin, Math.Max(0, Width - overhang), height))
-            : null;
+        ClipRight(NotificationPlacement.RightOverlap(inPixels, Math.Round(left), Width * scale) / scale, height);
+    }
+
+    /// <summary>
+    /// A destra il margine dell'ombra (16) e' piu' largo dello spazio fra card e notch (8): in ogni stato la finestra
+    /// entra di 8 DIP in cio' che il notch occupa, cioe' il bordo sinistro della linguetta o del pannello aperto, che
+    /// stanno sotto questa finestra (anche il notch e' Topmost, ma il suo HWND e' nato prima), oppure a notch nascosto
+    /// il monitor accanto o una taskbar a destra. L'ombra e' tenue ma non trasparente fino al bordo della finestra e una
+    /// finestra a livelli prende il mouse dove l'alfa non e' zero: senza taglio disegnerebbe sopra il bordo della
+    /// linguetta e le ruberebbe passaggio del mouse e clic. Si taglia solo quella striscia, dove l'ombra e' gia' quasi
+    /// trasparente; la finestra resta dov'e', quindi DPI e posizione delle card non cambiano. Una sola geometria, che
+    /// cambia solo quando cambiano sovrapposizione o altezza: Refresh gira ogni secondo e un Clip nuovo a ogni giro
+    /// rifarebbe il rendering della pila anche a finestra ferma.
+    /// </summary>
+    private void ClipRight(double overlapDip, double height)
+    {
+        if (overlapDip <= 0)
+        {
+            if (Stack.Clip is not null) Stack.Clip = null;
+            return;
+        }
+        // Coordinate della pila, che ha il margine dell'ombra: il rettangolo parte dall'angolo della finestra.
+        var rect = new Rect(-ShadowMargin, -ShadowMargin, Math.Max(0, Width - overlapDip), height);
+        if (_clip is null) _clip = new RectangleGeometry(rect);
+        else if (_clip.Rect != rect) _clip.Rect = rect;
+        if (!ReferenceEquals(Stack.Clip, _clip)) Stack.Clip = _clip;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
