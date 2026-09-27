@@ -86,7 +86,9 @@ live (non durante il replay silenzioso delle ultime 24 h), prima di `tracker.App
    o `worker_permission_prompt`, e gli eventi `Notification` sintetizzati dal registro (`waiting`): legge il transcript
    dell'evento o, se manca, quello gia' noto della sessione.
 2. Se non c'e' un `tool_use` in sospeso nel transcript principale, prova i transcript degli agenti in esecuzione della
-   sessione (`ClaudeAgentTranscriptLocator`) e prende il `tool_use` in sospeso piu' recente: `Background = true`.
+   sessione (`ClaudeAgentTranscriptLocator`) e prende il `tool_use` in sospeso piu' recente: `Background = true`. Una
+   chiamata `Agent`/`Task` in sospeso nel transcript principale conta come "niente in sospeso" finche' la sessione ha
+   agenti in esecuzione: resta aperta per tutta la vita dell'agente, e il permesso vero e' quello che aspetta lui.
 3. Senza risultati: `permission_prompt` e `worker_permission_prompt` → `Permission` senza Tool (con `Background =
    true` se la sessione ha agenti o workflow in corso); `elicitation_*` → `Question` con Summary = messaggio
    dell'evento; `agent_needs_input` → `Input` con `Background = true`.
@@ -130,7 +132,7 @@ dell'app si mostrano sempre. Codex non ha hook `Notification`: per Codex arrivan
   colorati.**
 - Avatar da 30 DIP: il cerchio dell'agente come nella card del notch; per gli avvisi dell'app il logo dell'app.
 - Riga 1: nome della sessione (`DisplayName`, con il prefisso `cloud ·`/`app ·`/`routine ·` se non e' un terminale)
-  in `TextPrimary` 13 SemiBold con ellissi; a destra l'eta' ("ora", "2 min", "1 h") in `TextDisabled` 11, aggiornata
+  in `TextPrimary` 13 SemiBold con ellissi; a destra l'eta' ("ora", "2 min", "1 h") in `TextMuted` 11 (AA su `Card`), aggiornata
   ogni 30 s; ✕ visibile solo al passaggio del mouse.
 - Riga 2: puntino da 7 DIP ed etichetta 11 SemiBold nel colore del tipo.
 - Riga 3: messaggio in `TextMuted` 12, una riga con ellissi; tooltip con il testo completo.
@@ -152,8 +154,8 @@ dell'app si mostrano sempre. Codex non ha hook `Notification`: per Codex arrivan
 
 ### 5.4 Ciclo di vita (`NotificationBoard`, Core, puro)
 
-- **Una card per sessione.** Un nuovo stato della stessa sessione sostituisce il contenuto della card esistente sul
-  posto (senza animazione d'ingresso).
+- **Una card per sessione.** Un nuovo stato della stessa sessione sostituisce il contenuto della card esistente (senza
+  animazione d'ingresso) e la porta in cima alla pila, perche' e' la notizia piu' recente.
 - **Ritiro.** Una card Permesso/Piano/Domanda si ritira quando la sessione esce da `NeedsInput`; una card Errore
   quando torna `Working`/`NeedsInput`; una card Finito quando parte un nuovo turno o scade. `SessionEnd` ritira
   qualsiasi card della sessione. Quando il nuovo stato e' a sua volta notificabile (es. un secondo permesso, o
@@ -212,9 +214,10 @@ l'intento per il board (`Show` con il modello della card, `Retire`, oppure nient
   - `attention.wav` (Permesso, Piano, Domanda, Errore): due tocchi brillanti Si5 987,77 Hz e Mi6 1318,51 Hz, 85 ms
     ciascuno con 55 ms di pausa, attacco 4 ms e decadimento esponenziale (costante 45 ms), 2ª armonica al 25 %; durata
     totale 420 ms; picco −10 dBFS. Piu' marcato, si riconosce senza guardare.
-- `NotificationSound.Play(NotificationSoundKind kind)` li riproduce da risorsa incorporata con
-  `System.Media.SoundPlayer` (asincrono, stream precaricato una volta per suono): passano dalla sessione audio dell'app,
-  quindi seguono volume di sistema e mixer per app. Qualsiasi errore e' ignorato (una volta nel log, solo il tipo).
+- `NotificationSound.Play(NotificationSoundKind kind)` li riproduce da risorsa incorporata con `PlaySound` di winmm
+  (`SND_MEMORY | SND_ASYNC`), da un buffer caricato una volta per suono e fissato in memoria per tutta la vita del
+  processo (con `SND_ASYNC` winmm lo legge dopo il ritorno della chiamata: un array gestito non fissato potrebbe essere
+  spostato dal GC): passano dalla sessione audio dell'app, quindi seguono volume di sistema e mixer per app. Qualsiasi errore e' ignorato (una volta nel log, solo il tipo).
 - `NotificationSoundKind { None, Done, Attention }`: il composer assegna `Done` a Finito, `Attention` a Permesso, Piano,
   Domanda ed Errore, `None` agli avvisi dell'app; con `NotifySound` spento tutto e' `None`.
 - Il board restituisce il suono da riprodurre per ogni operazione (`Attention` prevale su `Done` se nella stessa
