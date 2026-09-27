@@ -118,6 +118,32 @@ public class ClaudeRegistrySessionFeedTests
     }
 
     [Fact]
+    public void A_session_adopted_at_work_has_no_turn_start_until_its_next_turn()
+    {
+        using var rig = new Rig();
+        rig.Probe.Start(10, FileTime(T0.AddMinutes(-5).AddSeconds(-1)));
+        Record(rig.Sessions, 10, "c1", "busy", T0.AddMinutes(-5), entrypoint: "cli");
+
+        var adoption = rig.Sync().Events;
+        Assert.Equal(["SessionStart", "UserPromptSubmit"], adoption.Select(e => e.Event));
+        Assert.True(adoption[1].Adopted);
+        Assert.Null(rig.Tracker.Sessions.Single().TurnStartedAt);
+
+        rig.Clock.Advance(TimeSpan.FromMinutes(1));
+        Record(rig.Sessions, 10, "c1", "idle", T0.AddMinutes(-5), entrypoint: "cli");
+        rig.Sync();
+        var done = rig.Tracker.Sessions.Single();
+        Assert.Equal("finito", done.PhaseLabel);
+        Assert.Null(done.TurnStartedAt);                          // its card says "Finito" without a duration
+
+        rig.Clock.Advance(TimeSpan.FromMinutes(1));
+        Record(rig.Sessions, 10, "c1", "busy", T0.AddMinutes(-5), entrypoint: "cli");
+        var next = Assert.Single(rig.Sync().Events);
+        Assert.False(next.Adopted);
+        Assert.Equal(rig.Clock.UtcNow, rig.Tracker.Sessions.Single().TurnStartedAt);
+    }
+
+    [Fact]
     public void Sessions_the_hooks_report_are_left_to_them_but_still_listed_as_live()
     {
         using var rig = new Rig();

@@ -57,6 +57,10 @@ public class ModelsTests
         Assert.Equal("al lavoro · 1 agente", WithRunning(1).PhaseLabel);
         Assert.Equal("al lavoro · 3 agenti", WithRunning(3).PhaseLabel);
         Assert.Equal("attende input", Make(SessionPhase.NeedsInput, "x").PhaseLabel);
+        Assert.Equal("permesso", (Make(SessionPhase.NeedsInput, "x") with { Attention = new(AttentionKind.Permission, "Bash") }).PhaseLabel);
+        Assert.Equal("domanda", (Make(SessionPhase.NeedsInput, "x") with { Attention = new(AttentionKind.Question) }).PhaseLabel);
+        Assert.Equal("piano da approvare", (Make(SessionPhase.NeedsInput, "x") with { Attention = new(AttentionKind.Plan) }).PhaseLabel);
+        Assert.Equal("attende input", (Make(SessionPhase.NeedsInput, "x") with { Attention = new(AttentionKind.Input, Background: true) }).PhaseLabel);
         Assert.Equal("pronto", Make(SessionPhase.Idle, null).PhaseLabel);
         Assert.Equal("finito", Make(SessionPhase.Idle, "Turno completato").PhaseLabel);
         Assert.Equal("errore", Make(SessionPhase.Error, "boom").PhaseLabel);

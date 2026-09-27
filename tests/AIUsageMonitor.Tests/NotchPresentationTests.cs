@@ -82,6 +82,8 @@ public class NotchPresentationTests
     {
         Assert.Equal("al lavoro · 1m", NotchPresentation.SessionSubtitle(Session("a", SessionPhase.Working, last: Now.AddMinutes(-1)), Now));
         Assert.Equal("attende input · 4m", NotchPresentation.SessionSubtitle(Session("b", SessionPhase.NeedsInput, last: Now.AddMinutes(-4)), Now));
+        Assert.Equal("domanda · 4m", NotchPresentation.SessionSubtitle(
+            Session("b", SessionPhase.NeedsInput, last: Now.AddMinutes(-4)) with { Attention = new AttentionDetail(AttentionKind.Question) }, Now));
         Assert.Equal("finito · 12m", NotchPresentation.SessionSubtitle(Session("c", SessionPhase.Idle, last: Now.AddMinutes(-12)), Now));
         Assert.Equal("errore · 3m", NotchPresentation.SessionSubtitle(Session("e", SessionPhase.Error, last: Now.AddMinutes(-3)), Now));
         // Idle before the first completed turn: no message yet, so "pronto" instead of "finito".

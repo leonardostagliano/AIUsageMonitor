@@ -165,6 +165,29 @@ public class CloudSessionsTests
     }
 
     [Fact]
+    public void A_session_found_at_work_has_no_turn_start_until_its_next_turn()
+    {
+        var feed = new CloudSessionFeed();
+        var tracker = new SessionTracker(new FakeClock(Now));
+
+        var first = feed.Diff([Cloud("session_w", CloudSessionStatus.Working, Now.AddMinutes(-3), "Raccolta")], true, Now);
+        Assert.Equal(["SessionStart", "UserPromptSubmit"], first.Select(e => e.Event));
+        Assert.True(first[1].Adopted);
+        Apply(tracker, first);
+        Assert.Null(tracker.Sessions.Single().TurnStartedAt);
+
+        Apply(tracker, feed.Diff([Cloud("session_w", CloudSessionStatus.Idle, Now.AddMinutes(-1), "Raccolta")], true, Now));
+        var done = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, done.Phase);
+        Assert.Null(done.TurnStartedAt);                          // its card says "Finito" without a duration
+
+        var next = feed.Diff([Cloud("session_w", CloudSessionStatus.Working, Now, "Raccolta")], true, Now);
+        Assert.False(Assert.Single(next).Adopted);
+        Apply(tracker, next);
+        Assert.Equal(Now, tracker.Sessions.Single().TurnStartedAt);
+    }
+
+    [Fact]
     public void The_first_title_renames_an_untitled_session_and_the_id_spelling_does_not_split_it()
     {
         var feed = new CloudSessionFeed();

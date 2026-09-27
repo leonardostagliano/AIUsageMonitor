@@ -106,7 +106,7 @@ public class SessionTrackerTests
 
     [Theory]
     [InlineData("permission_prompt")]
-    [InlineData("idle_prompt")]
+    [InlineData("worker_permission_prompt")]
     [InlineData("agent_needs_input")]
     [InlineData("elicitation_dialog")]
     [InlineData("elicitation_url_dialog")]
@@ -180,8 +180,8 @@ public class SessionTrackerTests
         Assert.Equal(SessionPhase.Idle, tracker.AggregatePhase(AgentKind.Claude));
         tracker.Apply(Ev("UserPromptSubmit", sid: "b"));
         Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
-        // Waiting only for the next prompt does not hide a session at work; a permission prompt does.
-        tracker.Apply(Ev("Notification", sid: "c", notificationType: "idle_prompt"));
+        // idle_prompt is not a wait: it creates no session and changes nothing; a permission prompt is.
+        Assert.Null(tracker.Apply(Ev("Notification", sid: "c", notificationType: "idle_prompt")));
         Assert.Equal(SessionPhase.Working, tracker.AggregatePhase(AgentKind.Claude));
         tracker.Apply(Ev("Notification", sid: "e", notificationType: "permission_prompt"));
         Assert.Equal(SessionPhase.NeedsInput, tracker.AggregatePhase(AgentKind.Claude));
@@ -698,6 +698,138 @@ public class SessionTrackerTests
 
         Assert.Empty(changes);
         Assert.Empty(tracker.Sessions);
+    }
+
+    [Fact]
+    public void Attention_is_copied_on_entering_needs_input_and_cleared_in_every_other_phase()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var bash = new AttentionDetail(AttentionKind.Permission, "Bash", "dotnet test");
+        var question = new AttentionDetail(AttentionKind.Question, null, "Quale database usiamo?");
+        tracker.Apply(Ev("UserPromptSubmit"));
+
+        tracker.Apply(Ev("Notification", notificationType: "permission_prompt", plusSeconds: 1) with { Attention = bash });
+        var s = tracker.Sessions.Single();
+        Assert.Equal(bash, s.Attention);
+        Assert.Equal("permesso", s.PhaseLabel);
+
+        // A resume and an agent that starts keep the phase, and with it the detail of the wait.
+        tracker.Apply(Ev("SessionStart", source: "resume", plusSeconds: 2));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 3));
+        Assert.Equal(bash, tracker.Sessions.Single().Attention);
+
+        // A new notification brings its own detail.
+        tracker.Apply(Ev("Notification", notificationType: "permission_prompt", plusSeconds: 4) with { Attention = question });
+        Assert.Equal(question, tracker.Sessions.Single().Attention);
+        Assert.Equal("domanda", tracker.Sessions.Single().PhaseLabel);
+
+        tracker.Apply(Ev("PostToolUse", plusSeconds: 5));
+        Assert.Null(tracker.Sessions.Single().Attention);
+
+        // A notification without a detail (the replay, no resolver) waits without one.
+        tracker.Apply(Ev("Notification", notificationType: "agent_needs_input", plusSeconds: 6));
+        s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.NeedsInput, s.Phase);
+        Assert.Null(s.Attention);
+        Assert.Equal("attende input", s.PhaseLabel);
+
+        tracker.Apply(Ev("Notification", notificationType: "permission_prompt", plusSeconds: 7) with
+        {
+            Attention = new AttentionDetail(AttentionKind.Plan, null, "Piano: migrare i test")
+        });
+        Assert.Equal("piano da approvare", tracker.Sessions.Single().PhaseLabel);
+        tracker.Apply(Ev("StopFailure", plusSeconds: 8));
+        Assert.Null(tracker.Sessions.Single().Attention);
+
+        tracker.Apply(Ev("Notification", notificationType: "permission_prompt", plusSeconds: 9) with { Attention = bash });
+        tracker.Apply(Ev("Stop", plusSeconds: 10));
+        Assert.Null(tracker.Sessions.Single().Attention);
+    }
+
+    [Fact]
+    public void TurnStartedAt_marks_the_start_of_the_turn_and_survives_a_granted_permission()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 10));
+        Assert.Equal(T0.AddSeconds(10), tracker.Sessions.Single().TurnStartedAt);
+        tracker.Apply(Ev("Notification", notificationType: "permission_prompt", plusSeconds: 20));
+        tracker.Apply(Ev("PostToolUse", plusSeconds: 30));
+        // Working → Working (the registry reporting busy again): the same turn.
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 35));
+        tracker.Apply(Ev("Stop", plusSeconds: 262));
+        var done = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, done.Phase);
+        Assert.Equal(T0.AddSeconds(10), done.TurnStartedAt);
+        Assert.Equal(TimeSpan.FromSeconds(252), done.LastEventAt - done.TurnStartedAt);
+
+        // The next turn starts from Idle; an error keeps it; a turn after an error starts again.
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 300));
+        Assert.Equal(T0.AddSeconds(300), tracker.Sessions.Single().TurnStartedAt);
+        tracker.Apply(Ev("StopFailure", plusSeconds: 310));
+        Assert.Equal(T0.AddSeconds(300), tracker.Sessions.Single().TurnStartedAt);
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 320));
+        Assert.Equal(T0.AddSeconds(320), tracker.Sessions.Single().TurnStartedAt);
+
+        Assert.All(changes, c => Assert.False(c.Silent));
+    }
+
+    [Fact]
+    public void Sessions_first_seen_mid_turn_have_no_turn_start()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        // The replay window cut their prompt, or the app started while they worked: when the turn began is unknown.
+        tracker.Apply(Ev("Notification", sid: "asks", notificationType: "permission_prompt"));
+        tracker.Apply(Ev("PostToolUse", sid: "asks", plusSeconds: 1));
+        tracker.Apply(Ev("PostToolUse", sid: "answered", plusSeconds: 1));
+        tracker.Apply(Ev("SubagentStart", sid: "agent", agentId: "a1", plusSeconds: 2));
+        tracker.Apply(Ev("Stop", sid: "stopped"));
+        tracker.Apply(Ev("SessionStart", sid: "fresh"));
+
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single(s => s.SessionId == "asks").Phase);
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single(s => s.SessionId == "answered").Phase);
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single(s => s.SessionId == "agent").Phase);
+        Assert.All(tracker.Sessions, s => Assert.Null(s.TurnStartedAt));
+
+        // A prompt starts a turn, even for a session first seen with it.
+        tracker.Apply(Ev("UserPromptSubmit", sid: "prompt", plusSeconds: 3));
+        Assert.Equal(T0.AddSeconds(3), tracker.Sessions.Single(s => s.SessionId == "prompt").TurnStartedAt);
+    }
+
+    [Fact]
+    public void A_session_found_already_at_work_starts_no_turn_until_its_next_prompt()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        // What the registry sends when it adopts a busy session.
+        tracker.Apply(Ev("SessionStart", source: "registry"));
+        tracker.Apply(Ev("UserPromptSubmit", source: "registry") with { Adopted = true });
+        Assert.Equal(SessionPhase.Working, tracker.Sessions.Single().Phase);
+        Assert.Null(tracker.Sessions.Single().TurnStartedAt);
+
+        tracker.Apply(Ev("Stop", source: "registry", plusSeconds: 60));
+        Assert.Equal(SessionPhase.Idle, tracker.Sessions.Single().Phase);
+        Assert.Null(tracker.Sessions.Single().TurnStartedAt);
+
+        tracker.Apply(Ev("UserPromptSubmit", source: "registry", plusSeconds: 90));
+        Assert.Equal(T0.AddSeconds(90), tracker.Sessions.Single().TurnStartedAt);
+    }
+
+    [Fact]
+    public void A_stop_that_waits_for_the_agents_keeps_the_turn_start()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 1));
+        tracker.Apply(Ev("Stop", message: "Workflow lanciato.", plusSeconds: 2));
+        Assert.Equal(T0, tracker.Sessions.Single().TurnStartedAt);
+
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 90));
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Equal(T0, s.TurnStartedAt);
     }
 
     [Fact]
