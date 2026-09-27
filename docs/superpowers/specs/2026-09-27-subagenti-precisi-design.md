@@ -2,7 +2,7 @@
 
 Data: 2026-09-27
 Estende: [2026-09-24-subagenti-sessioni-app-cloud-design.md](2026-09-24-subagenti-sessioni-app-cloud-design.md) §3.1
-Si implementa insieme a [2026-09-27-notifiche-app-design.md](2026-09-27-notifiche-app-design.md) (task 10 e 11 dello
+Si implementa insieme a [2026-09-27-notifiche-app-design.md](2026-09-27-notifiche-app-design.md) (task 10–13 dello
 stesso piano).
 
 ## 1. Misura
@@ -62,3 +62,45 @@ Fuori ambito (minori o storici): un agente ripreso con SendMessage dopo il suo `
 - `HookEventPumpTests`: agente con transcript terminato → chiuso al giro periodico, una volta sola, mai nel replay.
 - Verifica sul campo: lo stesso replay di §1 sul codice nuovo deve azzerare le cause 1 e 3 e ridurre la 2 al ritardo
   del giro periodico.
+
+## 4. Nomi degli agenti e figli di Codex (task 12 e 13)
+
+### 4.1 Misura (Codex, 26–27 settembre)
+
+Confronto tra i rollout dei figli (`~/.codex/sessions/**/rollout-*-<thread id>.jsonl`, eventi `task_started` /
+`task_complete` / `turn_aborted`) e gli hook della sessione padre:
+
+| # | Problema | Evidenza |
+|---|---|---|
+| C1 | Il notch mostra `AgentType`: "default" dagli hook di Codex, "codex-thread" dal fallback. Il nome vero sta nel `session_meta` del rollout del figlio: `agent_nickname` ("Harvey") e `agent_path` ("/root/oasis_brand"). Per Claude, `AgentType` vale "workflow-subagent"/"general-purpose" mentre `<transcript>/../agent-<id>.meta.json` ha una `description` leggibile ("write:B (tasks 3,6)"). | Harvey, Popper, Anscombe, Pasteur, Aquinas, Boole, Hypatia |
+| C2 | Un figlio di Codex e' un thread che riceve piu' turni: un solo `SubagentStart`, un `SubagentStop` per turno (e non sempre: il turno di Anscombe chiuso alle 11:21:17 non ne ha). Dopo il primo `SubagentStop` il tracker lo tiene finito anche mentre lavora ai turni successivi, e il fallback dei rollout e' spento per 6 h (`CodexHookGrace`) nelle sessioni i cui hook riportano subagenti. | Harvey: 8 turni 18:39–00:38, una sola Start |
+| C3 | I thread "guardian" di Codex (`thread_source: "guardian_review"`, `source.subagent.other: "guardian"`) hanno `parent_thread_id` del padre e turni da 3–4 s a raffica: il fallback li conterebbe come subagenti. Solo i figli con `source.subagent.thread_spawn` sono subagenti. | 9 thread guardian in una sessione |
+
+`meta.json` di Claude riporta anche `stoppedByUser: true` per un agente fermato dall'utente.
+
+### 4.2 Soluzione
+
+- **Nome (task 12).** `SubagentState` guadagna `string? Name`. Il pump lo risolve nel giro periodico dei token, una volta
+  per agente (poi resta): Claude → `description` di `agent-<id>.meta.json` accanto al transcript dell'agente; Codex →
+  `agent_nickname` e l'ultimo segmento di `agent_path` ("Harvey · oasis_brand", solo uno dei due se l'altro manca). La riga
+  dell'agente nel notch mostra `Name`, poi `AgentType`, poi l'id corto; il tooltip mostra anche il tipo. Nomi tagliati
+  a 60 caratteri; nessun nome nei log.
+- **Stato dei figli di Codex (task 13).** Per ogni figlio noto di una sessione Codex, anche quando gli hook riportano
+  subagenti, lo scanner legge la coda del rollout del figlio: ultimo evento di turno `task_started` → in esecuzione,
+  `task_complete`/`turn_aborted` → finito. Il pump applica come eventi live un `SubagentStart` sintetico quando un figlio
+  finito ha un `task_started` piu' recente della sua fine, e un `SubagentStop` sintetico quando un figlio in esecuzione ha
+  chiuso il turno senza che l'hook lo dicesse. Gli hook restano il segnale rapido; il rollout decide lo stato. Il
+  fallback per le sessioni senza hook resta com'e'.
+- **Guardian esclusi (task 13).** Lo scanner considera figlio solo un rollout con `source.subagent.thread_spawn`
+  (o, per i rollout vecchi senza `source`, senza `thread_source` diverso da `subagent`); `guardian_review` e ogni
+  `source.subagent.other` sono ignorati.
+- **Fermato dall'utente (task 11).** `SubagentTranscriptEnd.IsTerminated` considera terminato anche un agente il cui
+  `agent-<id>.meta.json` ha `stoppedByUser: true`.
+
+### 4.3 Test
+
+- Nomi: `meta.json` con e senza `description`, file assente o corrotto; rollout Codex con nickname e path, solo uno dei
+  due, nessuno; il nome resta dopo essere stato risolto; la riga del notch usa Name → AgentType → id.
+- Codex: figlio con 3 turni (Start, Stop, nuovo `task_started` → di nuovo in esecuzione, `task_complete` senza hook →
+  finito); turno chiuso senza `SubagentStop`; guardian ignorati (scanner e riconciliazione); rollout vecchio senza
+  `source`; nessun evento sintetico nel replay.
