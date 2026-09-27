@@ -379,7 +379,8 @@ public sealed class HookEventPump : IDisposable
     /// <summary>
     /// Turns the live child threads of every Codex session into SubagentStart/SubagentStop events, so the counter,
     /// the deferred Idle and the timeout live in the tracker alone. Only the children this pump announced are ever
-    /// stopped here: a child reported by a real Codex hook stays under the hook's control.
+    /// stopped by the fallback; the children the hooks report follow the turns of their own rollouts
+    /// (<see cref="FollowKnownChildren"/>), on the live scans only.
     /// </summary>
     private void SyncCodexSubagents(bool silent)
     {
@@ -400,10 +401,12 @@ public sealed class HookEventPump : IDisposable
         foreach (var session in sessions)
         {
             // Two producers for one child would double it: the fallback stands down for a session whose hooks report
-            // subagents (and for all of them when the setting is off), releasing whatever it had announced.
+            // subagents (and for all of them when the setting is off), releasing whatever it had announced. The
+            // children the session knows are then followed turn by turn from their own rollouts.
             if (!enabled || HooksReportSubagents(session.SessionId, now))
             {
                 ReleaseSynthesisedChildren(session, now, silent);
+                if (!silent) FollowKnownChildren(session.SessionId, followSynthesised: enabled);
                 continue;
             }
 
@@ -534,6 +537,49 @@ public sealed class HookEventPump : IDisposable
         if (silent) _tracker.ApplySilently(events);
         else foreach (var e in events) ApplyTracked(e);
     }
+
+    /// <summary>
+    /// Follows, turn by turn, the Codex children a session already knows (reported by its hooks, or announced by the
+    /// fallback before the hooks took over) from the newest turn event of each child's own rollout. A child is a
+    /// thread that receives many turns, and Codex sends one SubagentStart for its whole life and a SubagentStop at the
+    /// end of most, not all, of its turns: the hooks alone would keep it finished while it works on its next turn, and
+    /// running after a turn whose stop never came. The hooks stay the fast signal and the rollout decides: a finished
+    /// child whose newest turn started after its end is started again, a running child whose newest turn is over is
+    /// stopped. A child without a readable rollout, or whose rollout is not a spawned child (a guardian thread), is
+    /// left to the hooks. Live scans only: the startup replay must not read today's rollouts into history.
+    /// </summary>
+    /// <param name="followSynthesised">
+    /// False while the fallback setting is off: a child only the rollouts ever reported is not brought back.
+    /// </param>
+    private void FollowKnownChildren(string sessionId, bool followSynthesised)
+    {
+        var session = _tracker.Sessions.FirstOrDefault(s => s.Agent == AgentKind.Codex && s.SessionId == sessionId);
+        if (session?.Subagents is not { Count: > 0 } known) return;
+        var now = _clock.UtcNow;
+        var events = new List<HookEvent>();
+        foreach (var child in known)
+        {
+            if (!followSynthesised && child.AgentType == CodexSubagentScanner.SyntheticAgentType) continue;
+            if (CodexSubagents!.ChildInfo(child.AgentId) is not { StateAt: { } at } info) continue;
+            // Strictly newer than the end, with no tolerance: the next turn can start 0.3 s after the hook's
+            // SubagentStop (measured), while the task_started of the turn that stop closed is minutes older.
+            if (child.Phase == SubagentPhase.Done && info.State == CodexTurnState.Running && at > (child.EndedAt ?? child.StartedAt))
+                // Stamped with the scan, like the fallback's announcements: the proof of life the timeout sweep reads
+                // must be fresh, or a turn found running long after it began would be released at the next sweep.
+                events.Add(RolloutChildEvent("SubagentStart", session, child, now));
+            else if (child.Phase == SubagentPhase.Running && info.State == CodexTurnState.Finished)
+                // Stamped with the end of the turn (never before the child started, never in the future): the row
+                // shows how long the turn really took, and a task_started written right after it is newer than it.
+                events.Add(RolloutChildEvent("SubagentStop", session, child, at < child.StartedAt ? child.StartedAt : at > now ? now : at));
+        }
+        // ApplyTracked, as for the fallback: the stop of the last child may end the session's turn, and the totals must
+        // be read before the row stops being refreshed.
+        foreach (var e in events) ApplyTracked(e);
+    }
+
+    /// <summary>The SubagentStart/SubagentStop a child's rollout implies: its own id and type, source "rollout".</summary>
+    private static HookEvent RolloutChildEvent(string name, SessionState session, SubagentState child, DateTimeOffset ts) =>
+        new(ts, session.Agent, name, session.SessionId, session.Cwd, null, null, "rollout", child.AgentId, child.AgentType);
 
     private static bool IsRunning(SessionState session, string agentId) =>
         session.Subagents?.Any(s => s.AgentId == agentId && s.Phase == SubagentPhase.Running) ?? false;
