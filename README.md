@@ -162,8 +162,16 @@ The agents don't expose their state, so the app reads it from their hooks.
    later) also lists the background agents and workflows still in flight: an agent missing from that list has
    finished even if its `SubagentStop` never arrived (interrupted, killed), an agent in the list the app never saw
    start is added, and a background workflow between two phases keeps the session "al lavoro" instead of showing
-   "Finito" at every phase. An agent that sends no event for 30 minutes is considered finished only if its
-   transcript has not been written in that time either.
+   "Finito" at every phase. The list names a workflow but never its agents, so a workflow agent (type
+   `workflow-subagent`, or a transcript under `subagents/workflows/`) keeps running while a workflow is in flight
+   and ends when the list has no workflow left. An agent whose transcript ends with an interruption
+   (`[Request interrupted by user…]`) or an API error (the session limit), or whose `agent-<id>.meta.json` says the
+   user stopped it, is closed within 30 seconds even without its `SubagentStop`. The 30-minute inactivity rule is
+   applied to each agent on its own: an agent whose transcript has not been written for 30 minutes is finished even
+   while other agents of the same session keep working, and an agent with no known transcript is released only when
+   its session has heard from no agent for that long. Codex children follow their own rollouts across all their
+   turns (`task_started` → working, `task_complete` or `turn_aborted` → done), even when the hooks miss the end or
+   the restart of a turn; the guardian threads Codex runs to review a session are not agents and are ignored.
 5. **Closed terminals.** Closing a terminal kills the agent before it can fire `SessionEnd`. The app ties every
    session to the process of its agent (from the process walk of the hook and from Claude Code's own session
    registry, with the process creation time so a recycled pid is never mistaken for it) and ends the session when
@@ -187,8 +195,12 @@ thread's cumulative total, counts restarts from zero in full (Codex resets the t
 new task) and leaves out the history a forked subagent copies from its parent, which is already counted on the
 parent. So each row's tokens are exactly the ones whose cost the row shows.
 
-The expandable workflow list shows only agents that are **still running**, with the model read from their
-transcript and their input and output tokens. Finished agents leave the list and the running summary. Until the
+The expandable workflow list shows only agents that are **still running**. Each row shows the name the agent was
+started with: the `description` Claude Code writes in the agent's `agent-<id>.meta.json` ("write:B (tasks 3,6)"),
+or a Codex child's nickname and the last segment of its agent path ("Noether · login_audit"). Without a name the
+row shows the agent type, then a short id; the tooltip adds the type under the name. Names are read within 30
+seconds of the start, cut to 60 characters, and never logged. Each row also has the model read from the agent's
+transcript and its input and output tokens. Finished agents leave the list and the running summary. Until the
 model or the tokens are known the row says "in attesa" (pending).
 
 </details>
