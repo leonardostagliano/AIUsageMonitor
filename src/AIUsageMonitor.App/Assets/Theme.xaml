@@ -89,6 +89,10 @@
     <GradientStop Offset="1" Color="#0010A37F"/>
   </RadialGradientBrush>
 
+  <!-- Ombra delle card delle notifiche (spec 2026-09-27, sezione 5.2): nera; sfocatura (24) e opacita' (0,45) le
+       decide il DropShadowEffect. ThemePaletteTests la fissa. -->
+  <Color x:Key="ShadowColor">#FF000000</Color>
+
   <!-- Caratteri: Display per numeri grandi e titoli, Text per il resto; Segoe UI su Windows 10. -->
   <FontFamily x:Key="DisplayFont">Segoe UI Variable Display, Segoe UI</FontFamily>
   <FontFamily x:Key="TextFont">Segoe UI Variable Text, Segoe UI</FontFamily>

@@ -23,6 +23,7 @@ public class ColorContrastTests
     [InlineData("#FCD34D", "#1B1B21")]   // warning text
     [InlineData("#86EFAC", "#1B1B21")]   // working text
     [InlineData("#FCA5A5", "#1B1B21")]   // error text
+    [InlineData("#7AA2F7", "#1B1B21")]   // Focus: "Domanda" on a notification card
     public void Palette_pairs_meet_aa(string fg, string bg) =>
         Assert.True(ColorContrast.Ratio(fg, bg) >= 4.5, $"{fg} on {bg} = {ColorContrast.Ratio(fg, bg):0.00}");
 
@@ -43,6 +44,11 @@ public class ColorContrastTests
     [Fact]
     public void Disabled_text_meets_3_to_1() =>
         Assert.True(ColorContrast.Ratio("#71717A", "#26262E") >= 3.0);
+
+    // TextMuted on Card: l'eta' ("ora", "2 min") delle card delle notifiche, testo da 11 px.
+    [Fact]
+    public void Muted_text_on_a_card_meets_4_5_to_1() =>
+        Assert.True(ColorContrast.Ratio("#A1A1AA", "#1B1B21") >= 4.5);
 
     // WCAG 1.4.11: l'interruttore si riconosce dal pomello bianco (spento) e dalla traccia verde (acceso).
     [Theory]
