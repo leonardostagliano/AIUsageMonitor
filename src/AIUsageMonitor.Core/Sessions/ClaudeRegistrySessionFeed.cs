@@ -21,8 +21,8 @@ public sealed record ClaudeRegistrySync(IReadOnlyList<HookEvent> Events, IReadOn
 /// </summary>
 /// <remarks>
 /// A session any hook event has spoken for is left to the hooks: they carry more (messages, subagents, the host), and
-/// two producers would toast twice; its record only fills in the two changes no hook reports, a permission granted and
-/// a turn that starts without a prompt (and the end of that turn when no hook ever spoke for it). A new record is
+/// two producers would toast twice; its record only fills in the changes no hook reports, a permission granted or
+/// denied and a turn that starts without a prompt (and the end of that turn when no hook ever spoke for it). A new record is
 /// adopted only after <see cref="AdoptAfter"/>, so a CLI session gets the time to send its own SessionStart first. A
 /// record whose pid is dead, or was recycled (the live process with that pid was created after the record was written),
 /// is stale and ignored.
@@ -135,8 +135,8 @@ public sealed class ClaudeRegistrySessionFeed
     }
 
     /// <summary>
-    /// What the record of a session the hooks report adds to them, or null: the two changes no hook reports (a
-    /// permission granted, a turn that starts without a prompt) and the end of such a turn when no hook spoke for it.
+    /// What the record of a session the hooks report adds to them, or null: the changes no hook reports (a permission
+    /// granted or denied, a turn that starts without a prompt) and the end of such a turn when no hook spoke for it.
     /// </summary>
     private HookEvent? FillIn(string sessionId, ClaudeSessionRecord record, string status, SessionState? state, DateTimeOffset now)
     {
@@ -159,6 +159,7 @@ public sealed class ClaudeRegistrySessionFeed
             // A hook spoke since, or the turn is over: it is the hooks' to report again.
             _resumedAt.Remove(sessionId);
         }
+        if (WaitEnded(sessionId, record, state, now) is { } ended) return ended;
         if (status is not ("busy" or "shell") || record.StatusUpdatedAt is not { } busySince) return null;
 
         // Granting a permission fires no hook: the session would read "attende input" until the end of the turn, even
@@ -180,6 +181,31 @@ public sealed class ClaudeRegistrySessionFeed
                 null, null, null, "registry");
         }
         return null;
+    }
+
+    /// <summary>
+    /// The end of a wait no hook reports, or null. Denying a permission (No, Esc) or dismissing a question or a plan is
+    /// an interrupt: Claude Code sends no Stop for it, and seldom an idle_prompt, so the session would ask for a
+    /// permission already refused until the next prompt. Its record reads "idle" once the dialog is gone. Only an idle
+    /// written after the wait began counts, and only once it is <see cref="AdoptAfter"/> old, so the hooks of a turn
+    /// that really ends get to report it first. The event is Quiet: the card of the wait is retired, nothing is
+    /// announced. Without work in flight the turn is over (Stop, and the next prompt starts a turn of its own); with
+    /// agents or a workflow still at work the session goes back to them (PostToolUse), and a turn already waiting for
+    /// them still ends with their end.
+    /// </summary>
+    private HookEvent? WaitEnded(string sessionId, ClaudeSessionRecord record, SessionState state, DateTimeOffset now)
+    {
+        // The raw status: one this feed does not know (Normalize reads it as idle) says nothing about the dialog.
+        if (state.Phase != SessionPhase.NeedsInput || record.Status != "idle" || record.StatusUpdatedAt is not { } idleSince
+            || state.WaitingSince is not { } waiting || idleSince <= waiting.ToUnixTimeMilliseconds())
+            return null;
+        var idleAt = DateTimeOffset.FromUnixTimeMilliseconds(idleSince);
+        if (now - idleAt < AdoptAfter) return null;
+        var inFlight = state.ActiveSubagents > 0 || state.PendingWorkflows > 0;
+        // Never before what the session already heard: its clocks only move forward.
+        var at = idleAt > state.LastEventAt ? idleAt : state.LastEventAt;
+        return new HookEvent(at, AgentKind.Claude, inFlight ? "PostToolUse" : "Stop", sessionId, null, null, null, "registry",
+            Quiet: true);
     }
 
     private HookEvent Start(ClaudeSessionRecord record, DateTimeOffset now) =>

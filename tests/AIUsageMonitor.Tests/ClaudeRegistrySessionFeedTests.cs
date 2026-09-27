@@ -2,7 +2,9 @@ using System.Text.Json;
 using AIUsageMonitor.Core.Hooks;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
 using AIUsageMonitor.Core.Sessions;
+using AIUsageMonitor.Core.Settings;
 using AIUsageMonitor.Tests.Helpers;
 
 namespace AIUsageMonitor.Tests;
@@ -254,6 +256,80 @@ public class ClaudeRegistrySessionFeedTests
         Status("busy", 410);
         Assert.Empty(SyncAt(430).Events);
         Assert.Equal(SessionPhase.Error, rig.Tracker.Sessions.Single().Phase);
+    }
+
+    /// <summary>
+    /// Denying a permission (No, Esc) or dismissing a question or a plan is an interrupt: no hook reports it, not even
+    /// Stop. The record going idle after the wait began, and staying so for <see cref="ClaudeRegistrySessionFeed.AdoptAfter"/>,
+    /// says the wait is over: the session leaves NeedsInput silently and its card is retired, never turned into "Finito".
+    /// </summary>
+    [Fact]
+    public void A_hook_session_whose_wait_is_denied_leaves_it_when_its_record_goes_idle()
+    {
+        using var rig = new Rig();
+        rig.Probe.Start(10, FileTime(T0.AddMinutes(-6)));
+        rig.HookOwned.Add("h1");
+        var changes = new List<SessionChange>();
+        rig.Tracker.Changed += changes.Add;
+        HookEvent Hook(string evt, double plusSeconds, string? notificationType = null, string? agentId = null) =>
+            new(T0.AddSeconds(plusSeconds), AgentKind.Claude, evt, "h1", @"C:\p\demo", notificationType, null, null, agentId,
+                agentId is null ? null : "general-purpose");
+        void Status(string status, double plusSeconds) =>
+            Record(rig.Sessions, 10, "h1", status, T0.AddMinutes(-5), entrypoint: "cli", statusAt: T0.AddSeconds(plusSeconds));
+        ClaudeRegistrySync SyncAt(double plusSeconds)
+        {
+            rig.Clock.UtcNow = T0.AddSeconds(plusSeconds);
+            return rig.Sync();
+        }
+        var retire = new RetireIntent(NotificationComposer.SessionKey(AgentKind.Claude, "h1"));
+
+        rig.Tracker.Apply(Hook("UserPromptSubmit", 0));
+        rig.Tracker.Apply(Hook("Notification", 10, "permission_prompt"));
+        // An idle written before the wait began, or a status this feed does not know, says nothing.
+        Status("idle", 8);
+        Assert.Empty(SyncAt(30).Events);
+        Status("compacting", 20);
+        Assert.Empty(SyncAt(40).Events);
+        Status("waiting", 41);
+        Assert.Empty(SyncAt(45).Events);
+
+        // Denied: the record goes idle and no hook follows. The hooks get their time first, then the wait is over.
+        Status("idle", 50);
+        Assert.Empty(SyncAt(55).Events);
+        var denied = Assert.Single(SyncAt(58).Events);
+        Assert.Equal(("Stop", "registry", true), (denied.Event, denied.Source, denied.Quiet));
+        var s = rig.Tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Null(s.WaitingSince);
+        var closed = changes.Last();
+        Assert.Equal((SessionPhase.NeedsInput, true), (closed.PreviousPhase!.Value, closed.Silent));
+        Assert.Equal(retire, NotificationComposer.Compose(closed, new AppSettings()));
+        Assert.Empty(SyncAt(70).Events);                           // once
+
+        // The next prompt is a turn of its own.
+        Status("busy", 80);
+        rig.Tracker.Apply(Hook("UserPromptSubmit", 80.5));
+        Assert.Empty(SyncAt(90).Events);
+        Assert.Equal(T0.AddSeconds(80.5), rig.Tracker.Sessions.Single().TurnStartedAt);
+
+        // The turn ends waiting for its agent, and the agent asks for a permission. Answered, the record reads idle again
+        // (the main agent has nothing to do): back to waiting for the agent, whose end is the end of the turn.
+        rig.Tracker.Apply(Hook("SubagentStart", 85, agentId: "a1"));
+        rig.Tracker.Apply(Hook("Stop", 100));
+        Status("idle", 100.2);
+        Assert.Empty(SyncAt(110).Events);
+        Status("waiting", 118);
+        rig.Tracker.Apply(Hook("Notification", 120, "permission_prompt"));
+        Status("idle", 140);
+        var answered = Assert.Single(SyncAt(150).Events);
+        Assert.Equal(("PostToolUse", "registry", true), (answered.Event, answered.Source, answered.Quiet));
+        s = rig.Tracker.Sessions.Single();
+        Assert.Equal((SessionPhase.Working, 1, true), (s.Phase, s.ActiveSubagents, s.AwaitingSubagents));
+        Assert.Equal(retire, NotificationComposer.Compose(changes.Last(), new AppSettings()));
+        Assert.Empty(SyncAt(160).Events);
+        rig.Tracker.Apply(Hook("SubagentStop", 200, agentId: "a1"));
+        Assert.Equal(SessionPhase.Idle, rig.Tracker.Sessions.Single().Phase);
+        Assert.IsType<ShowIntent>(NotificationComposer.Compose(changes.Last(), new AppSettings()));
     }
 
     [Fact]
