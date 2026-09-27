@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using AIUsageMonitor.Core.Infrastructure;
 using AIUsageMonitor.Core.Models;
+using AIUsageMonitor.Core.Notifications;
 using AIUsageMonitor.Core.Sessions;
 
 namespace AIUsageMonitor.Core.Hooks;
@@ -122,6 +123,13 @@ public sealed class HookEventPump : IDisposable
     /// is done; it comes back with its next event. Swept at the <see cref="LivenessSweepEvery"/> cadence.
     /// </summary>
     public TimeSpan AppIdleWindow { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Tells what a live attention notification of Claude Code waits for (the tool_use pending in its transcript or in
+    /// one of its agents'), so the event reaches the tracker with its <see cref="HookEvent.Attention"/>. Only the live
+    /// paths use it: the silent replay and the other silent applies never read a transcript. Null disables it.
+    /// </summary>
+    public AttentionResolver? Attention { get; init; }
 
     /// <summary>Where unexpected failures go (the App wires a FileLogger): the pump never lets one escape a thread-pool callback.</summary>
     public Action<Exception>? OnError { get; init; }
@@ -317,16 +325,29 @@ public sealed class HookEventPump : IDisposable
     }
 
     /// <summary>
-    /// Applies one event and, when it is the end of a turn or of a subagent, reads the token totals right away: those
-    /// sessions leave the Working/NeedsInput set the periodic refresh visits, so this is the last chance to record
-    /// what the turn really cost before the row goes quiet.
+    /// Applies one live event and, when it is the end of a turn or of a subagent, reads the token totals right away:
+    /// those sessions leave the Working/NeedsInput set the periodic refresh visits, so this is the last chance to
+    /// record what the turn really cost before the row goes quiet. An attention notification first gets the detail of
+    /// its wait from <see cref="Attention"/>.
     /// </summary>
     private void ApplyTracked(HookEvent ev)
     {
+        ev = WithAttention(ev);
         _tracker.Apply(ev);
         if (TokenSource is null || ev.Event is not ("Stop" or "StopFailure" or "SubagentStop")) return;
         var session = _tracker.Sessions.FirstOrDefault(s => s.Agent == ev.Agent && s.SessionId == ev.SessionId);
         if (session is not null) RefreshTokens(session);
+    }
+
+    /// <summary>
+    /// The event with the detail of its wait when it is an attention notification and a resolver is wired; the event
+    /// itself otherwise. The tracked session (before this event) is looked up for a Notification only.
+    /// </summary>
+    private HookEvent WithAttention(HookEvent ev)
+    {
+        if (Attention is null || ev.Event != "Notification") return ev;
+        var session = _tracker.Sessions.FirstOrDefault(s => s.Agent == ev.Agent && s.SessionId == ev.SessionId);
+        return Attention.Resolve(ev, session) is { } detail ? ev with { Attention = detail } : ev;
     }
 
     /// <summary>
