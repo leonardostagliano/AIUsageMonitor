@@ -44,6 +44,21 @@ public static class NotchPresentation
 
     public static PhaseTone ToneOf(SubagentPhase phase) => phase == SubagentPhase.Running ? PhaseTone.Working : PhaseTone.Idle;
 
+    /// <summary>
+    /// What a subagent row says: the name the agent was started with, else its type ("workflow-subagent",
+    /// "codex-thread"…), else the first 8 characters of its id.
+    /// </summary>
+    public static string SubagentTitle(SubagentState agent) =>
+        !string.IsNullOrWhiteSpace(agent.Name) ? agent.Name
+        : !string.IsNullOrWhiteSpace(agent.AgentType) ? agent.AgentType
+        : agent.AgentId.Length <= 8 ? agent.AgentId : agent.AgentId[..8];
+
+    /// <summary>The tooltip of a subagent row: its title, and on a second line its type when the title is its name.</summary>
+    public static string SubagentTooltip(SubagentState agent) =>
+        !string.IsNullOrWhiteSpace(agent.Name) && !string.IsNullOrWhiteSpace(agent.AgentType)
+            ? $"{agent.Name}\n{agent.AgentType}"
+            : SubagentTitle(agent);
+
     /// <summary>The first window of the snapshot is shown large; the others become bars, in their order.</summary>
     public static (UsageWindow? Hero, IReadOnlyList<UsageWindow> Others) SplitWindows(IReadOnlyList<UsageWindow> windows) =>
         windows.Count == 0 ? (null, []) : (windows[0], windows.Skip(1).ToList());

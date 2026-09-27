@@ -588,6 +588,39 @@ public sealed class SessionTracker
     }
 
     /// <summary>
+    /// Gives the subagents of a session, by agent id, the name the pump read for them. A name is set once: an agent
+    /// that already has one keeps it, and every later event keeps it too (the subagent records are only ever copied
+    /// with <c>with</c>). Blank names and ids the session does not know are ignored. Changed fires once, as
+    /// <see cref="SessionChangeKind.Updated"/> with the current phase as the previous one, only when a name was set;
+    /// null when nothing changed or the session is unknown. Like a token refresh, it is not session activity:
+    /// LastEventAt stays.
+    /// </summary>
+    public SessionChange? UpdateSubagentNames(AgentKind agent, string sessionId, IReadOnlyDictionary<string, string> names)
+    {
+        SessionChange? change;
+        lock (_gate) change = UpdateSubagentNamesCore(agent, sessionId, names);
+        if (change is not null) Raise(change);
+        return change;
+    }
+
+    private SessionChange? UpdateSubagentNamesCore(AgentKind agent, string sessionId, IReadOnlyDictionary<string, string> names)
+    {
+        var key = (agent, sessionId);
+        if (names.Count == 0 || !_sessions.TryGetValue(key, out var session) || session.Subagents is not { Count: > 0 } known) return null;
+        List<SubagentState>? updatedList = null;
+        for (var i = 0; i < known.Count; i++)
+        {
+            if (known[i].Name is not null || !names.TryGetValue(known[i].AgentId, out var name) || string.IsNullOrWhiteSpace(name)) continue;
+            updatedList ??= [.. known];
+            updatedList[i] = known[i] with { Name = name };
+        }
+        if (updatedList is null) return null;
+        var updated = session with { Subagents = updatedList };
+        _sessions[key] = updated;
+        return new SessionChange(SessionChangeKind.Updated, updated, session.Phase);
+    }
+
+    /// <summary>
     /// Marks Done the running subagents that showed no sign of life for <paramref name="timeout"/>, so a subagent that
     /// died without a SubagentStop cannot pin its session to "al lavoro" forever.
     /// </summary>
