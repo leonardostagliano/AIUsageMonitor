@@ -133,6 +133,34 @@ public class NotificationPlacementTests
         Assert.Equal(dip.Top * scale, px.Top, 6);
     }
 
+    // The shadow is faint but not transparent out to the window edge, and a layered window takes the mouse wherever
+    // its alpha is not zero: the host clips what sticks out of the work area, so nothing lands on the next monitor.
+    [Theory]
+    [InlineData(42, 0)]     // tab
+    [InlineData(34, 0)]     // compact tab
+    [InlineData(320, 0)]    // panel open
+    [InlineData(0, 8)]      // notch hidden: the outer half of the shadow margin
+    public void Only_a_hidden_notch_lets_the_window_stick_out_of_the_work_area(double insetDip, double expected)
+    {
+        var anchor = FullHd(insetDip: insetDip);
+        var (left, _) = NotificationPlacement.Compute(anchor, Width, Height, Margin);
+
+        Assert.Equal(expected, NotificationPlacement.RightOverhang(anchor, left, Width), 6);
+    }
+
+    [Fact]
+    public void The_overhang_follows_the_physical_pixel_convention()
+    {
+        // Monitor left of the primary one at 125 %, notch hidden.
+        var anchor = new NotchAnchor(-1920, -300, 1920, 1040, 1.25, 220, 0);
+        var (leftDip, _) = NotificationPlacement.Compute(anchor, Width, Height, Margin);
+        Assert.Equal(8, NotificationPlacement.RightOverhang(anchor, leftDip, Width), 6);
+
+        var px = anchor with { DpiScale = 1.0 };
+        var (leftPx, _) = NotificationPlacement.Compute(px, Width * 1.25, Height * 1.25, Margin * 1.25, NotificationPlacement.GapDip * 1.25);
+        Assert.Equal(8 * 1.25, NotificationPlacement.RightOverhang(px, leftPx, Width * 1.25), 6);
+    }
+
     [Fact]
     public void A_non_positive_scale_counts_as_100_percent()
     {

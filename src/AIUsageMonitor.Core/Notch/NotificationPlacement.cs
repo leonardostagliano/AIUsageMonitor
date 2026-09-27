@@ -37,4 +37,17 @@ public static class NotificationPlacement
         var maxTop = Math.Max(top, top + height - windowHeightDip);
         return (left, Math.Clamp(centered, top, maxTop));
     }
+
+    /// <summary>
+    /// How far a window at <paramref name="windowLeft"/>, <paramref name="windowWidth"/> wide, sticks out past the right
+    /// edge of the work area; 0 when it does not. Only the transparent shadow margin can (notch hidden), and the host
+    /// clips that part: the shadow is faint but not transparent out to the window edge, and a layered window takes the
+    /// mouse wherever its alpha is not zero, so it would swallow clicks on the next monitor or on a taskbar at the
+    /// right. Same units as <see cref="Compute"/>: DIP, or pixels with the anchor at <c>DpiScale = 1</c>.
+    /// </summary>
+    public static double RightOverhang(NotchAnchor anchor, double windowLeft, double windowWidth)
+    {
+        var scale = anchor.DpiScale > 0 ? anchor.DpiScale : 1;
+        return Math.Max(0, windowLeft + windowWidth - (anchor.AreaLeftPx + anchor.AreaWidthPx) / scale);
+    }
 }
