@@ -57,6 +57,19 @@ public class NotificationPlacementTests
     }
 
     [Fact]
+    public void The_stack_centres_on_the_tab_NotchWindow_publishes_at_150_percent_with_an_offset()
+    {
+        // Notch 320x300 DIP moved down by 120 DIP on a 3840x2088 px work area at 150 %: the anchor carries the centre
+        // NotchWindow computes, and the stack must end up centred on the notch NotchPlacement places, in DIP.
+        var (_, notchTopDip) = NotchPlacement.Compute(0, 0, 3840, 2088, 1.5, 320, 300, 120);
+        var anchor = new NotchAnchor(0, 0, 3840, 2088, 1.5, NotchPlacement.CenterYPx(0, 0, 3840, 2088, 1.5, 300, 120), 42);
+
+        var (_, top) = NotificationPlacement.Compute(anchor, Width, 136, Margin);
+
+        Assert.Equal(notchTopDip + 300 / 2.0, top + 136 / 2.0, 6);
+    }
+
+    [Fact]
     public void The_window_is_clamped_inside_the_work_area()
     {
         Assert.Equal(0, NotificationPlacement.Compute(FullHd(50), Width, Height, Margin).Top, 6);
