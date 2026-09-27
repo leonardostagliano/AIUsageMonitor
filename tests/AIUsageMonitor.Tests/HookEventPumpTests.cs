@@ -1147,6 +1147,304 @@ public class HookEventPumpTests
             tracker.Sessions.Single(s => s.SessionId == "cse_live").Attention);
     }
 
+    /// <summary>A Claude hook event of session "s1", as the pump receives it.</summary>
+    private static HookEvent ClaudeAgentEvent(string evt, DateTimeOffset ts, string? agentId = null, string? transcriptPath = null,
+        IReadOnlyList<BackgroundTask>? tasks = null, string? message = null, AgentKind agent = AgentKind.Claude) =>
+        new(ts, agent, evt, "s1", @"C:\demo\proj", null, message, null, agentId, agentId is null ? null : "general-purpose",
+            transcriptPath, BackgroundTasks: tasks);
+
+    /// <summary>The same event as an events.jsonl line written by hook.cjs.</summary>
+    private static string ClaudeAgentLine(string evt, DateTimeOffset ts, string? agentId = null, string? transcriptPath = null) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["ts"] = ts.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
+            ["agent"] = "claude",
+            ["event"] = evt,
+            ["session_id"] = "s1",
+            ["cwd"] = @"C:\demo\proj",
+            ["transcript_path"] = transcriptPath,
+            ["agent_id"] = agentId,
+            ["agent_type"] = agentId is null ? null : "general-purpose"
+        }) + "\n";
+
+    /// <summary>
+    /// The transcript of session "s1" and, under its subagents folder, one transcript per agent: where the locator
+    /// finds an agent still running (only its SubagentStop would carry the path).
+    /// </summary>
+    private sealed class AgentTranscripts
+    {
+        private readonly TempDir _dir;
+
+        public AgentTranscripts(TempDir dir)
+        {
+            _dir = dir;
+            Session = dir.File(Path.Combine("projects", "proj", "s1.jsonl"), TranscriptLines.Jsonl(TranscriptLines.Prompt("lancia gli agenti", 0)));
+        }
+
+        public string Session { get; }
+
+        public string Agent(string agentId, params string[] lines) =>
+            _dir.File(Path.Combine("projects", "proj", "s1", "subagents", $"agent-{agentId}.jsonl"), TranscriptLines.Jsonl(lines));
+
+        /// <summary>The transcript of an agent run by the workflow <paramref name="workflowId"/>, in the folder Claude Code gives it.</summary>
+        public string WorkflowAgent(string workflowId, string agentId, params string[] lines) =>
+            _dir.File(Path.Combine("projects", "proj", "s1", "subagents", "workflows", workflowId, $"agent-{agentId}.jsonl"), TranscriptLines.Jsonl(lines));
+
+        public static string[] AtWork(string toolUseId) =>
+            [TranscriptLines.ToolUse("m-" + toolUseId, toolUseId, "Bash", new { command = "npm test" }, 1), TranscriptLines.Result(toolUseId, 2)];
+
+        public static string[] Interrupted(string toolUseId) =>
+            [.. AtWork(toolUseId), TranscriptLines.PromptBlocks("[Request interrupted by user]", 3)];
+    }
+
+    [Fact]
+    public void Agents_whose_transcript_says_they_are_over_are_closed_at_the_periodic_pass()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        var dead = transcripts.Agent("dead", AgentTranscripts.Interrupted("t1"));
+        var busy = transcripts.Agent("busy", AgentTranscripts.AtWork("t2"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+        pump.Start();
+        pump.Inject([
+            ClaudeAgentEvent("UserPromptSubmit", now, transcriptPath: transcripts.Session),
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(1), "dead"),
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(2), "busy"),
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(3), "unseen"),     // no transcript on disk yet
+            ClaudeAgentEvent("Stop", now.AddSeconds(4), tasks: [new BackgroundTask("dead", BackgroundTask.SubagentType, "general-purpose"),
+                new BackgroundTask("busy", BackgroundTask.SubagentType, "general-purpose"),
+                new BackgroundTask("unseen", BackgroundTask.SubagentType, "general-purpose")], message: "Agenti lanciati."),
+            // A Codex agent is left to the Codex rules, whatever the file it names says.
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(5), "codex-child", agent: AgentKind.Codex) with { AgentTranscriptPath = dead }
+        ]);
+        pump.Pump();
+        Assert.Equal(3, tracker.Sessions.Single(s => s.Agent == AgentKind.Claude).ActiveSubagents);
+
+        // Between two periodic passes nothing is read.
+        clock.Advance(TimeSpan.FromSeconds(10));
+        pump.Pump();
+        Assert.Equal(3, tracker.Sessions.Single(s => s.Agent == AgentKind.Claude).ActiveSubagents);
+
+        changes.Clear();
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+
+        var s = tracker.Sessions.Single(x => x.Agent == AgentKind.Claude);
+        Assert.Equal(["busy", "unseen"], s.RunningSubagents.Select(a => a.AgentId));
+        var ended = s.Subagents!.Single(a => a.AgentId == "dead");
+        Assert.Equal(SubagentPhase.Done, ended.Phase);
+        Assert.Equal(clock.UtcNow, ended.EndedAt);
+        Assert.Equal(dead, ended.TranscriptPath);
+        Assert.Equal(SessionPhase.Working, s.Phase);
+        var change = Assert.Single(changes);                       // a live change, raised once
+        Assert.Equal(2, change.Session.ActiveSubagents);
+        Assert.False(change.Silent);                               // the agent was started while the app watched
+        Assert.Equal(1, tracker.Sessions.Single(x => x.Agent == AgentKind.Codex).ActiveSubagents);
+
+        // The API refuses the next request of "busy", and "unseen" was interrupted before writing its first result.
+        File.AppendAllText(busy, """{"type":"assistant","timestamp":"2026-09-27T12:00:40.000Z","message":{"id":"m9","role":"assistant","content":[{"type":"text","text":"Limite raggiunto"}]},"isApiErrorMessage":true}""" + "\n");
+        transcripts.Agent("unseen", TranscriptLines.Prompt("[Request interrupted by user for tool use]", 4));
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+
+        // The last agent of a session that waited for its agents ends the turn, like a SubagentStop would.
+        s = tracker.Sessions.Single(x => x.Agent == AgentKind.Claude);
+        Assert.Equal(0, s.ActiveSubagents);
+        Assert.Equal(SessionPhase.Idle, s.Phase);
+        Assert.Equal("Agenti lanciati.", s.Message);
+        var last = changes.Last(c => c.Session.Agent == AgentKind.Claude);
+        Assert.Equal(SessionPhase.Working, last.PreviousPhase);
+        Assert.False(last.Silent);
+        Assert.Equal(1, tracker.Sessions.Single(x => x.Agent == AgentKind.Codex).ActiveSubagents);
+    }
+
+    [Fact]
+    public void An_agent_is_closed_from_its_transcript_only_once()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        transcripts.Agent("a1", AgentTranscripts.Interrupted("t1"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+        pump.Start();
+        pump.Inject([
+            ClaudeAgentEvent("UserPromptSubmit", now, transcriptPath: transcripts.Session),
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(1), "a1")
+        ]);
+        pump.Pump();
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+        Assert.Equal(0, tracker.Sessions.Single().ActiveSubagents);
+
+        // The agent is brought back (resumed): its transcript still ends the same way until it writes again, and the
+        // pump does not close it a second time.
+        pump.Inject([ClaudeAgentEvent("SubagentStart", clock.UtcNow, "a1")]);
+        pump.Pump();
+        for (var i = 0; i < 3; i++)
+        {
+            clock.Advance(pump.TokenRefreshEvery);
+            pump.Pump();
+        }
+
+        Assert.Equal("a1", tracker.Sessions.Single().RunningSubagents.Single().AgentId);
+        Assert.Single(changes, c => c.Session.Subagents?.Any(a => a.AgentId == "a1" && a.Phase == SubagentPhase.Done) == true);
+    }
+
+    [Fact]
+    public void Nothing_is_closed_from_a_transcript_during_the_replay_of_start()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        transcripts.Agent("a1", AgentTranscripts.Interrupted("t1"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            ClaudeAgentLine("UserPromptSubmit", now.AddMinutes(-5), transcriptPath: transcripts.Session) +
+            ClaudeAgentLine("SubagentStart", now.AddMinutes(-4), "a1") +
+            ClaudeAgentLine("Stop", now.AddMinutes(-4).AddSeconds(5)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+
+        pump.Start();
+        pump.Pump();
+
+        // The replay restores the agent as its events left it, and the first pump is not a periodic pass.
+        var restored = tracker.Sessions.Single();
+        Assert.Equal(1, restored.ActiveSubagents);
+        Assert.Equal(SessionPhase.Working, restored.Phase);
+        Assert.Empty(changes);
+
+        // The first periodic pass looks at it like at any running agent, but the turn ended while the app was closed:
+        // the session changes without announcing it.
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+        var change = Assert.Single(changes);
+        Assert.Equal(SessionPhase.Idle, change.Session.Phase);
+        Assert.Equal(SessionPhase.Working, change.PreviousPhase);
+        Assert.True(change.Silent);
+    }
+
+    [Fact]
+    public void Only_the_agents_the_replay_restored_are_closed_quietly()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        transcripts.Agent("restored", AgentTranscripts.Interrupted("t1"));
+        transcripts.Agent("again", AgentTranscripts.Interrupted("t2"));
+        transcripts.Agent("live", AgentTranscripts.Interrupted("t3"));
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            ClaudeAgentLine("UserPromptSubmit", now.AddMinutes(-5), transcriptPath: transcripts.Session) +
+            ClaudeAgentLine("SubagentStart", now.AddMinutes(-4), "restored") +
+            ClaudeAgentLine("SubagentStart", now.AddMinutes(-4), "again") +
+            ClaudeAgentLine("Stop", now.AddMinutes(-4).AddSeconds(5)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+        pump.Start();
+
+        // While the app watches, "again" stops and runs once more, and "live" starts.
+        pump.Inject([
+            ClaudeAgentEvent("SubagentStop", now, "again"),
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(1), "again"),
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(2), "live")
+        ]);
+        pump.Pump();
+        Assert.Equal(3, tracker.Sessions.Single().ActiveSubagents);
+        changes.Clear();
+
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+
+        // Only the run the replay restored ended while the app was closed; the last agent, started live, ends the
+        // turn aloud.
+        Assert.Collection(changes,
+            c =>
+            {
+                Assert.True(c.Silent);
+                Assert.Equal(["again", "live"], c.Session.RunningSubagents.Select(a => a.AgentId));
+            },
+            c =>
+            {
+                Assert.False(c.Silent);
+                Assert.Equal(["live"], c.Session.RunningSubagents.Select(a => a.AgentId));
+            },
+            c =>
+            {
+                Assert.False(c.Silent);
+                Assert.Equal(SessionPhase.Idle, c.Session.Phase);
+                Assert.Equal(SessionPhase.Working, c.PreviousPhase);
+            });
+    }
+
+    [Fact]
+    public void The_periodic_pass_gives_running_agents_the_transcript_it_found_so_a_workflow_keeps_them()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        var workflowAgent = transcripts.WorkflowAgent("wf_1", "w1", AgentTranscripts.AtWork("t1"));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+        pump.Start();
+        // A workflow agent whose type does not say so: only its folder does.
+        pump.Inject([
+            ClaudeAgentEvent("UserPromptSubmit", now, transcriptPath: transcripts.Session),
+            ClaudeAgentEvent("SubagentStart", now.AddSeconds(1), "w1")
+        ]);
+        pump.Pump();
+        Assert.Null(tracker.Sessions.Single().RunningSubagents.Single().TranscriptPath);
+
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+        Assert.Equal(workflowAgent, tracker.Sessions.Single().RunningSubagents.Single().TranscriptPath);
+
+        // The main agent ends its turn naming the workflow, never its agents: the one known by its path keeps running.
+        pump.Inject([ClaudeAgentEvent("Stop", clock.UtcNow, tasks: [new BackgroundTask("wf_1", BackgroundTask.WorkflowType, Name: "review")],
+            message: "Workflow avviato.")]);
+        pump.Pump();
+
+        var s = tracker.Sessions.Single();
+        Assert.Equal("w1", s.RunningSubagents.Single().AgentId);
+        Assert.Equal(SessionPhase.Working, s.Phase);
+    }
+
     [Fact]
     public void Pump_does_not_fill_the_tokens_when_there_is_no_token_source()
     {
