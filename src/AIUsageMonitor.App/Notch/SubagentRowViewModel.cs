@@ -27,10 +27,14 @@ public sealed class SubagentRowViewModel : ObservableObject
 
     public string AgentId => _state.AgentId;
 
-    /// <summary>The agent type when the hook carried one ("workflow-subagent", "codex-thread", …), else a short id.</summary>
-    public string Name => string.IsNullOrWhiteSpace(_state.AgentType)
-        ? (_state.AgentId.Length <= 8 ? _state.AgentId : _state.AgentId[..8])
-        : _state.AgentType!;
+    /// <summary>
+    /// The name the agent was started with (a Claude agent's description, a Codex child's nickname and path), else the
+    /// agent type ("workflow-subagent", "codex-thread", …), else a short id.
+    /// </summary>
+    public string Name => NotchPresentation.SubagentTitle(_state);
+
+    /// <summary>The name, with the agent type on a second line when the row shows the name.</summary>
+    public string NameTooltip => NotchPresentation.SubagentTooltip(_state);
 
     public Brush ToneBrush => PhaseVisuals.ToneBrush(NotchPresentation.ToneOf(_state.Phase));
 
@@ -72,7 +76,7 @@ public sealed class SubagentRowViewModel : ObservableObject
     {
         _state = state;
         _pricing = pricing;
-        Raise(nameof(Name)); Raise(nameof(ToneBrush)); Raise(nameof(IsPulsing));
+        Raise(nameof(Name)); Raise(nameof(NameTooltip)); Raise(nameof(ToneBrush)); Raise(nameof(IsPulsing));
         Raise(nameof(TokensText)); Raise(nameof(TokensTooltip)); Raise(nameof(ModelText));
         Tick(now);
     }
