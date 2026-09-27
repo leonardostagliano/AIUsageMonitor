@@ -42,7 +42,7 @@ Dati reali di questa macchina, 13–27 settembre 2026 (`~/.aiusagemonitor/events
 | Card | Compatta: una riga di messaggio, clic per andare al terminale, ✕ per chiudere. Nessun bordo colorato. |
 | Toast di Windows | Eliminati del tutto, anche per l'aggiornamento disponibile. |
 | Non disturbare / schermo intero | Le card aspettano; all'uscita compaiono solo quelle ancora valide. |
-| Suono | Suono di sistema "Notifica" per permessi, domande ed errori; interruttore in Impostazioni, attivo di default. |
+| Suono | Due suoni propri dell'app: uno morbido per Finito, uno piu' marcato per permessi, piani, domande ed errori; avvisi dell'app muti; interruttore in Impostazioni, attivo di default. |
 
 ## 4. Precisione
 
@@ -203,11 +203,25 @@ l'intento per il board (`Show` con il modello della card, `Retire`, oppure nient
 
 ## 8. Suono
 
-- `NotificationSound.Play()` usa `PlaySound("Notification.Default", SND_ALIAS | SND_ASYNC | SND_NODEFAULT)`: rispetta
-  lo schema audio di Windows (nessun suono se l'utente l'ha tolto).
-- Suona per Permesso, Piano, Domanda ed Errore; mai per Finito e avvisi Info; mai in silenzio; una sola volta quando
-  l'uscita dal silenzio mostra piu' card.
-- Nuova impostazione `NotifySound` (default `true`), interruttore "Suono" nella scheda Notifiche.
+- **Due suoni dell'app**, file WAV PCM 16 bit mono 44,1 kHz in `src/AIUsageMonitor.App/Assets/Sounds/`, generati in modo
+  deterministico da `tools/sounds/generate-sounds.js` (Node, nessuna dipendenza; lo script e i WAV sono nel repo, nessun
+  suono di terzi):
+  - `done.wav` (Finito): due note sinusoidali ascendenti, Mi5 659,26 Hz poi Si5 987,77 Hz, la seconda che parte 110 ms
+    dopo la prima; ciascuna con attacco lineare di 8 ms e decadimento esponenziale (costante 90 ms), 2ª armonica al 15 %;
+    durata totale 520 ms con coda a zero; picco −14 dBFS. Morbido, non chiede attenzione.
+  - `attention.wav` (Permesso, Piano, Domanda, Errore): due tocchi brillanti Si5 987,77 Hz e Mi6 1318,51 Hz, 85 ms
+    ciascuno con 55 ms di pausa, attacco 4 ms e decadimento esponenziale (costante 45 ms), 2ª armonica al 25 %; durata
+    totale 420 ms; picco −10 dBFS. Piu' marcato, si riconosce senza guardare.
+- `NotificationSound.Play(NotificationSoundKind kind)` li riproduce da risorsa incorporata con
+  `System.Media.SoundPlayer` (asincrono, stream precaricato una volta per suono): passano dalla sessione audio dell'app,
+  quindi seguono volume di sistema e mixer per app. Qualsiasi errore e' ignorato (una volta nel log, solo il tipo).
+- `NotificationSoundKind { None, Done, Attention }`: il composer assegna `Done` a Finito, `Attention` a Permesso, Piano,
+  Domanda ed Errore, `None` agli avvisi dell'app; con `NotifySound` spento tutto e' `None`.
+- Il board restituisce il suono da riprodurre per ogni operazione (`Attention` prevale su `Done` se nella stessa
+  operazione ne servirebbero due): mai in silenzio; all'uscita dal silenzio un solo `Attention` se era in coda almeno
+  una card con suono `Attention` (le card `Done` in coda si scartano). Una card sostituita sul posto suona solo se il
+  suo `StateKey` e' cambiato; un avviso rinnovato non suona.
+- Impostazione `NotifySound` (default `true`), interruttore "Suono" nella scheda Notifiche.
 
 ## 9. Rimozione dei toast di Windows
 
@@ -234,7 +248,8 @@ l'intento per il board (`Show` con il modello della card, `Retire`, oppure nient
 | `SessionTracker`, `HookEvent`, `SessionState`, `HookEventPump` | Core | `idle_prompt`, `Silent`, `Attention`, `TurnStartedAt`, risoluzione live |
 | `NotificationService` | App/Notifications | Collega sessioni, avvisi, board, finestra, suono e probe sul thread UI |
 | `NotificationHostWindow`, `NotificationCardViewModel` | App/Notifications | Pila, card, animazioni, clic |
-| `QuietModeProbe`, `NotificationSound` | App/Notifications | P/Invoke: silenzio e suono |
+| `QuietModeProbe` | App/Notifications | P/Invoke: silenzio |
+| `NotificationSound`, `Assets/Sounds/*.wav`, `tools/sounds/generate-sounds.js` | App, tools | I due suoni e la loro riproduzione |
 | Impostazioni | Core/App | `NotifySound`, etichetta "Permessi e domande" |
 
 ## 11. Errori
@@ -260,6 +275,9 @@ l'intento per il board (`Show` con il modello della card, `Retire`, oppure nient
   monitor secondario con origine negativa, pila piu' alta dell'area di lavoro.
 - `HookEventPumpTests`: risoluzione solo per gli eventi live, mai nel replay.
 - `ColorContrastTests`/`ThemePaletteTests`: nuovi abbinamenti.
+- Suoni: il composer assegna `Done`/`Attention`/`None` per tipo e impostazione; il board restituisce il suono piu' forte,
+  nessuno in silenzio, uno solo all'uscita; i due WAV esistono come risorse, hanno intestazione RIFF/PCM 16 bit mono
+  44,1 kHz, durata 520 e 420 ms (±5 ms) e picco entro ±0,5 dB dal valore di spec; lo script rigenera file identici.
 - Verifica manuale: `--test-notification`, un turno reale che finisce (una sola card, nessuna dopo 60 s), un permesso
   Bash reale (comando nella card, ritiro alla concessione), una domanda, schermo intero e "Non disturbare".
 
