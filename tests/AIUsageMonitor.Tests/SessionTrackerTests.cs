@@ -856,6 +856,57 @@ public class SessionTrackerTests
         });
     }
 
+    /// <summary>
+    /// A prompt typed while the session only waits for the agents of a turn already over (its Stop was seen) is a turn
+    /// of its own: "Finito" counts from it, not from the prompt that launched the agents.
+    /// </summary>
+    [Fact]
+    public void A_prompt_during_a_deferred_idle_starts_a_new_turn()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("SubagentStart", agentId: "a1", plusSeconds: 5));
+        tracker.Apply(Ev("Stop", message: "Agente lanciato.", plusSeconds: 10));
+        Assert.True(tracker.Sessions.Single().AwaitingSubagents);
+
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 600));
+        Assert.Equal(T0.AddSeconds(600), tracker.Sessions.Single().TurnStartedAt);
+        tracker.Apply(Ev("SubagentStop", agentId: "a1", plusSeconds: 720));
+        tracker.Apply(Ev("Stop", message: "Fatto.", plusSeconds: 780));
+
+        var done = tracker.Sessions.Single();
+        Assert.Equal(SessionPhase.Idle, done.Phase);
+        Assert.Equal(TimeSpan.FromMinutes(3), done.LastEventAt - done.TurnStartedAt);
+    }
+
+    /// <summary>
+    /// Refusing a permission is an interrupt (no Stop), so the next prompt the hooks report comes while the session still
+    /// waits: it starts a turn of its own. The registry and the cloud report a granted permission as a prompt (waiting to
+    /// busy): that is the same turn.
+    /// </summary>
+    [Fact]
+    public void A_prompt_the_hooks_report_after_a_refused_permission_starts_a_new_turn()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        tracker.Apply(Ev("Notification", notificationType: "permission_prompt", plusSeconds: 20));
+        tracker.Apply(Ev("UserPromptSubmit", plusSeconds: 2600));
+        tracker.Apply(Ev("Stop", plusSeconds: 2660));
+
+        var done = tracker.Sessions.Single();
+        Assert.Equal(T0.AddSeconds(2600), done.TurnStartedAt);
+        Assert.Equal(TimeSpan.FromMinutes(1), done.LastEventAt - done.TurnStartedAt);
+
+        foreach (var source in new[] { "registry", "cloud" })
+        {
+            var sid = "granted-" + source;
+            tracker.Apply(Ev("UserPromptSubmit", sid: sid, source: source));
+            tracker.Apply(Ev("Notification", sid: sid, notificationType: "permission_prompt", source: source, plusSeconds: 20));
+            tracker.Apply(Ev("UserPromptSubmit", sid: sid, source: source, plusSeconds: 60));
+            Assert.Equal(T0, tracker.Sessions.Single(s => s.SessionId == sid).TurnStartedAt);
+        }
+    }
+
     [Fact]
     public void UpdateTokensSilently_stores_the_totals_without_raising_changed()
     {

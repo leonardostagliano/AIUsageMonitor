@@ -145,11 +145,16 @@ public sealed class SessionTracker
         // SessionStart keeps the phase, and with it the detail of a wait; a notification (re)starts the wait with its own.
         var attention = phase != SessionPhase.NeedsInput ? null : e.Event == "Notification" ? e.Attention : existing?.Attention;
         DateTimeOffset? waitingSince = phase != SessionPhase.NeedsInput ? null : e.Event == "Notification" ? e.Ts : existing?.WaitingSince ?? e.Ts;
-        // A turn starts with a prompt submitted while the session was Idle, in Error or not yet known. Back at work after
-        // a permission it is the same turn; a session first seen mid-turn (any other event, or the prompt a source
-        // reports for a session it found already at work) has no known start and keeps none.
+        // A turn starts with a prompt submitted while the session was Idle, in Error or not yet known, or while it only
+        // waited for the agents of a turn already over (its Stop was seen). Back at work after a granted permission it
+        // is the same turn: the registry and the cloud report the grant as a prompt. A prompt the hooks report while a
+        // wait is pending follows a refused one instead (an interrupt, which sends no Stop): a turn of its own. A
+        // session first seen mid-turn (any other event, or the prompt a source reports for a session it found already
+        // at work) has no known start and keeps none.
         var turnStartedAt = e.Event == "UserPromptSubmit" && !e.Adopted
-                            && existing?.Phase is null or SessionPhase.Idle or SessionPhase.Error
+                            && (existing is null || existing.Phase is SessionPhase.Idle or SessionPhase.Error
+                                || existing.AwaitingSubagents
+                                || existing.Phase == SessionPhase.NeedsInput && e.Source is not ("registry" or "cloud"))
             ? e.Ts
             : existing?.TurnStartedAt;
 
