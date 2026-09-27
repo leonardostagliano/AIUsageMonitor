@@ -35,6 +35,23 @@ public sealed class HookEventPump : IDisposable
     /// </summary>
     private bool _fillTokensOnFirstPump;
     /// <summary>
+    /// Finds the transcript of a running Claude subagent, which has no path of its own until its SubagentStop. Used on
+    /// the pump thread only, like every locator.
+    /// </summary>
+    private readonly ClaudeAgentTranscriptLocator _agentTranscripts = new();
+    /// <summary>
+    /// Claude subagents already closed from their transcript, per session: each one gets a single synthetic
+    /// SubagentStop, even if a later SubagentStart brings it back while its transcript still ends the same way.
+    /// </summary>
+    private readonly Dictionary<string, HashSet<string>> _endedFromTranscript = new(StringComparer.Ordinal);
+    /// <summary>
+    /// The subagents the silent replay of <see cref="Start"/> left running, with the start of that run: one of them
+    /// found over in its transcript ended while the app was closed, so its synthetic SubagentStop is
+    /// <see cref="HookEvent.Quiet"/> and the turn it may end is not announced. A later run of the same agent (another
+    /// StartedAt) was seen live and is not quiet. Pruned at every pass to the runs still going.
+    /// </summary>
+    private readonly Dictionary<(AgentKind Agent, string SessionId, string AgentId), DateTimeOffset> _replayedAgents = new();
+    /// <summary>
     /// Child thread ids this pump has announced per Codex session, with the instant of the announcement: only these
     /// are ever stopped here, and the instant says when a still-running child must be announced again so the
     /// subagent timeout cannot release a child the scanner can plainly see is alive.
@@ -89,6 +106,8 @@ public sealed class HookEventPump : IDisposable
     /// How often the token totals of the sessions that are still busy (Working or NeedsInput) are read again. Idle
     /// sessions are left alone: their transcript is not growing, and re-reading every one of them would spend IO on
     /// rows that cannot change. A session that ends is refreshed once by its Stop, which is what closes the count.
+    /// The same periodic pass, with or without a <see cref="TokenSource"/>, closes the Claude subagents whose
+    /// transcript says they are over.
     /// </summary>
     public TimeSpan TokenRefreshEvery { get; init; } = TimeSpan.FromSeconds(30);
 
@@ -184,6 +203,9 @@ public sealed class HookEventPump : IDisposable
                 // them all once. Not here: Start() runs on the UI thread and the first read of a large transcript
                 // parses it whole, which would freeze the notch at launch.
                 _fillTokensOnFirstPump = TokenSource is not null;
+                // What the replay left running: if a transcript later says one of these is over, it ended while the
+                // app was closed, and the turn it closes must not be announced now.
+                RememberReplayedAgents();
             }
             catch (Exception ex)
             {
@@ -228,13 +250,16 @@ public sealed class HookEventPump : IDisposable
                     _lastCodexScan = _clock.UtcNow;
                     SyncCodexSubagents(silent: false);
                 }
-                if (TokenSource is not null && _clock.UtcNow - _lastTokenRefresh >= TokenRefreshEvery)
+                if (_clock.UtcNow - _lastTokenRefresh >= TokenRefreshEvery)
                 {
                     _lastTokenRefresh = _clock.UtcNow;
                     // Only the busy sessions: an Idle transcript is not growing any more, and its last total was
                     // already read by the Stop (or the last SubagentStop) that ended the turn.
-                    foreach (var session in _tracker.Sessions.Where(s => s.Phase is SessionPhase.Working or SessionPhase.NeedsInput))
-                        RefreshTokens(session);
+                    if (TokenSource is not null)
+                        foreach (var session in _tracker.Sessions.Where(s => s.Phase is SessionPhase.Working or SessionPhase.NeedsInput))
+                            RefreshTokens(session);
+                    // Same pass, with or without a token source: the Claude agents whose transcript says they are over.
+                    EndTerminatedSubagents();
                 }
                 if (_clock.UtcNow - _lastLivenessSweep >= LivenessSweepEvery)
                 {
@@ -349,6 +374,81 @@ public sealed class HookEventPump : IDisposable
         var session = _tracker.Sessions.FirstOrDefault(s => s.Agent == ev.Agent && s.SessionId == ev.SessionId);
         return Attention.Resolve(ev, session) is { } detail ? ev with { Attention = detail } : ev;
     }
+
+    /// <summary>
+    /// Closes the running Claude subagents whose transcript says they are over although their SubagentStop never came:
+    /// interrupted by the user, stopped by an API error (the session limit), stopped from the task list
+    /// (<see cref="SubagentTranscriptEnd"/>). Each one gets a single live synthetic SubagentStop (source "transcript"),
+    /// which follows the usual rules: the last agent of a session waiting for its agents ends the turn. One the replay
+    /// of <see cref="Start"/> restored gets a <see cref="HookEvent.Quiet"/> one: it ended while the app was closed.
+    /// The paths the locator finds are handed to the tracker too, so an agent a workflow runs is known by its folder
+    /// whatever its type says. Called by the periodic pass only, never by the silent replay of <see cref="Start"/>.
+    /// Codex sessions are left to their own rules: their children are no Claude transcripts.
+    /// </summary>
+    private void EndTerminatedSubagents()
+    {
+        var sessions = _tracker.Sessions.Where(s => s.Agent == AgentKind.Claude).ToList();
+        var live = sessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
+        foreach (var gone in _endedFromTranscript.Keys.Where(id => !live.Contains(id)).ToList())
+            _endedFromTranscript.Remove(gone);
+        PruneReplayedAgents();
+
+        var now = _clock.UtcNow;
+        foreach (var session in sessions)
+        {
+            // A finished agent is never searched again: its cached path would only keep the locator growing.
+            foreach (var done in session.Subagents?.Where(s => s.Phase == SubagentPhase.Done) ?? [])
+                _agentTranscripts.Forget(done.AgentId);
+
+            _endedFromTranscript.TryGetValue(session.SessionId, out var ended);
+            var located = new Dictionary<string, string>(StringComparer.Ordinal);
+            var terminated = new List<(SubagentState Agent, string Path)>();
+            foreach (var agent in session.RunningSubagents)
+            {
+                if (ended?.Contains(agent.AgentId) == true) continue;
+                var path = agent.TranscriptPath;
+                if (path is null && _agentTranscripts.Locate(session.TranscriptPath, session.SessionId, agent.AgentId) is { } found)
+                    located[agent.AgentId] = path = found;
+                if (path is not null && SubagentTranscriptEnd.IsTerminated(path)) terminated.Add((agent, path));
+            }
+            // The path found on disk becomes the agent's own: an agent run by a workflow lies under subagents/workflows/,
+            // and the next Stop that names only its workflow keeps it running by that.
+            if (located.Count > 0) _tracker.UpdateSubagentPaths(session.Agent, session.SessionId, located);
+
+            foreach (var (agent, path) in terminated)
+            {
+                if (ended is null) _endedFromTranscript[session.SessionId] = ended = new HashSet<string>(StringComparer.Ordinal);
+                ended.Add(agent.AgentId);
+                ApplyTracked(new HookEvent(now, AgentKind.Claude, "SubagentStop", session.SessionId, session.Cwd, null, null,
+                    "transcript", agent.AgentId, agent.AgentType, AgentTranscriptPath: path, Quiet: IsReplayedRun(session, agent)));
+            }
+        }
+    }
+
+    /// <summary>Records every subagent the silent replay left running, with the start of its run.</summary>
+    private void RememberReplayedAgents()
+    {
+        _replayedAgents.Clear();
+        foreach (var session in _tracker.Sessions)
+            foreach (var agent in session.RunningSubagents)
+                _replayedAgents[(session.Agent, session.SessionId, agent.AgentId)] = agent.StartedAt;
+    }
+
+    /// <summary>Forgets the replayed runs that are over (or whose session is gone): only running ones can still be closed.</summary>
+    private void PruneReplayedAgents()
+    {
+        if (_replayedAgents.Count == 0) return;
+        var running = _tracker.Sessions
+            .SelectMany(s => s.RunningSubagents.Select(a => (s.Agent, s.SessionId, a.AgentId, a.StartedAt)))
+            .ToHashSet();
+        foreach (var key in _replayedAgents.Where(kv => !running.Contains((kv.Key.Agent, kv.Key.SessionId, kv.Key.AgentId, kv.Value)))
+                     .Select(kv => kv.Key).ToList())
+            _replayedAgents.Remove(key);
+    }
+
+    /// <summary>True when <paramref name="agent"/> is still the very run the replay of <see cref="Start"/> restored.</summary>
+    private bool IsReplayedRun(SessionState session, SubagentState agent) =>
+        _replayedAgents.TryGetValue((session.Agent, session.SessionId, agent.AgentId), out var startedAt) && startedAt == agent.StartedAt;
 
     /// <summary>
     /// Reads the totals for one session and hands them to the tracker, which raises Changed only if something moved.
