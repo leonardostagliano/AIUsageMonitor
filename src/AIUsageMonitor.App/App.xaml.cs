@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Threading;
-using AIUsageMonitor.App.Common;
 using AIUsageMonitor.App.Notch;
 using AIUsageMonitor.App.Notifications;
 using AIUsageMonitor.App.Settings;
@@ -13,12 +12,18 @@ namespace AIUsageMonitor.App;
 
 public partial class App : Application
 {
+    /// <summary>
+    /// Argomento con cui Windows avvia l'exe al clic su un toast delle versioni precedenti (la registrazione COM del
+    /// Community Toolkit resta nel registro). I toast non esistono piu': con un'istanza gia' attiva questo e' un secondo
+    /// avvio, che fissa il suo notch ed esce; senza, l'app parte come sempre e l'argomento finisce solo nel log.
+    /// </summary>
+    private const string LegacyToastActivationArgument = "-ToastActivated";
+
     private SingleInstance? _single;
     private AppServices? _services;
     private TrayIconController? _tray;
     private NotchWindow? _notch;
-    private ToastService? _toasts;
-    private AppNotificationSender? _notifications;
+    private NotificationService? _notifications;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -56,7 +61,6 @@ public partial class App : Application
 
         try
         {
-            _notifications = new AppNotificationSender(_services.Paths.LocalAppDataDir, _services.Log, () => _notch?.Pin(), ShowUpdatePrompt);
             var notch = new NotchWindow(_services, new NotchViewModel(_services));
             _notch = notch;
             // Explorer starts Run entries after the interactive desktop is ready, but a persisted hidden state can
@@ -64,7 +68,7 @@ public partial class App : Application
             // restores the primary surface for login launches; normal manual launches still honor the user's choice.
             if (_services.Settings.Current.NotchVisible || e.Args.Contains(AutoStart.StartupArgument, StringComparer.OrdinalIgnoreCase))
                 notch.Show();
-            _tray = new TrayIconController(_services, notch, _notifications);
+            _tray = new TrayIconController(_services, notch);
             _tray.OpenSettings = () => SettingsWindow.ShowSingleton(_services);
             _tray.OpenUpdatePrompt = ShowUpdatePrompt;
             // Dopo il login GitHub nel browser si torna alle Impostazioni, da cui e' partito il collegamento.
@@ -72,17 +76,23 @@ public partial class App : Application
             _single.ShowNotchRequested += () => Dispatcher.BeginInvoke(notch.Pin);
 
             _services.Start();
-            // Dopo Start(): il replay silenzioso della pump e' gia' finito, quindi la cronologia non genera toast.
-            _toasts = new ToastService(_services, (title, text, icon) => UiDispatcher.Post(() => _tray?.ShowNotification(title, text, icon)));
+            // Dopo Start(): il replay silenzioso della pump e' gia' finito, quindi la cronologia non genera card. Da qui
+            // passano anche gli avvisi dell'app (AppServices.Notice) e l'annuncio degli aggiornamenti della tray.
+            _notifications = new NotificationService(_services, notch, ShowUpdatePrompt);
+            _tray.Notifications = _notifications;
+
+            if (e.Args.Contains(LegacyToastActivationArgument, StringComparer.OrdinalIgnoreCase))
+                _services.Log.Info("Avvio dal clic su un toast di una versione precedente: argomento ignorato");
 
             if (relaunch is not null)
-                Dispatcher.BeginInvoke(() => _tray?.ShowNotification("AIUsageMonitor aggiornato",
-                    $"Ora è in uso la versione {BuildInfo.CurrentVersion}. Impostazioni e hook sono stati conservati.", WinForms.ToolTipIcon.Info),
+                Dispatcher.BeginInvoke(() => _notifications?.ShowNotice("AIUsageMonitor aggiornato",
+                    $"Ora è in uso la versione {BuildInfo.CurrentVersion}. Impostazioni e hook sono stati conservati.", NoticeKind.Info),
                     DispatcherPriority.Background);
 
+            // Argomento di verifica: le card d'esempio (spec 2026-09-27 §9). L'app si chiude quando sono state chiuse tutte
+            // o dopo 60 s, quindi va lanciata ad app chiusa (una seconda istanza fisserebbe solo il notch).
             if (e.Args.Contains("--test-notification", StringComparer.OrdinalIgnoreCase))
-                Dispatcher.BeginInvoke(() => _tray?.ShowNotification("AIUsageMonitor · verifica icona",
-                    "Questa notifica usa il logo aggiornato. Clicca per aprire il notch.", WinForms.ToolTipIcon.Info), DispatcherPriority.Background);
+                Dispatcher.BeginInvoke(() => _notifications?.ShowDemo(), DispatcherPriority.Background);
 
             // Argomento di debug: apre subito le impostazioni, utile per verificare l'aspetto senza passare dal tray.
             if (e.Args.Contains("--settings")) SettingsWindow.ShowSingleton(_services);
@@ -118,9 +128,9 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Voce della tray e click sulla notifica "aggiornamento disponibile": apre la conferma se c'e' una versione da
-    /// offrire, altrimenti le Impostazioni sul gruppo AGGIORNAMENTI (es. una notifica rimasta nel centro notifiche da un
-    /// avvio precedente, quando il nuovo controllo non e' ancora arrivato).
+    /// Voce della tray e clic sulla card "aggiornamento disponibile": apre la conferma se c'e' una versione da offrire,
+    /// altrimenti le Impostazioni sul gruppo AGGIORNAMENTI (es. la versione e' stata rimandata con "Più tardi" dalla
+    /// tray mentre la card era ancora a schermo).
     /// </summary>
     private void ShowUpdatePrompt()
     {
@@ -163,9 +173,10 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // Per prime le notifiche: smettono di ascoltare sessioni e avvisi e chiudono la loro finestra.
+        _notifications?.Dispose();
         _notch?.Close();
         _tray?.Dispose();
-        _notifications?.Dispose();
         _services?.Dispose();
         _single?.Dispose();
         base.OnExit(e);
