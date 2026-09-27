@@ -457,6 +457,34 @@ public class SubagentReconciliationTests
         Assert.Equal(T0.AddSeconds(4), s.Subagents!.Single(a => a.AgentId == "p1").EndedAt);
     }
 
+    /// <summary>
+    /// An agent that starts or ends while its session waits for the user or is in error changes no state the user is
+    /// told about: the wait or the error goes on, and its card was shown when it began (or it began before the app was
+    /// running, restored by the replay, and is not news now). Silent; at work it is announced as before.
+    /// </summary>
+    [Fact]
+    public void An_agent_that_starts_or_ends_while_the_session_waits_or_is_in_error_is_silent()
+    {
+        var tracker = new SessionTracker(new FakeClock(T0));
+        tracker.Apply(Ev("UserPromptSubmit"));
+        Assert.False(tracker.Apply(Ev("SubagentStart", 1, "a1"))!.Silent);
+        tracker.Apply(Ev("Notification", 2) with { NotificationType = "permission_prompt" });
+
+        var started = tracker.Apply(Ev("SubagentStart", 3, "a2"))!;
+        var ended = tracker.Apply(Ev("SubagentStop", 4, "a2"))!;
+        Assert.All([started, ended], c => Assert.Equal((SessionPhase.NeedsInput, SessionPhase.NeedsInput, true),
+            (c.Session.Phase, c.PreviousPhase!.Value, c.Silent)));
+
+        tracker.Apply(Ev("StopFailure", 5, message: "API overloaded"));
+        var failed = tracker.Apply(Ev("SubagentStop", 6, "a1"))!;
+        Assert.Equal((SessionPhase.Error, SessionPhase.Error, true), (failed.Session.Phase, failed.PreviousPhase!.Value, failed.Silent));
+
+        // Back at work, the agents are announced as before.
+        tracker.Apply(Ev("UserPromptSubmit", 7));
+        var working = tracker.Apply(Ev("SubagentStart", 8, "a3"))!;
+        Assert.Equal((SessionPhase.Working, false), (working.Session.Phase, working.Silent));
+    }
+
     [Fact]
     public void A_quiet_event_moves_the_session_without_announcing_it()
     {

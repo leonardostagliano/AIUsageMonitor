@@ -21,6 +21,8 @@ public sealed class HookEventPump : IDisposable
     private DateTimeOffset _lastTokenRefresh;
     private DateTimeOffset _lastLivenessSweep;
     private DateTimeOffset _lastRegistryScan;
+    /// <summary>When <see cref="Start"/> ran: what ended before it happened while the app was not looking.</summary>
+    private DateTimeOffset _startedAt;
     /// <summary>
     /// Sessions the hook bridge has reported, with the instant of their newest event: the Claude registry feed leaves
     /// them to the hooks. Kept for <see cref="SessionProcessRegistry.EndedMemory"/>, so a session ended by its own
@@ -51,9 +53,9 @@ public sealed class HookEventPump : IDisposable
     private readonly Dictionary<(AgentKind Agent, string SessionId), HashSet<string>> _namesSettled = new();
     /// <summary>
     /// The subagents the silent replay of <see cref="Start"/> left running, with the start of that run: one of them
-    /// found over in its transcript ended while the app was closed, so its synthetic SubagentStop is
-    /// <see cref="HookEvent.Quiet"/> and the turn it may end is not announced. A later run of the same agent (another
-    /// StartedAt) was seen live and is not quiet. Pruned at every pass to the runs still going.
+    /// found over in a transcript last written before the start ended while the app was closed, so its synthetic
+    /// SubagentStop is <see cref="HookEvent.Quiet"/> and the turn it may end is not announced. A later run of the same
+    /// agent (another StartedAt) was seen live and is not quiet. Pruned at every pass to the runs still going.
     /// </summary>
     private readonly Dictionary<(AgentKind Agent, string SessionId, string AgentId), DateTimeOffset> _replayedAgents = new();
     /// <summary>
@@ -187,6 +189,7 @@ public sealed class HookEventPump : IDisposable
         {
             try
             {
+                _startedAt = _clock.UtcNow;
                 // Silent replay: no Changed events, so the UI does not toast history.
                 var replayed = _reader.ReadAll(_clock.UtcNow - ReplayWindow).ToList();
                 // Before the state is rebuilt: a Codex session whose hooks reported subagents within the replay
@@ -400,7 +403,8 @@ public sealed class HookEventPump : IDisposable
     /// interrupted by the user, stopped by an API error (the session limit), stopped from the task list
     /// (<see cref="SubagentTranscriptEnd"/>). Each one gets a single live synthetic SubagentStop (source "transcript"),
     /// which follows the usual rules: the last agent of a session waiting for its agents ends the turn. One the replay
-    /// of <see cref="Start"/> restored gets a <see cref="HookEvent.Quiet"/> one: it ended while the app was closed.
+    /// of <see cref="Start"/> restored whose files were last written before it gets a <see cref="HookEvent.Quiet"/> one:
+    /// it ended while the app was closed (<see cref="EndedBeforeStart"/>).
     /// The paths the locator finds are handed to the tracker too, so an agent a workflow runs is known by its folder
     /// whatever its type says. Called by the periodic pass only, never by the silent replay of <see cref="Start"/>.
     /// Codex sessions are left to their own rules: their children are no Claude transcripts.
@@ -440,7 +444,8 @@ public sealed class HookEventPump : IDisposable
                 if (ended is null) _endedFromTranscript[session.SessionId] = ended = new HashSet<string>(StringComparer.Ordinal);
                 ended.Add(agent.AgentId);
                 ApplyTracked(new HookEvent(now, AgentKind.Claude, "SubagentStop", session.SessionId, session.Cwd, null, null,
-                    "transcript", agent.AgentId, agent.AgentType, AgentTranscriptPath: path, Quiet: IsReplayedRun(session, agent)));
+                    "transcript", agent.AgentId, agent.AgentType, AgentTranscriptPath: path,
+                    Quiet: IsReplayedRun(session, agent) && EndedBeforeStart(path)));
             }
         }
     }
@@ -518,6 +523,31 @@ public sealed class HookEventPump : IDisposable
     /// <summary>True when <paramref name="agent"/> is still the very run the replay of <see cref="Start"/> restored.</summary>
     private bool IsReplayedRun(SessionState session, SubagentState agent) =>
         _replayedAgents.TryGetValue((session.Agent, session.SessionId, agent.AgentId), out var startedAt) && startedAt == agent.StartedAt;
+
+    /// <summary>
+    /// Whether the files that say an agent is over were last written before <see cref="Start"/>: its transcript (the
+    /// interruption, the API error) and the meta.json next to it (stopped from the task list). A run the replay
+    /// restored may also end hours later in front of the app, and that end is announced like any other. A time that
+    /// cannot be read counts as before: the end is then quiet, as for every restored run.
+    /// </summary>
+    private bool EndedBeforeStart(string transcriptPath)
+    {
+        try
+        {
+            var written = File.GetLastWriteTimeUtc(transcriptPath);
+            var meta = Path.ChangeExtension(transcriptPath, ".meta.json");
+            if (File.Exists(meta))
+            {
+                var metaWritten = File.GetLastWriteTimeUtc(meta);
+                if (metaWritten > written) written = metaWritten;
+            }
+            return new DateTimeOffset(written, TimeSpan.Zero) < _startedAt;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return true;
+        }
+    }
 
     /// <summary>
     /// Reads the totals for one session and hands them to the tracker, which raises Changed only if something moved.

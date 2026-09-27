@@ -307,7 +307,11 @@ public sealed class SessionTracker
                 PendingWorkflows = pendingWorkflows
             };
         _sessions[key] = updated;
-        return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase);
+        // An agent that starts or ends while the session waits for the user or is in error changes no state the user
+        // is told about: that wait or that error was announced when it began, or began before the app was running.
+        var keepsWaitOrError = existing is { Phase: SessionPhase.NeedsInput or SessionPhase.Error } && existing.Phase == phase;
+        return new SessionChange(existing is null ? SessionChangeKind.Added : SessionChangeKind.Updated, updated, existing?.Phase,
+            Silent: keepsWaitOrError);
     }
 
     /// <summary>

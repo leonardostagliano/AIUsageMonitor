@@ -1753,7 +1753,8 @@ public class HookEventPumpTests
         var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
         var paths = new AppPaths(dir.Path, dir.Sub("lad"));
         var transcripts = new AgentTranscripts(dir);
-        transcripts.Agent("a1", AgentTranscripts.Interrupted("t1"));
+        // Interrupted while the app was closed: the transcript was last written before the start.
+        File.SetLastWriteTimeUtc(transcripts.Agent("a1", AgentTranscripts.Interrupted("t1")), now.AddMinutes(-3).UtcDateTime);
         Directory.CreateDirectory(paths.MonitorDir);
         File.WriteAllText(paths.EventsFile,
             ClaudeAgentLine("UserPromptSubmit", now.AddMinutes(-5), transcriptPath: transcripts.Session) +
@@ -1794,7 +1795,7 @@ public class HookEventPumpTests
         var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
         var paths = new AppPaths(dir.Path, dir.Sub("lad"));
         var transcripts = new AgentTranscripts(dir);
-        transcripts.Agent("restored", AgentTranscripts.Interrupted("t1"));
+        File.SetLastWriteTimeUtc(transcripts.Agent("restored", AgentTranscripts.Interrupted("t1")), now.AddMinutes(-3).UtcDateTime);
         transcripts.Agent("again", AgentTranscripts.Interrupted("t2"));
         transcripts.Agent("live", AgentTranscripts.Interrupted("t3"));
         Directory.CreateDirectory(paths.MonitorDir);
@@ -1847,6 +1848,49 @@ public class HookEventPumpTests
             });
     }
 
+    /// <summary>
+    /// Quiet is for an end the app did not see: a run the replay restored that ends in front of the app (hours later,
+    /// after an auto-update restart in the middle of a workflow) ends its turn aloud, like any live agent.
+    /// </summary>
+    [Fact]
+    public void A_replayed_agent_that_ends_after_the_start_ends_its_turn_aloud()
+    {
+        using var dir = new TempDir();
+        var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
+        var paths = new AppPaths(dir.Path, dir.Sub("lad"));
+        var transcripts = new AgentTranscripts(dir);
+        var agent = transcripts.Agent("a1", AgentTranscripts.AtWork("t1"));
+        File.SetLastWriteTimeUtc(agent, now.AddMinutes(-1).UtcDateTime);
+        Directory.CreateDirectory(paths.MonitorDir);
+        File.WriteAllText(paths.EventsFile,
+            ClaudeAgentLine("UserPromptSubmit", now.AddMinutes(-5), transcriptPath: transcripts.Session) +
+            ClaudeAgentLine("SubagentStart", now.AddMinutes(-4), "a1") +
+            ClaudeAgentLine("Stop", now.AddMinutes(-4).AddSeconds(5)));
+        var clock = new FakeClock(now);
+        var tracker = new SessionTracker(clock);
+        var changes = new List<SessionChange>();
+        tracker.Changed += changes.Add;
+        using var pump = new HookEventPump(new HookEventReader(paths.EventsFile, paths.RotatedEventsFile), tracker, paths, clock)
+        {
+            PollInterval = TimeSpan.FromHours(1)
+        };
+        pump.Start();
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+        Assert.Equal(1, tracker.Sessions.Single().ActiveSubagents);   // still at work
+        Assert.Empty(changes);
+
+        // The user interrupts it while the app watches.
+        File.AppendAllText(agent, TranscriptLines.PromptBlocks("[Request interrupted by user]", 3) + "\n");
+        File.SetLastWriteTimeUtc(agent, clock.UtcNow.AddSeconds(10).UtcDateTime);
+        clock.Advance(pump.TokenRefreshEvery);
+        pump.Pump();
+
+        var change = Assert.Single(changes);
+        Assert.Equal((SessionPhase.Idle, SessionPhase.Working, false), (change.Session.Phase, change.PreviousPhase!.Value, change.Silent));
+        Assert.IsType<ShowIntent>(NotificationComposer.Compose(change, new AppSettings()));
+    }
+
     /// <summary>The line Claude Code writes when the API refuses to go on (the session limit).</summary>
     private const string ApiErrorLine =
         """{"type":"assistant","timestamp":"2026-09-27T11:57:00.000Z","message":{"id":"m9","role":"assistant","content":[{"type":"text","text":"You've hit your session limit"}]},"isApiErrorMessage":true}""";
@@ -1863,7 +1907,7 @@ public class HookEventPumpTests
         var now = new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
         var paths = new AppPaths(dir.Path, dir.Sub("lad"));
         var transcripts = new AgentTranscripts(dir);
-        transcripts.Agent("a1", [.. AgentTranscripts.AtWork("t1"), ApiErrorLine]);
+        File.SetLastWriteTimeUtc(transcripts.Agent("a1", [.. AgentTranscripts.AtWork("t1"), ApiErrorLine]), now.AddMinutes(-3).UtcDateTime);
         Directory.CreateDirectory(paths.MonitorDir);
         File.WriteAllText(paths.EventsFile,
             ClaudeAgentLine("UserPromptSubmit", now.AddMinutes(-5), transcriptPath: transcripts.Session) +
